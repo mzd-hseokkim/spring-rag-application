@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: spring-rag-application
+
+  datasource:
+    url: jdbc:postgresql://localhost:5434/ragdb
+    username: raguser
+    password: ragpass
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        enabled: false
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: gpt-oss:20b
+          temperature: 0.3
+      embedding:
+        options:
+          model: qwen3-embedding:4b
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+app:
+  chunking:
+    chunk-size: 1000
+    overlap: 200
+
+server:
+  port: 8080
