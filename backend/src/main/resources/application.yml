@@ -51,6 +51,16 @@ app:
   search:
     expansion-count: 3
     rerank-candidates: 15
+  evaluation:
+    sample-rate: 0.1
+  guard:
+    rate-limit-per-minute: 10
+    max-input-length: 2000
+
+logging:
+  level:
+    pipeline.trace: INFO
+    evaluation: INFO
 
 server:
   port: 8080

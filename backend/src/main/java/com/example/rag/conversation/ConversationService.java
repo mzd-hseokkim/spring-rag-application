@@ -60,4 +60,8 @@ public class ConversationService {
     public void deleteSession(String sessionId) {
         redisTemplate.delete(KEY_PREFIX + sessionId);
     }
+
+    public void saveFeedback(String key, String rating) {
+        redisTemplate.opsForValue().set(key, rating, Duration.ofDays(7));
+    }
 }

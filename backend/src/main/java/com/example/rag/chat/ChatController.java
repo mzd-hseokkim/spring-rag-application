@@ -1,7 +1,12 @@
 package com.example.rag.chat;
 
+import com.example.rag.common.guard.InputValidationException;
+import com.example.rag.common.guard.InputValidator;
+import com.example.rag.common.guard.RateLimitExceededException;
+import com.example.rag.common.guard.RateLimiter;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -16,14 +21,24 @@ public class ChatController {
 
     private final ChatService chatService;
     private final ConversationService conversationService;
+    private final InputValidator inputValidator;
+    private final RateLimiter rateLimiter;
 
-    public ChatController(ChatService chatService, ConversationService conversationService) {
+    public ChatController(ChatService chatService,
+                          ConversationService conversationService,
+                          InputValidator inputValidator,
+                          RateLimiter rateLimiter) {
         this.chatService = chatService;
         this.conversationService = conversationService;
+        this.inputValidator = inputValidator;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody ChatRequest request) {
+        inputValidator.validate(request.message());
+        rateLimiter.checkLimit(request.sessionId());
+
         SseEmitter emitter = new SseEmitter(300_000L);
 
         ChatService.ChatResponse response = chatService.chat(request.sessionId(), request.message());
@@ -74,5 +89,24 @@ public class ChatController {
         conversationService.deleteSession(sessionId);
     }
 
+    @PostMapping("/feedback")
+    public void submitFeedback(@RequestBody FeedbackRequest request) {
+        String key = "feedback:%s:%d".formatted(request.sessionId(), request.messageIndex());
+        conversationService.saveFeedback(key, request.rating());
+    }
+
+    @ExceptionHandler(InputValidationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> handleValidation(InputValidationException e) {
+        return Map.of("message", e.getMessage());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    public Map<String, String> handleRateLimit(RateLimitExceededException e) {
+        return Map.of("message", e.getMessage());
+    }
+
     record ChatRequest(String sessionId, String message) {}
+    record FeedbackRequest(String sessionId, int messageIndex, String rating) {}
 }
