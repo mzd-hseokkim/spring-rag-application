@@ -1,5 +1,9 @@
 package com.example.rag.chat;
 
+import com.example.rag.agent.AgentAction;
+import com.example.rag.agent.AgentStepEvent;
+import com.example.rag.agent.MultiStepReasoner;
+import com.example.rag.agent.SearchAgent;
 import com.example.rag.common.PromptLoader;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
@@ -9,14 +13,14 @@ import com.example.rag.observability.TraceContext;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
 import com.example.rag.search.query.QueryCompressor;
-import com.example.rag.search.query.QueryRoute;
-import com.example.rag.search.query.QueryRouter;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,7 +33,8 @@ public class ChatService {
     private final SearchService searchService;
     private final ConversationService conversationService;
     private final QueryCompressor queryCompressor;
-    private final QueryRouter queryRouter;
+    private final SearchAgent searchAgent;
+    private final MultiStepReasoner multiStepReasoner;
     private final PipelineTracer pipelineTracer;
     private final EvaluationService evaluationService;
 
@@ -37,7 +42,8 @@ public class ChatService {
                        SearchService searchService,
                        ConversationService conversationService,
                        QueryCompressor queryCompressor,
-                       QueryRouter queryRouter,
+                       SearchAgent searchAgent,
+                       MultiStepReasoner multiStepReasoner,
                        PipelineTracer pipelineTracer,
                        EvaluationService evaluationService,
                        PromptLoader promptLoader) {
@@ -45,40 +51,71 @@ public class ChatService {
         this.searchService = searchService;
         this.conversationService = conversationService;
         this.queryCompressor = queryCompressor;
-        this.queryRouter = queryRouter;
+        this.searchAgent = searchAgent;
+        this.multiStepReasoner = multiStepReasoner;
         this.pipelineTracer = pipelineTracer;
         this.evaluationService = evaluationService;
         this.ragSystemPrompt = promptLoader.load("rag-system.txt");
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
     }
 
-    public ChatResponse chat(String sessionId, String message) {
+    public ChatResponse chat(String sessionId, String message, Consumer<AgentStepEvent> stepCallback) {
         TraceContext trace = new TraceContext(sessionId, message);
+        List<AgentStepEvent> agentSteps = new ArrayList<>();
+        Consumer<AgentStepEvent> callback = event -> {
+            agentSteps.add(event);
+            stepCallback.accept(event);
+        };
 
-        // 대화 이력에 사용자 메시지 저장
         conversationService.addMessage(sessionId, ConversationMessage.user(message));
 
         // 대화 압축
         trace.startStep("compress");
+        callback.accept(new AgentStepEvent("compress", "질문 분석 중..."));
         String searchQuery = queryCompressor.compress(sessionId, message);
         trace.endStep(Map.of("compressed", !searchQuery.equals(message)));
 
-        // 쿼리 라우팅
-        trace.startStep("route");
-        QueryRoute route = queryRouter.route(searchQuery);
-        trace.endStep(Map.of("result", route.name()));
+        // Agent 판단
+        trace.startStep("decide");
+        callback.accept(new AgentStepEvent("decide", "행동 결정 중..."));
+        AgentAction action = searchAgent.decide(searchQuery);
+        trace.endStep(Map.of("action", action.name()));
 
-        if (route == QueryRoute.GENERAL) {
-            pipelineTracer.logTrace(trace);
-            return chatGeneral(sessionId, message);
-        }
-        return chatWithRag(sessionId, message, searchQuery, trace);
+        return switch (action) {
+            case DIRECT_ANSWER -> {
+                callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
+                pipelineTracer.logTrace(trace);
+                yield chatGeneral(sessionId, message);
+            }
+            case CLARIFY -> {
+                callback.accept(new AgentStepEvent("clarify", "질문 명확화 요청 중..."));
+                pipelineTracer.logTrace(trace);
+                yield chatClarify(sessionId, message);
+            }
+            case SEARCH -> {
+                // 멀티스텝 분해 시도
+                callback.accept(new AgentStepEvent("decompose", "질문 복잡도 분석 중..."));
+                trace.startStep("decompose");
+                List<String> subQueries = multiStepReasoner.decompose(searchQuery);
+                trace.endStep(Map.of("isMultiStep", subQueries != null));
+
+                if (subQueries != null && subQueries.size() > 1) {
+                    yield chatMultiStep(sessionId, message, searchQuery, subQueries, trace, callback);
+                } else {
+                    callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
+                    yield chatWithRag(sessionId, message, searchQuery, trace, callback);
+                }
+            }
+        };
     }
 
-    private ChatResponse chatWithRag(String sessionId, String message, String searchQuery, TraceContext trace) {
+    private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
+                                      TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep("search");
         List<ChunkSearchResult> searchResults = searchService.search(searchQuery);
         trace.endStep(Map.of("resultCount", searchResults.size()));
+
+        callback.accept(new AgentStepEvent("generate", "답변 생성 중..."));
 
         String context = buildContext(searchResults);
         String history = buildHistory(sessionId);
@@ -119,6 +156,31 @@ public class ChatService {
         return new ChatResponse(tokenStream, sources);
     }
 
+    private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
+                                        List<String> subQueries, TraceContext trace,
+                                        Consumer<AgentStepEvent> callback) {
+        trace.startStep("multi_step");
+        var result = multiStepReasoner.reason(searchQuery, subQueries, callback);
+        trace.endStep(Map.of("subQueryCount", subQueries.size()));
+
+        StringBuilder fullResponse = new StringBuilder();
+
+        Flux<String> tokenStream = result.tokens()
+                .doOnNext(fullResponse::append)
+                .doOnComplete(() -> {
+                    pipelineTracer.logTrace(trace);
+                    conversationService.addMessage(sessionId,
+                            ConversationMessage.assistant(fullResponse.toString()));
+                });
+
+        List<SourceInfo> sources = result.searchResults().stream()
+                .map(r -> new SourceInfo(r.documentId().toString(), r.filename(),
+                        r.chunkIndex(), truncate(r.content(), 100)))
+                .toList();
+
+        return new ChatResponse(tokenStream, sources);
+    }
+
     private ChatResponse chatGeneral(String sessionId, String message) {
         String history = buildHistory(sessionId);
         String userPrompt = history.equals("(없음)") ? message
@@ -138,9 +200,26 @@ public class ChatService {
         return new ChatResponse(tokenStream, List.of());
     }
 
+    private ChatResponse chatClarify(String sessionId, String message) {
+        String prompt = "사용자의 질문이 모호합니다. 질문을 더 구체적으로 해달라고 정중하게 요청하세요.\n\n질문: " + message;
+
+        StringBuilder fullResponse = new StringBuilder();
+
+        Flux<String> tokenStream = chatClient.prompt()
+                .system(generalSystemPrompt)
+                .user(prompt)
+                .stream()
+                .content()
+                .doOnNext(fullResponse::append)
+                .doOnComplete(() -> conversationService.addMessage(sessionId,
+                        ConversationMessage.assistant(fullResponse.toString())));
+
+        return new ChatResponse(tokenStream, List.of());
+    }
+
     private String buildContext(List<ChunkSearchResult> results) {
         return results.stream()
-                .map(r -> "[출처: %s, 청크 %d]\n%s".formatted(r.filename(), r.chunkIndex(), r.content()))
+                .map(r -> "[출처: %s, 청크 %d]\n%s".formatted(r.filename(), r.chunkIndex(), r.contextContent()))
                 .collect(Collectors.joining("\n\n"));
     }
 

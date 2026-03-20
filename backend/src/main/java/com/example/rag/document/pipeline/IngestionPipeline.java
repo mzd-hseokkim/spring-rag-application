@@ -20,6 +20,7 @@ public class IngestionPipeline {
 
     private final List<DocumentParser> parsers;
     private final ChunkingStrategy chunkingStrategy;
+    private final FixedSizeChunkingStrategy childChunker;
     private final EmbeddingModel embeddingModel;
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository chunkRepository;
@@ -35,6 +36,7 @@ public class IngestionPipeline {
                              PlatformTransactionManager txManager) {
         this.parsers = parsers;
         this.chunkingStrategy = chunkingStrategy;
+        this.childChunker = new FixedSizeChunkingStrategy(500, 100);
         this.embeddingModel = embeddingModel;
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
@@ -57,30 +59,58 @@ public class IngestionPipeline {
             String text = parse(contentType, fileBytes);
             log.info("Document {} parsed: {} characters", documentId, text.length());
 
-            // 2. 청킹
-            List<String> chunks = chunkingStrategy.chunk(text);
-            log.info("Document {} chunked: {} chunks", documentId, chunks.size());
-            eventPublisher.publish(documentId, "PROCESSING", "임베딩 생성 중... (" + chunks.size() + "개 청크)");
+            // 2. 시맨틱 청킹 → parent 청크
+            List<String> parentChunks = chunkingStrategy.chunk(text);
+            log.info("Document {} semantic chunked: {} parents", documentId, parentChunks.size());
 
-            // 3. 임베딩 생성 (배치)
-            float[][] embeddings = embedBatch(chunks);
+            // 3. 각 parent → child 분할
+            List<String> allChildContents = new java.util.ArrayList<>();
+            List<Integer> childToParentIndex = new java.util.ArrayList<>();
+            for (int p = 0; p < parentChunks.size(); p++) {
+                List<String> children = childChunker.chunk(parentChunks.get(p));
+                for (String child : children) {
+                    allChildContents.add(child);
+                    childToParentIndex.add(p);
+                }
+            }
+            log.info("Document {} child chunks: {}", documentId, allChildContents.size());
+            eventPublisher.publish(documentId, "PROCESSING",
+                    "임베딩 생성 중... (" + allChildContents.size() + "개 청크)");
+
+            // 4. child 임베딩 생성
+            float[][] embeddings = embedBatch(allChildContents);
             log.info("Document {} embeddings generated", documentId);
 
-            // 4. 청크 저장 + 임베딩/tsvector 업데이트
+            // 5. parent + child 저장
             tx.executeWithoutResult(status -> {
                 Document doc = documentRepository.findById(documentId).orElseThrow();
-                for (int i = 0; i < chunks.size(); i++) {
-                    DocumentChunk chunk = new DocumentChunk(doc, chunks.get(i), i);
-                    chunk = chunkRepository.save(chunk);
-                    chunkRepository.updateEmbeddingAndTsvector(
-                            chunk.getId(), toVectorString(embeddings[i]), chunks.get(i));
+
+                // parent 저장 (임베딩 없음)
+                java.util.UUID[] parentIds = new java.util.UUID[parentChunks.size()];
+                for (int p = 0; p < parentChunks.size(); p++) {
+                    DocumentChunk parent = new DocumentChunk(doc, parentChunks.get(p), p);
+                    parent = chunkRepository.save(parent);
+                    parentIds[p] = parent.getId();
                 }
-                doc.markCompleted(chunks.size());
+
+                // child 저장 (임베딩 + tsvector + parent 참조)
+                for (int c = 0; c < allChildContents.size(); c++) {
+                    int parentIdx = childToParentIndex.get(c);
+                    DocumentChunk child = new DocumentChunk(
+                            doc, allChildContents.get(c), c, parentIds[parentIdx]);
+                    child = chunkRepository.save(child);
+                    chunkRepository.updateEmbeddingAndTsvector(
+                            child.getId(), toVectorString(embeddings[c]), allChildContents.get(c));
+                }
+
+                doc.markCompleted(allChildContents.size());
                 documentRepository.save(doc);
             });
 
-            eventPublisher.publish(documentId, "COMPLETED", chunks.size() + "개 청크 처리 완료");
-            log.info("Document {} processing completed: {} chunks", documentId, chunks.size());
+            eventPublisher.publish(documentId, "COMPLETED",
+                    parentChunks.size() + "개 parent, " + allChildContents.size() + "개 child 처리 완료");
+            log.info("Document {} completed: {} parents, {} children",
+                    documentId, parentChunks.size(), allChildContents.size());
 
         } catch (Exception e) {
             log.error("Document {} processing failed", documentId, e);

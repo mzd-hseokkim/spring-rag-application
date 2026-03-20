@@ -14,6 +14,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/chat")
@@ -41,40 +45,72 @@ public class ChatController {
 
         SseEmitter emitter = new SseEmitter(300_000L);
 
-        ChatService.ChatResponse response = chatService.chat(request.sessionId(), request.message());
+        // Heartbeat: 10초마다 SSE comment를 보내서 연결 유지
+        ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor();
+        heartbeat.scheduleAtFixedRate(() -> {
+            try {
+                emitter.send(SseEmitter.event().comment("heartbeat"));
+            } catch (IOException e) {
+                heartbeat.shutdown();
+            }
+        }, 10, 10, TimeUnit.SECONDS);
 
-        response.tokens().subscribe(
-                token -> {
-                    try {
-                        emitter.send(SseEmitter.event()
-                                .name("token")
-                                .data(Map.of("content", token)));
-                    } catch (IOException e) {
-                        emitter.completeWithError(e);
-                    }
-                },
-                error -> {
-                    try {
-                        emitter.send(SseEmitter.event()
-                                .name("error")
-                                .data(Map.of("message", error.getMessage())));
-                    } catch (IOException ignored) {}
-                    emitter.completeWithError(error);
-                },
-                () -> {
-                    try {
-                        emitter.send(SseEmitter.event()
-                                .name("sources")
-                                .data(response.sources()));
-                        emitter.send(SseEmitter.event()
-                                .name("done")
-                                .data(Map.of()));
-                        emitter.complete();
-                    } catch (IOException e) {
-                        emitter.completeWithError(e);
-                    }
-                }
-        );
+        // 비동기 실행: emitter가 먼저 클라이언트에 반환된 후 agent step 이벤트가 실시간으로 전송됨
+        CompletableFuture.runAsync(() -> {
+            try {
+                ChatService.ChatResponse response = chatService.chat(
+                        request.sessionId(), request.message(),
+                        step -> {
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("agent_step")
+                                        .data(Map.of("step", step.step(), "message", step.message())));
+                            } catch (IOException ignored) {}
+                        });
+
+                response.tokens().subscribe(
+                        token -> {
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("token")
+                                        .data(Map.of("content", token)));
+                            } catch (IOException e) {
+                                emitter.completeWithError(e);
+                            }
+                        },
+                        error -> {
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("error")
+                                        .data(Map.of("message", error.getMessage())));
+                            } catch (IOException ignored) {}
+                            emitter.completeWithError(error);
+                        },
+                        () -> {
+                            heartbeat.shutdown();
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("sources")
+                                        .data(response.sources()));
+                                emitter.send(SseEmitter.event()
+                                        .name("done")
+                                        .data(Map.of()));
+                                emitter.complete();
+                            } catch (IOException e) {
+                                emitter.completeWithError(e);
+                            }
+                        }
+                );
+            } catch (Exception e) {
+                heartbeat.shutdown();
+                try {
+                    emitter.send(SseEmitter.event()
+                            .name("error")
+                            .data(Map.of("message", e.getMessage())));
+                } catch (IOException ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
 
         return emitter;
     }

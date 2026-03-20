@@ -22,6 +22,9 @@ public class DocumentChunk {
     @Column(name = "chunk_index", nullable = false)
     private int chunkIndex;
 
+    @Column(name = "parent_chunk_id")
+    private UUID parentChunkId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -35,6 +38,13 @@ public class DocumentChunk {
         this.chunkIndex = chunkIndex;
     }
 
+    public DocumentChunk(Document document, String content, int chunkIndex, UUID parentChunkId) {
+        this.document = document;
+        this.content = content;
+        this.chunkIndex = chunkIndex;
+        this.parentChunkId = parentChunkId;
+    }
+
     @PrePersist
     void prePersist() {
         this.createdAt = LocalDateTime.now();
@@ -44,5 +54,6 @@ public class DocumentChunk {
     public Document getDocument() { return document; }
     public String getContent() { return content; }
     public int getChunkIndex() { return chunkIndex; }
+    public UUID getParentChunkId() { return parentChunkId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

@@ -25,9 +25,11 @@ public class VectorSearchService {
         return jdbcTemplate.query("""
                 SELECT c.id, c.document_id, c.content, c.chunk_index,
                        d.filename,
+                       p.content AS parent_content,
                        1 - (c.embedding <=> cast(? AS vector)) AS similarity
                 FROM document_chunk c
                 JOIN document d ON d.id = c.document_id
+                LEFT JOIN document_chunk p ON p.id = c.parent_chunk_id
                 WHERE d.status = 'COMPLETED'
                   AND c.embedding IS NOT NULL
                 ORDER BY c.embedding <=> cast(? AS vector)
@@ -38,6 +40,7 @@ public class VectorSearchService {
                         UUID.fromString(rs.getString("document_id")),
                         rs.getString("filename"),
                         rs.getString("content"),
+                        rs.getString("parent_content"),
                         rs.getInt("chunk_index"),
                         rs.getDouble("similarity")
                 ),

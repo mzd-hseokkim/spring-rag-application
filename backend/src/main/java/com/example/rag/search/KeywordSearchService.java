@@ -19,9 +19,11 @@ public class KeywordSearchService {
         return jdbcTemplate.query("""
                 SELECT c.id, c.document_id, c.content, c.chunk_index,
                        d.filename,
+                       p.content AS parent_content,
                        ts_rank(c.content_tsv, q) AS rank
                 FROM document_chunk c
-                JOIN document d ON d.id = c.document_id,
+                JOIN document d ON d.id = c.document_id
+                LEFT JOIN document_chunk p ON p.id = c.parent_chunk_id,
                      plainto_tsquery('simple', ?) q
                 WHERE d.status = 'COMPLETED'
                   AND c.content_tsv @@ q
@@ -33,6 +35,7 @@ public class KeywordSearchService {
                         UUID.fromString(rs.getString("document_id")),
                         rs.getString("filename"),
                         rs.getString("content"),
+                        rs.getString("parent_content"),
                         rs.getInt("chunk_index"),
                         rs.getDouble("rank")
                 ),

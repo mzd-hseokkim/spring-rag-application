@@ -16,8 +16,14 @@ export interface Source {
   excerpt: string;
 }
 
+export interface AgentStep {
+  step: string;
+  message: string;
+}
+
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
   sources?: Source[];
+  agentSteps?: AgentStep[];
 }

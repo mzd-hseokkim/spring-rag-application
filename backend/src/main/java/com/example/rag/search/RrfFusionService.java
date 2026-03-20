@@ -34,7 +34,7 @@ public class RrfFusionService {
                     ChunkSearchResult original = chunks.get(e.getKey());
                     return new ChunkSearchResult(
                             original.chunkId(), original.documentId(), original.filename(),
-                            original.content(), original.chunkIndex(), e.getValue());
+                            original.content(), original.parentContent(), original.chunkIndex(), e.getValue());
                 })
                 .toList();
     }

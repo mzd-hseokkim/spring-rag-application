@@ -43,8 +43,15 @@ spring:
 
 app:
   chunking:
-    chunk-size: 1000
-    overlap: 200
+    mode: semantic                # "fixed" 또는 "semantic"
+    fixed:
+      chunk-size: 1000
+      overlap: 200
+    semantic:
+      buffer-size: 1
+      breakpoint-percentile: 90
+      min-chunk-size: 200
+      max-chunk-size: 1500
   conversation:
     max-messages: 20
     ttl-minutes: 60

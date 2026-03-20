@@ -37,7 +37,7 @@ public class RerankService {
                     double score = scoreChunk(query, chunk);
                     return new ChunkSearchResult(
                             chunk.chunkId(), chunk.documentId(), chunk.filename(),
-                            chunk.content(), chunk.chunkIndex(), score);
+                            chunk.content(), chunk.parentContent(), chunk.chunkIndex(), score);
                 })
                 .sorted(Comparator.comparingDouble(ChunkSearchResult::score).reversed())
                 .limit(topK)
