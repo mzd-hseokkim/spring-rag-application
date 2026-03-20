@@ -1,10 +1,13 @@
 package com.example.rag.chat;
 
+import com.example.rag.conversation.ConversationMessage;
+import com.example.rag.conversation.ConversationService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -12,16 +15,18 @@ import java.util.Map;
 public class ChatController {
 
     private final ChatService chatService;
+    private final ConversationService conversationService;
 
-    public ChatController(ChatService chatService) {
+    public ChatController(ChatService chatService, ConversationService conversationService) {
         this.chatService = chatService;
+        this.conversationService = conversationService;
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(300_000L);
 
-        ChatService.ChatResponse response = chatService.chat(request.message());
+        ChatService.ChatResponse response = chatService.chat(request.sessionId(), request.message());
 
         response.tokens().subscribe(
                 token -> {
@@ -59,5 +64,15 @@ public class ChatController {
         return emitter;
     }
 
-    record ChatRequest(String message) {}
+    @GetMapping("/sessions/{sessionId}/messages")
+    public List<ConversationMessage> getHistory(@PathVariable String sessionId) {
+        return conversationService.getHistory(sessionId);
+    }
+
+    @DeleteMapping("/sessions/{sessionId}")
+    public void deleteSession(@PathVariable String sessionId) {
+        conversationService.deleteSession(sessionId);
+    }
+
+    record ChatRequest(String sessionId, String message) {}
 }

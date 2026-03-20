@@ -31,6 +31,11 @@ spring:
         options:
           model: qwen3-embedding:4b
 
+  data:
+    redis:
+      host: localhost
+      port: 6381
+
   servlet:
     multipart:
       max-file-size: 50MB
@@ -40,6 +45,12 @@ app:
   chunking:
     chunk-size: 1000
     overlap: 200
+  conversation:
+    max-messages: 20
+    ttl-minutes: 60
+  search:
+    expansion-count: 3
+    rerank-candidates: 15
 
 server:
   port: 8080

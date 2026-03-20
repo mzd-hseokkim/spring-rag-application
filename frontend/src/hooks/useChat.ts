@@ -1,9 +1,14 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { Message, Source } from '../types';
+
+function generateSessionId(): string {
+  return crypto.randomUUID();
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const sessionIdRef = useRef(generateSessionId());
 
   const sendMessage = useCallback(async (content: string) => {
     const userMessage: Message = { role: 'user', content };
@@ -17,7 +22,7 @@ export function useChat() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-        body: JSON.stringify({ message: content }),
+        body: JSON.stringify({ sessionId: sessionIdRef.current, message: content }),
       });
 
       if (!res.ok || !res.body) throw new Error('Chat request failed');
@@ -80,5 +85,10 @@ export function useChat() {
     }
   }, []);
 
-  return { messages, streaming, sendMessage };
+  const newSession = useCallback(() => {
+    sessionIdRef.current = generateSessionId();
+    setMessages([]);
+  }, []);
+
+  return { messages, streaming, sendMessage, newSession };
 }

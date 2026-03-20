@@ -130,6 +130,33 @@ body {
   height: 100%;
 }
 
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #fff;
+}
+
+.chat-header h2 {
+  font-size: 16px;
+  color: #555;
+}
+
+.new-session-btn {
+  padding: 6px 14px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.new-session-btn:hover {
+  background: #eee;
+}
+
 /* Message List */
 .message-list {
   flex: 1;
