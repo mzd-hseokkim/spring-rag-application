@@ -1,0 +1,1 @@
+ALTER TABLE llm_model ALTER COLUMN api_key_ref TYPE VARCHAR(500);

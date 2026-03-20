@@ -1,11 +1,19 @@
 import { useState } from 'react';
-import { useModels } from '../../hooks/useModels';
 import type { LlmModel } from '../../types';
 
 const PURPOSES = ['CHAT', 'EMBEDDING', 'QUERY', 'RERANK', 'EVALUATION'] as const;
 
-export function ModelManagement() {
-  const { models, setDefault, testModel, deleteModel, createModel, discoverOllama } = useModels();
+type ModelState = {
+  models: LlmModel[];
+  setDefault: (id: string) => Promise<void>;
+  testModel: (id: string) => Promise<any>;
+  deleteModel: (id: string) => Promise<void>;
+  createModel: (model: Partial<LlmModel>) => Promise<void>;
+  discoverOllama: () => Promise<any[]>;
+};
+
+export function ModelManagement({ modelState }: { modelState: ModelState }) {
+  const { models, setDefault, testModel, deleteModel, createModel, discoverOllama } = modelState;
   const [selectedPurpose, setSelectedPurpose] = useState<string>('CHAT');
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
   const [showAdd, setShowAdd] = useState(false);

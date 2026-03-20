@@ -4,10 +4,12 @@ import { DocumentUpload } from './components/document/DocumentUpload';
 import { DocumentList } from './components/document/DocumentList';
 import { ModelManagement } from './components/model/ModelManagement';
 import { useDocuments } from './hooks/useDocuments';
+import { useModels } from './hooks/useModels';
 import './App.css';
 
 function App() {
   const { documents, uploading, upload } = useDocuments();
+  const modelState = useModels();
   const [sidebarTab, setSidebarTab] = useState<'documents' | 'models'>('documents');
 
   return (
@@ -34,11 +36,11 @@ function App() {
             <DocumentList documents={documents} />
           </>
         ) : (
-          <ModelManagement />
+          <ModelManagement modelState={modelState} />
         )}
       </aside>
       <main className="main">
-        <ChatView />
+        <ChatView models={modelState.models} />
       </main>
     </div>
   );

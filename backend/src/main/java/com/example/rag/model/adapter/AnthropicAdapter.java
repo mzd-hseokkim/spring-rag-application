@@ -9,9 +9,9 @@ public class AnthropicAdapter {
     public OllamaAdapter.TestResult test(String apiKeyRef, String modelId) {
         long start = System.currentTimeMillis();
         try {
-            String apiKey = System.getenv(apiKeyRef);
+            String apiKey = resolveApiKey(apiKeyRef);
             if (apiKey == null || apiKey.isBlank()) {
-                return new OllamaAdapter.TestResult(false, 0, "Environment variable not found: " + apiKeyRef);
+                return new OllamaAdapter.TestResult(false, 0, "API key is not set");
             }
 
             RestClient client = RestClient.create("https://api.anthropic.com");
@@ -33,5 +33,11 @@ public class AnthropicAdapter {
         } catch (Exception e) {
             return new OllamaAdapter.TestResult(false, System.currentTimeMillis() - start, e.getMessage());
         }
+    }
+
+    private String resolveApiKey(String apiKeyRef) {
+        if (apiKeyRef == null || apiKeyRef.isBlank()) return null;
+        if (apiKeyRef.startsWith("sk-")) return apiKeyRef;
+        return System.getenv(apiKeyRef);
     }
 }

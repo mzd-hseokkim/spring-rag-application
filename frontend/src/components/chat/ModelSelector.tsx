@@ -1,33 +1,23 @@
-import { useState, useEffect } from 'react';
 import type { LlmModel } from '../../types';
 
 interface Props {
+  models: LlmModel[];
   selectedModelId: string | null;
   onSelect: (modelId: string | null) => void;
   disabled: boolean;
 }
 
-export function ModelSelector({ selectedModelId, onSelect, disabled }: Props) {
-  const [models, setModels] = useState<LlmModel[]>([]);
+export function ModelSelector({ models, selectedModelId, onSelect, disabled }: Props) {
+  const chatModels = models.filter(m => m.purpose === 'CHAT');
+  if (chatModels.length === 0) return null;
 
-  useEffect(() => {
-    fetch('/api/models?purpose=CHAT')
-      .then(res => res.json())
-      .then(setModels)
-      .catch(() => {});
-  }, []);
-
-  if (models.length === 0) return null;
-
-  // provider별 그룹핑
-  const grouped = models.reduce<Record<string, LlmModel[]>>((acc, m) => {
-    const key = m.provider;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(m);
+  const grouped = chatModels.reduce<Record<string, LlmModel[]>>((acc, m) => {
+    if (!acc[m.provider]) acc[m.provider] = [];
+    acc[m.provider].push(m);
     return acc;
   }, {});
 
-  const defaultModel = models.find(m => m.isDefault);
+  const defaultModel = chatModels.find(m => m.isDefault);
   const currentValue = selectedModelId || '';
 
   return (

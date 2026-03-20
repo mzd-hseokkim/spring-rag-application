@@ -36,7 +36,7 @@ public class LlmModel {
     @Column(name = "base_url", length = 500)
     private String baseUrl;
 
-    @Column(name = "api_key_ref", length = 100)
+    @Column(name = "api_key_ref", length = 500)
     private String apiKeyRef;
 
     @Column

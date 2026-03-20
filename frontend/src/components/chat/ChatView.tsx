@@ -3,8 +3,13 @@ import { useChat } from '../../hooks/useChat';
 import { ChatInput } from './ChatInput';
 import { MessageList } from './MessageList';
 import { ModelSelector } from './ModelSelector';
+import type { LlmModel } from '../../types';
 
-export function ChatView() {
+interface Props {
+  models: LlmModel[];
+}
+
+export function ChatView({ models }: Props) {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const { messages, streaming, sendMessage, newSession } = useChat();
 
@@ -18,6 +23,7 @@ export function ChatView() {
         <h2>채팅</h2>
         <div className="chat-header-actions">
           <ModelSelector
+            models={models}
             selectedModelId={selectedModelId}
             onSelect={setSelectedModelId}
             disabled={streaming}
