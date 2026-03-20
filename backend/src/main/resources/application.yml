@@ -63,6 +63,9 @@ app:
   guard:
     rate-limit-per-minute: 10
     max-input-length: 2000
+  model:
+    ollama:
+      default-base-url: http://localhost:11434
 
 logging:
   level:

@@ -1,6 +1,8 @@
 package com.example.rag.agent;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
 import org.springframework.ai.chat.client.ChatClient;
@@ -16,20 +18,24 @@ public class MultiStepReasoner {
 
     private final String decomposePrompt;
     private final String synthesizePrompt;
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
     private final SearchService searchService;
 
-    public MultiStepReasoner(ChatClient.Builder chatClientBuilder,
+    public MultiStepReasoner(ModelClientProvider modelProvider,
                              PromptLoader promptLoader,
                              SearchService searchService) {
-        this.chatClient = chatClientBuilder.build();
+        this.modelProvider = modelProvider;
         this.decomposePrompt = promptLoader.load("decompose.txt");
         this.synthesizePrompt = promptLoader.load("synthesize.txt");
         this.searchService = searchService;
     }
 
+    private ChatClient chatClient() {
+        return modelProvider.getChatClient(ModelPurpose.QUERY);
+    }
+
     public List<String> decompose(String query) {
-        String response = chatClient.prompt()
+        String response = chatClient().prompt()
                 .user(decomposePrompt.formatted(query))
                 .call()
                 .content()
@@ -65,7 +71,7 @@ public class MultiStepReasoner {
             stepCallback.accept(new AgentStepEvent("sub_answer",
                     "하위 질문 %d/%d 답변 생성 중...".formatted(i + 1, subQueries.size())));
 
-            String subAnswer = chatClient.prompt()
+            String subAnswer = chatClient().prompt()
                     .user("다음 컨텍스트를 바탕으로 질문에 간단히 답하세요.\n\n[컨텍스트]\n%s\n\n질문: %s"
                             .formatted(context, subQuery))
                     .call()
@@ -81,7 +87,7 @@ public class MultiStepReasoner {
         stepCallback.accept(new AgentStepEvent("synthesize", "답변 종합 중..."));
 
         // 최종 종합은 스트리밍으로 반환
-        Flux<String> tokenStream = chatClient.prompt()
+        Flux<String> tokenStream = chatClient().prompt()
                 .user(synthesizePrompt.formatted(originalQuery, subAnswers.toString()))
                 .stream()
                 .content();

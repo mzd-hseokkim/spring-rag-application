@@ -1,6 +1,6 @@
 package com.example.rag.search;
 
-import org.springframework.ai.embedding.EmbeddingModel;
+import com.example.rag.model.ModelClientProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -10,16 +10,16 @@ import java.util.UUID;
 @Service
 public class VectorSearchService {
 
-    private final EmbeddingModel embeddingModel;
+    private final ModelClientProvider modelProvider;
     private final JdbcTemplate jdbcTemplate;
 
-    public VectorSearchService(EmbeddingModel embeddingModel, JdbcTemplate jdbcTemplate) {
-        this.embeddingModel = embeddingModel;
+    public VectorSearchService(ModelClientProvider modelProvider, JdbcTemplate jdbcTemplate) {
+        this.modelProvider = modelProvider;
         this.jdbcTemplate = jdbcTemplate;
     }
 
     public List<ChunkSearchResult> search(String query, int limit) {
-        float[] queryEmbedding = embeddingModel.embed(query);
+        float[] queryEmbedding = modelProvider.getEmbeddingModel().embed(query);
         String vectorStr = toVectorString(queryEmbedding);
 
         return jdbcTemplate.query("""

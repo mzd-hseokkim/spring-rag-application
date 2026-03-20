@@ -2,9 +2,9 @@ package com.example.rag.document.pipeline;
 
 import com.example.rag.document.*;
 import com.example.rag.document.parser.DocumentParser;
+import com.example.rag.model.ModelClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -21,7 +21,7 @@ public class IngestionPipeline {
     private final List<DocumentParser> parsers;
     private final ChunkingStrategy chunkingStrategy;
     private final FixedSizeChunkingStrategy childChunker;
-    private final EmbeddingModel embeddingModel;
+    private final ModelClientProvider modelProvider;
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository chunkRepository;
     private final IngestionEventPublisher eventPublisher;
@@ -29,7 +29,7 @@ public class IngestionPipeline {
 
     public IngestionPipeline(List<DocumentParser> parsers,
                              ChunkingStrategy chunkingStrategy,
-                             EmbeddingModel embeddingModel,
+                             ModelClientProvider modelProvider,
                              DocumentRepository documentRepository,
                              DocumentChunkRepository chunkRepository,
                              IngestionEventPublisher eventPublisher,
@@ -37,7 +37,7 @@ public class IngestionPipeline {
         this.parsers = parsers;
         this.chunkingStrategy = chunkingStrategy;
         this.childChunker = new FixedSizeChunkingStrategy(500, 100);
-        this.embeddingModel = embeddingModel;
+        this.modelProvider = modelProvider;
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
         this.eventPublisher = eventPublisher;
@@ -138,7 +138,7 @@ public class IngestionPipeline {
     private float[][] embedBatch(List<String> texts) {
         float[][] result = new float[texts.size()][];
         for (int i = 0; i < texts.size(); i++) {
-            result[i] = embeddingModel.embed(texts.get(i));
+            result[i] = modelProvider.getEmbeddingModel().embed(texts.get(i));
         }
         return result;
     }

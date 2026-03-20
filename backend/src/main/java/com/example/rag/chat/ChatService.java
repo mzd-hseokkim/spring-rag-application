@@ -12,6 +12,8 @@ import com.example.rag.observability.PipelineTracer;
 import com.example.rag.observability.TraceContext;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import com.example.rag.search.query.QueryCompressor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
@@ -29,7 +31,7 @@ public class ChatService {
     private final String ragSystemPrompt;
     private final String generalSystemPrompt;
 
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
     private final SearchService searchService;
     private final ConversationService conversationService;
     private final QueryCompressor queryCompressor;
@@ -38,7 +40,7 @@ public class ChatService {
     private final PipelineTracer pipelineTracer;
     private final EvaluationService evaluationService;
 
-    public ChatService(ChatClient.Builder chatClientBuilder,
+    public ChatService(ModelClientProvider modelProvider,
                        SearchService searchService,
                        ConversationService conversationService,
                        QueryCompressor queryCompressor,
@@ -47,7 +49,7 @@ public class ChatService {
                        PipelineTracer pipelineTracer,
                        EvaluationService evaluationService,
                        PromptLoader promptLoader) {
-        this.chatClient = chatClientBuilder.build();
+        this.modelProvider = modelProvider;
         this.searchService = searchService;
         this.conversationService = conversationService;
         this.queryCompressor = queryCompressor;
@@ -59,7 +61,14 @@ public class ChatService {
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
     }
 
-    public ChatResponse chat(String sessionId, String message, Consumer<AgentStepEvent> stepCallback) {
+    private ChatClient chatClient(String modelId) {
+        if (modelId != null && !modelId.isBlank()) {
+            return modelProvider.getChatClient(java.util.UUID.fromString(modelId));
+        }
+        return modelProvider.getChatClient(ModelPurpose.CHAT);
+    }
+
+    public ChatResponse chat(String sessionId, String message, String modelId, Consumer<AgentStepEvent> stepCallback) {
         TraceContext trace = new TraceContext(sessionId, message);
         List<AgentStepEvent> agentSteps = new ArrayList<>();
         Consumer<AgentStepEvent> callback = event -> {
@@ -85,32 +94,31 @@ public class ChatService {
             case DIRECT_ANSWER -> {
                 callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
                 pipelineTracer.logTrace(trace);
-                yield chatGeneral(sessionId, message);
+                yield chatGeneral(sessionId, message, modelId);
             }
             case CLARIFY -> {
                 callback.accept(new AgentStepEvent("clarify", "질문 명확화 요청 중..."));
                 pipelineTracer.logTrace(trace);
-                yield chatClarify(sessionId, message);
+                yield chatClarify(sessionId, message, modelId);
             }
             case SEARCH -> {
-                // 멀티스텝 분해 시도
                 callback.accept(new AgentStepEvent("decompose", "질문 복잡도 분석 중..."));
                 trace.startStep("decompose");
                 List<String> subQueries = multiStepReasoner.decompose(searchQuery);
                 trace.endStep(Map.of("isMultiStep", subQueries != null));
 
                 if (subQueries != null && subQueries.size() > 1) {
-                    yield chatMultiStep(sessionId, message, searchQuery, subQueries, trace, callback);
+                    yield chatMultiStep(sessionId, message, searchQuery, subQueries, modelId, trace, callback);
                 } else {
                     callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
-                    yield chatWithRag(sessionId, message, searchQuery, trace, callback);
+                    yield chatWithRag(sessionId, message, searchQuery, modelId, trace, callback);
                 }
             }
         };
     }
 
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
-                                      TraceContext trace, Consumer<AgentStepEvent> callback) {
+                                      String modelId, TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep("search");
         List<ChunkSearchResult> searchResults = searchService.search(searchQuery);
         trace.endStep(Map.of("resultCount", searchResults.size()));
@@ -134,7 +142,7 @@ public class ChatService {
         StringBuilder fullResponse = new StringBuilder();
 
         trace.startStep("generate");
-        Flux<String> tokenStream = chatClient.prompt()
+        Flux<String> tokenStream = chatClient(modelId).prompt()
                 .system(ragSystemPrompt)
                 .user(userPrompt)
                 .stream()
@@ -157,8 +165,8 @@ public class ChatService {
     }
 
     private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
-                                        List<String> subQueries, TraceContext trace,
-                                        Consumer<AgentStepEvent> callback) {
+                                        List<String> subQueries, String modelId,
+                                        TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep("multi_step");
         var result = multiStepReasoner.reason(searchQuery, subQueries, callback);
         trace.endStep(Map.of("subQueryCount", subQueries.size()));
@@ -181,14 +189,14 @@ public class ChatService {
         return new ChatResponse(tokenStream, sources);
     }
 
-    private ChatResponse chatGeneral(String sessionId, String message) {
+    private ChatResponse chatGeneral(String sessionId, String message, String modelId) {
         String history = buildHistory(sessionId);
         String userPrompt = history.equals("(없음)") ? message
                 : "[이전 대화]\n%s\n\n질문: %s".formatted(history, message);
 
         StringBuilder fullResponse = new StringBuilder();
 
-        Flux<String> tokenStream = chatClient.prompt()
+        Flux<String> tokenStream = chatClient(modelId).prompt()
                 .system(generalSystemPrompt)
                 .user(userPrompt)
                 .stream()
@@ -200,12 +208,12 @@ public class ChatService {
         return new ChatResponse(tokenStream, List.of());
     }
 
-    private ChatResponse chatClarify(String sessionId, String message) {
+    private ChatResponse chatClarify(String sessionId, String message, String modelId) {
         String prompt = "사용자의 질문이 모호합니다. 질문을 더 구체적으로 해달라고 정중하게 요청하세요.\n\n질문: " + message;
 
         StringBuilder fullResponse = new StringBuilder();
 
-        Flux<String> tokenStream = chatClient.prompt()
+        Flux<String> tokenStream = chatClient(modelId).prompt()
                 .system(generalSystemPrompt)
                 .user(prompt)
                 .stream()

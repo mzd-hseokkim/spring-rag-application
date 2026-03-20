@@ -4,7 +4,9 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication(exclude = {
-        org.springframework.ai.model.anthropic.autoconfigure.AnthropicChatAutoConfiguration.class
+        org.springframework.ai.model.anthropic.autoconfigure.AnthropicChatAutoConfiguration.class,
+        org.springframework.ai.model.ollama.autoconfigure.OllamaChatAutoConfiguration.class,
+        org.springframework.ai.model.ollama.autoconfigure.OllamaEmbeddingAutoConfiguration.class
 })
 public class RagApplication {
 

@@ -3,6 +3,8 @@ package com.example.rag.search.query;
 import com.example.rag.common.PromptLoader;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 
@@ -13,15 +15,19 @@ import java.util.stream.Collectors;
 public class QueryCompressor {
 
     private final String compressPrompt;
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
     private final ConversationService conversationService;
 
-    public QueryCompressor(ChatClient.Builder chatClientBuilder,
+    public QueryCompressor(ModelClientProvider modelProvider,
                            ConversationService conversationService,
                            PromptLoader promptLoader) {
-        this.chatClient = chatClientBuilder.build();
+        this.modelProvider = modelProvider;
         this.conversationService = conversationService;
         this.compressPrompt = promptLoader.load("compress.txt");
+    }
+
+    private ChatClient chatClient() {
+        return modelProvider.getChatClient(ModelPurpose.QUERY);
     }
 
     public String compress(String sessionId, String currentMessage) {
@@ -38,7 +44,7 @@ public class QueryCompressor {
 
         String prompt = compressPrompt.formatted(historyText, currentMessage);
 
-        return chatClient.prompt()
+        return chatClient().prompt()
                 .user(prompt)
                 .call()
                 .content()

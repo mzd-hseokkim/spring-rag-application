@@ -27,3 +27,23 @@ export interface Message {
   sources?: Source[];
   agentSteps?: AgentStep[];
 }
+
+export interface LlmModel {
+  id: string;
+  provider: 'OLLAMA' | 'ANTHROPIC';
+  modelId: string;
+  displayName: string;
+  purpose: 'CHAT' | 'EMBEDDING' | 'QUERY' | 'RERANK' | 'EVALUATION';
+  isDefault: boolean;
+  isActive: boolean;
+  baseUrl: string | null;
+  apiKeyRef: string | null;
+  temperature: number | null;
+  maxTokens: number | null;
+}
+
+export interface DiscoveredModel {
+  modelId: string;
+  size: number;
+  modifiedAt: string;
+}

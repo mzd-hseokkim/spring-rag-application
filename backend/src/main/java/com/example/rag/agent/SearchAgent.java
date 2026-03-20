@@ -1,6 +1,8 @@
 package com.example.rag.agent;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 
@@ -8,15 +10,19 @@ import org.springframework.stereotype.Component;
 public class SearchAgent {
 
     private final String decidePrompt;
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
 
-    public SearchAgent(ChatClient.Builder chatClientBuilder, PromptLoader promptLoader) {
-        this.chatClient = chatClientBuilder.build();
+    public SearchAgent(ModelClientProvider modelProvider, PromptLoader promptLoader) {
+        this.modelProvider = modelProvider;
         this.decidePrompt = promptLoader.load("agent-decide.txt");
     }
 
+    private ChatClient chatClient() {
+        return modelProvider.getChatClient(ModelPurpose.QUERY);
+    }
+
     public AgentAction decide(String query) {
-        String response = chatClient.prompt()
+        String response = chatClient().prompt()
                 .user(decidePrompt.formatted(query))
                 .call()
                 .content()

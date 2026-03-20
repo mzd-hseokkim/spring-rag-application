@@ -62,15 +62,21 @@ export function useChat() {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
   const sessionIdRef = useRef(generateSessionId());
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, modelId?: string | null) => {
     dispatch({ type: 'SEND_MESSAGE', content });
     dispatch({ type: 'STREAM_START' });
 
     try {
+      const payload: Record<string, string> = {
+        sessionId: sessionIdRef.current,
+        message: content,
+      };
+      if (modelId) payload.modelId = modelId;
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-        body: JSON.stringify({ sessionId: sessionIdRef.current, message: content }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok || !res.body) throw new Error('Chat request failed');

@@ -1,6 +1,8 @@
 package com.example.rag.search;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -16,15 +18,19 @@ public class RerankService {
     private static final Logger log = LoggerFactory.getLogger(RerankService.class);
 
     private final String rerankPrompt;
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
     private final int rerankCandidates;
 
-    public RerankService(ChatClient.Builder chatClientBuilder,
+    public RerankService(ModelClientProvider modelProvider,
                          @Value("${app.search.rerank-candidates:15}") int rerankCandidates,
                          PromptLoader promptLoader) {
-        this.chatClient = chatClientBuilder.build();
+        this.modelProvider = modelProvider;
         this.rerankCandidates = rerankCandidates;
         this.rerankPrompt = promptLoader.load("rerank.txt");
+    }
+
+    private ChatClient chatClient() {
+        return modelProvider.getChatClient(ModelPurpose.RERANK);
     }
 
     public List<ChunkSearchResult> rerank(String query, List<ChunkSearchResult> candidates, int topK) {
@@ -49,7 +55,7 @@ public class RerankService {
             String truncatedContent = chunk.content().length() > 500
                     ? chunk.content().substring(0, 500) : chunk.content();
 
-            String response = chatClient.prompt()
+            String response = chatClient().prompt()
                     .user(rerankPrompt.formatted(query, truncatedContent))
                     .call()
                     .content()

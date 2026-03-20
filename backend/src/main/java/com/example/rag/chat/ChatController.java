@@ -59,7 +59,7 @@ public class ChatController {
         CompletableFuture.runAsync(() -> {
             try {
                 ChatService.ChatResponse response = chatService.chat(
-                        request.sessionId(), request.message(),
+                        request.sessionId(), request.message(), request.modelId(),
                         step -> {
                             try {
                                 emitter.send(SseEmitter.event()
@@ -143,6 +143,6 @@ public class ChatController {
         return Map.of("message", e.getMessage());
     }
 
-    record ChatRequest(String sessionId, String message) {}
+    record ChatRequest(String sessionId, String message, String modelId) {}
     record FeedbackRequest(String sessionId, int messageIndex, String rating) {}
 }

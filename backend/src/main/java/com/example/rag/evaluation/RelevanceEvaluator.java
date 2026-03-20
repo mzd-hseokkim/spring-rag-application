@@ -1,5 +1,7 @@
 package com.example.rag.evaluation;
 
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -21,15 +23,19 @@ public class RelevanceEvaluator {
             %s
             """;
 
-    private final ChatClient chatClient;
+    private final ModelClientProvider modelProvider;
 
-    public RelevanceEvaluator(ChatClient.Builder chatClientBuilder) {
-        this.chatClient = chatClientBuilder.build();
+    public RelevanceEvaluator(ModelClientProvider modelProvider) {
+        this.modelProvider = modelProvider;
+    }
+
+    private ChatClient chatClient() {
+        return modelProvider.getChatClient(ModelPurpose.EVALUATION);
     }
 
     public void evaluate(String query, String response) {
         try {
-            String result = chatClient.prompt()
+            String result = chatClient().prompt()
                     .user(PROMPT.formatted(query, truncate(response, 1000)))
                     .call()
                     .content()

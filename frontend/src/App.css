@@ -32,6 +32,182 @@ body {
   color: #555;
 }
 
+/* Sidebar Tabs */
+.sidebar-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #e0e0e0;
+  margin: -16px -16px 0;
+  padding: 0 16px;
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: #999;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.sidebar-tab.active {
+  color: #4a90d9;
+  border-bottom-color: #4a90d9;
+}
+
+/* Model Management */
+.model-management h2 {
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.purpose-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.purpose-tab {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.purpose-tab.active {
+  background: #4a90d9;
+  color: #fff;
+  border-color: #4a90d9;
+}
+
+.model-list {
+  list-style: none;
+}
+
+.model-item {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.model-item.is-default {
+  background: #f0f7ff;
+  margin: 0 -16px;
+  padding: 8px 16px;
+}
+
+.model-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.model-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.model-meta {
+  font-size: 11px;
+  color: #999;
+}
+
+.default-badge {
+  font-size: 10px;
+  background: #4a90d9;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.model-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.model-actions button {
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.model-actions button.danger {
+  color: #f44336;
+  border-color: #f44336;
+}
+
+.test-result {
+  font-size: 11px;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.test-result.success { background: #e8f5e9; color: #2e7d32; }
+.test-result.fail { background: #fce4ec; color: #c62828; }
+
+.no-models {
+  font-size: 13px;
+  color: #aaa;
+  text-align: center;
+  padding: 12px;
+}
+
+.model-bottom-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.model-bottom-actions button {
+  flex: 1;
+  padding: 6px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.add-model-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.add-model-form input,
+.add-model-form select {
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.add-model-form button {
+  padding: 6px;
+  background: #4a90d9;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
 /* Document Upload */
 .document-upload {
   border: 2px dashed #ccc;
