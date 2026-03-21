@@ -1,8 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Search, Brain, ListTree, FileText, PenLine, CheckCircle2,
+  Link, MessageSquare, HelpCircle, Loader2, Check,
+  ThumbsUp, ThumbsDown, Paperclip, ChevronDown, ChevronUp,
+} from 'lucide-react';
 import type { Message } from '@/types';
 
 interface Props {
@@ -10,31 +15,49 @@ interface Props {
   streaming: boolean;
 }
 
-const STEP_ICONS: Record<string, string> = {
-  compress: '\uD83D\uDD0D',
-  decide: '\uD83E\uDD14',
-  decompose: '\uD83D\uDCCB',
-  search: '\uD83D\uDCC4',
-  sub_search: '\uD83D\uDCC4',
-  sub_answer: '\u270F\uFE0F',
-  sub_done: '\u2705',
-  synthesize: '\uD83D\uDD17',
-  generate: '\uD83D\uDCAC',
-  direct: '\uD83D\uDCAC',
-  clarify: '\u2753',
+const STEP_ICONS: Record<string, ReactNode> = {
+  compress: <Search className="size-3.5" />,
+  decide: <Brain className="size-3.5" />,
+  decompose: <ListTree className="size-3.5" />,
+  search: <FileText className="size-3.5" />,
+  sub_search: <FileText className="size-3.5" />,
+  sub_answer: <PenLine className="size-3.5" />,
+  sub_done: <CheckCircle2 className="size-3.5" />,
+  synthesize: <Link className="size-3.5" />,
+  generate: <MessageSquare className="size-3.5" />,
+  direct: <MessageSquare className="size-3.5" />,
+  clarify: <HelpCircle className="size-3.5" />,
 };
 
 export function MessageList({ messages, streaming }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
+  const [feedbacks, setFeedbacks] = useState<Record<number, 'up' | 'down'>>({});
+  const [expandedSources, setExpandedSources] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const submitFeedback = async (index: number, rating: 'up' | 'down') => {
+    setFeedbacks(prev => ({ ...prev, [index]: rating }));
+    try {
+      await fetch('/api/chat/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: '', messageIndex: index, rating }),
+      });
+    } catch { /* ignore */ }
+  };
+
+  const toggleSources = (index: number) => {
+    setExpandedSources(prev => ({ ...prev, [index]: !prev[index] }));
+  };
+
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
-        <p>문서를 업로드한 후 질문해보세요.</p>
+      <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground/60">
+        <MessageSquare className="size-10 stroke-1" />
+        <p className="text-sm font-medium">문서를 업로드한 후 질문해보세요.</p>
       </div>
     );
   }
@@ -45,7 +68,7 @@ export function MessageList({ messages, streaming }: Props) {
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed wrap-break-word ${
+            className={`max-w-[85%] rounded-xl px-4 py-3 text-sm leading-relaxed wrap-break-word ${
               msg.role === 'user'
                 ? 'self-end bg-secondary text-secondary-foreground whitespace-pre-wrap'
                 : 'self-start bg-card border ring-1 ring-foreground/5 shadow-sm'
@@ -60,10 +83,12 @@ export function MessageList({ messages, streaming }: Props) {
                   const isLastMsg = i === messages.length - 1;
                   const isLastStep = j === msg.agentSteps!.length - 1;
                   const showSpinner = isLastMsg && isLastStep && streaming;
-                  const icon = showSpinner ? '\u23F3' : (STEP_ICONS[step.step] || '\u2714\uFE0F');
+                  const icon = showSpinner
+                    ? <Loader2 className="size-3.5 animate-spin" />
+                    : (STEP_ICONS[step.step] || <Check className="size-3.5" />);
                   return (
                     <div key={j} className="flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground">
-                      <span className={`shrink-0 ${showSpinner ? 'animate-spin' : ''}`}>{icon}</span>
+                      <span className="shrink-0">{icon}</span>
                       <span>{step.message}</span>
                     </div>
                   );
@@ -77,11 +102,47 @@ export function MessageList({ messages, streaming }: Props) {
                 msg.content
               )}
             </div>
-            {msg.sources && msg.sources.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-border">
-                <Badge variant="secondary" className="mb-1.5">출처</Badge>
+
+            {msg.role === 'assistant' && msg.content && (
+              <div className="mt-2 pt-2 border-t border-border flex items-center gap-2">
+                <div className="flex gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`h-7 w-7 p-0 ${feedbacks[i] === 'up' ? 'bg-green-100 text-green-600' : ''}`}
+                    onClick={() => submitFeedback(i, 'up')}
+                  >
+                    <ThumbsUp className="size-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`h-7 w-7 p-0 ${feedbacks[i] === 'down' ? 'bg-red-100 text-red-600' : ''}`}
+                    onClick={() => submitFeedback(i, 'down')}
+                  >
+                    <ThumbsDown className="size-3.5" />
+                  </Button>
+                </div>
+
+                {msg.sources && msg.sources.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground gap-1"
+                    onClick={() => toggleSources(i)}
+                  >
+                    <Paperclip className="size-3" />
+                    출처 {msg.sources.length}건
+                    {expandedSources[i] ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {expandedSources[i] && msg.sources && msg.sources.length > 0 && (
+              <div className="mt-1.5 space-y-1">
                 {msg.sources.map((s, j) => (
-                  <div key={j} className="flex gap-1.5 items-baseline text-xs text-muted-foreground py-0.5">
+                  <div key={j} className="flex gap-1.5 items-baseline text-xs text-muted-foreground py-0.5 pl-1">
                     <span className="font-medium text-primary">{s.filename}</span>
                     <span className="text-[11px]">#{s.chunkIndex}</span>
                     <span className="text-[11px] truncate">{s.excerpt}</span>
