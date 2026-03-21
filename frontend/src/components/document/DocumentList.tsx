@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Settings2 } from 'lucide-react';
@@ -94,10 +93,8 @@ export function DocumentList({ documents, onRefresh }: Props) {
             </div>
             {doc.status === 'COMPLETED' && hasOptions && (
               <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
-                    <Settings2 className="h-3 w-3" />
-                  </Button>
+                <PopoverTrigger className="inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md hover:bg-accent cursor-pointer">
+                  <Settings2 className="h-3 w-3" />
                 </PopoverTrigger>
                 <PopoverContent className="w-44 p-2" align="end">
                   {allTags.length > 0 && (

@@ -57,12 +57,12 @@ public class AuthService {
                 .orElseThrow(() -> new IllegalArgumentException("유효하지 않은 리프레시 토큰입니다."));
 
         if (refreshToken.isExpired()) {
-            refreshTokenRepository.delete(refreshToken);
+            refreshTokenRepository.deleteByTokenValue(refreshTokenValue);
             throw new IllegalArgumentException("리프레시 토큰이 만료되었습니다. 다시 로그인해주세요.");
         }
 
         AppUser user = refreshToken.getUser();
-        refreshTokenRepository.delete(refreshToken);
+        refreshTokenRepository.deleteByTokenValue(refreshTokenValue);
 
         return createTokenResponse(user);
     }

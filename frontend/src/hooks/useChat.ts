@@ -1,5 +1,6 @@
-import { useReducer, useCallback, useRef } from 'react';
+import { useReducer, useCallback, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
+import { Client } from '@stomp/stompjs';
 import type { Message, Source, AgentStep } from '../types';
 import { fetchConversationDetail } from '../api/client';
 
@@ -66,82 +67,164 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 export function useChat() {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
   const sessionIdRef = useRef(generateSessionId());
+  const clientRef = useRef<Client | null>(null);
+  const connectedRef = useRef(false);
+
+  // WebSocket 연결
+  useEffect(() => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) return;
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = window.location.host;
+
+    const client = new Client({
+      brokerURL: `${wsProtocol}//${wsHost}/ws/chat`,
+      connectHeaders: { Authorization: `Bearer ${token}` },
+      reconnectDelay: 5000,
+      heartbeatIncoming: 10000,
+      heartbeatOutgoing: 10000,
+    });
+
+    client.onConnect = () => {
+      connectedRef.current = true;
+
+      // 메시지 수신 구독
+      client.subscribe('/user/queue/chat', (frame) => {
+        try {
+          const msg = JSON.parse(frame.body);
+          switch (msg.type) {
+            case 'agent_step':
+              dispatch({ type: 'ADD_AGENT_STEP', step: { step: msg.step, message: msg.message } });
+              break;
+            case 'token':
+              dispatch({ type: 'APPEND_TOKEN', content: msg.content });
+              break;
+            case 'sources':
+              if (Array.isArray(msg.sources) && msg.sources.length > 0) {
+                dispatch({ type: 'SET_SOURCES', sources: msg.sources });
+              }
+              break;
+            case 'done':
+            case 'stopped':
+              dispatch({ type: 'STREAM_END' });
+              break;
+            case 'error':
+              dispatch({ type: 'SET_ERROR', message: msg.message });
+              toast.error('채팅 오류', { description: msg.message });
+              dispatch({ type: 'STREAM_END' });
+              break;
+          }
+        } catch { /* skip malformed */ }
+      });
+    };
+
+    client.onDisconnect = () => {
+      connectedRef.current = false;
+    };
+
+    client.onStompError = (frame) => {
+      console.error('STOMP error:', frame.headers['message']);
+    };
+
+    client.activate();
+    clientRef.current = client;
+
+    return () => {
+      client.deactivate();
+    };
+  }, []);
 
   const sendMessage = useCallback(async (content: string, modelId?: string | null,
       includePublicDocs?: boolean, tagIds?: string[], collectionIds?: string[]) => {
     dispatch({ type: 'SEND_MESSAGE', content });
     dispatch({ type: 'STREAM_START' });
 
-    try {
-      const payload: Record<string, unknown> = {
-        sessionId: sessionIdRef.current,
-        message: content,
-        includePublicDocs: includePublicDocs ?? true,
-      };
-      if (modelId) payload.modelId = modelId;
-      if (tagIds && tagIds.length > 0) payload.tagIds = tagIds;
-      if (collectionIds && collectionIds.length > 0) payload.collectionIds = collectionIds;
+    const payload: Record<string, unknown> = {
+      sessionId: sessionIdRef.current,
+      message: content,
+      includePublicDocs: includePublicDocs ?? true,
+    };
+    if (modelId) payload.modelId = modelId;
+    if (tagIds && tagIds.length > 0) payload.tagIds = tagIds;
+    if (collectionIds && collectionIds.length > 0) payload.collectionIds = collectionIds;
 
-      const token = localStorage.getItem('accessToken');
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-        },
+    if (clientRef.current?.connected) {
+      // WebSocket으로 전송
+      clientRef.current.publish({
+        destination: '/app/chat/send',
         body: JSON.stringify(payload),
       });
+    } else {
+      // SSE 폴백
+      try {
+        const token = localStorage.getItem('accessToken');
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
 
-      if (!res.ok || !res.body) throw new Error('Chat request failed');
+        if (!res.ok || !res.body) throw new Error('Chat request failed');
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let currentEvent = '';
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            const data = line.slice(5).trim();
-            if (!data) continue;
-
-            try {
-              const parsed = JSON.parse(data);
-              if (currentEvent === 'agent_step') {
-                dispatch({ type: 'ADD_AGENT_STEP', step: { step: parsed.step, message: parsed.message } });
-              } else if (currentEvent === 'token' && parsed.content) {
-                dispatch({ type: 'APPEND_TOKEN', content: parsed.content });
-              } else if (currentEvent === 'sources') {
-                const sources: Source[] = Array.isArray(parsed) ? parsed : [];
-                if (sources.length > 0) {
-                  dispatch({ type: 'SET_SOURCES', sources });
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              const data = line.slice(5).trim();
+              if (!data) continue;
+              try {
+                const parsed = JSON.parse(data);
+                if (currentEvent === 'agent_step') {
+                  dispatch({ type: 'ADD_AGENT_STEP', step: { step: parsed.step, message: parsed.message } });
+                } else if (currentEvent === 'token' && parsed.content) {
+                  dispatch({ type: 'APPEND_TOKEN', content: parsed.content });
+                } else if (currentEvent === 'sources') {
+                  const sources: Source[] = Array.isArray(parsed) ? parsed : [];
+                  if (sources.length > 0) dispatch({ type: 'SET_SOURCES', sources });
+                } else if (currentEvent === 'error') {
+                  dispatch({ type: 'SET_ERROR', message: parsed.message });
+                  toast.error('채팅 오류', { description: parsed.message });
                 }
-              } else if (currentEvent === 'error') {
-                const errorMsg = parsed.message || '알 수 없는 오류가 발생했습니다.';
-                dispatch({ type: 'SET_ERROR', message: errorMsg });
-                toast.error('채팅 오류', { description: errorMsg });
-              }
-            } catch { /* skip malformed JSON */ }
+              } catch { /* skip */ }
+            }
           }
         }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : '오류가 발생했습니다.';
+        dispatch({ type: 'SET_ERROR', message: errorMsg });
+        toast.error('채팅 오류', { description: errorMsg });
+      } finally {
+        dispatch({ type: 'STREAM_END' });
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : '오류가 발생했습니다. 다시 시도해주세요.';
-      dispatch({ type: 'SET_ERROR', message: errorMsg });
-      toast.error('채팅 오류', { description: errorMsg });
-    } finally {
-      dispatch({ type: 'STREAM_END' });
     }
+  }, []);
+
+  const stopGeneration = useCallback(() => {
+    if (clientRef.current?.connected) {
+      clientRef.current.publish({
+        destination: '/app/chat/stop',
+        body: JSON.stringify({ sessionId: sessionIdRef.current }),
+      });
+    }
+    dispatch({ type: 'STREAM_END' });
   }, []);
 
   const newSession = useCallback(() => {
@@ -171,6 +254,7 @@ export function useChat() {
     streaming: state.streaming,
     sessionId: sessionIdRef.current,
     sendMessage,
+    stopGeneration,
     newSession,
     loadConversation,
   };

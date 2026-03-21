@@ -38,6 +38,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // SSE 비동기 디스패치는 인증 체크 스킵
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
+                        .requestMatchers("/ws/**").permitAll()
                         .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/refresh").permitAll()
                         // 모델 읽기/테스트는 인증된 사용자 모두 허용
                         .requestMatchers(HttpMethod.GET, "/api/models", "/api/models/*").authenticated()

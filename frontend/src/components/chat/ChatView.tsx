@@ -18,6 +18,7 @@ interface ChatState {
   sessionId: string;
   sendMessage: (content: string, modelId?: string | null, includePublicDocs?: boolean,
                 tagIds?: string[], collectionIds?: string[]) => Promise<void>;
+  stopGeneration: () => void;
 }
 
 interface Props {
@@ -28,12 +29,35 @@ interface Props {
 }
 
 export function ChatView({ models, chat, onNewSession, onSendComplete }: Props) {
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  const [includePublicDocs, setIncludePublicDocs] = useState(true);
-  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
-  const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(new Set());
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(
+    () => localStorage.getItem('chat:modelId')
+  );
+  const [includePublicDocs, setIncludePublicDocs] = useState(
+    () => localStorage.getItem('chat:includePublicDocs') !== 'false'
+  );
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(
+    () => new Set(JSON.parse(localStorage.getItem('chat:tagIds') || '[]'))
+  );
+  const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(
+    () => new Set(JSON.parse(localStorage.getItem('chat:collectionIds') || '[]'))
+  );
   const [tags, setTags] = useState<DocumentTag[]>([]);
   const [collections, setCollections] = useState<DocumentCollection[]>([]);
+
+  // localStorage 동기화
+  useEffect(() => {
+    if (selectedModelId) localStorage.setItem('chat:modelId', selectedModelId);
+    else localStorage.removeItem('chat:modelId');
+  }, [selectedModelId]);
+  useEffect(() => {
+    localStorage.setItem('chat:includePublicDocs', String(includePublicDocs));
+  }, [includePublicDocs]);
+  useEffect(() => {
+    localStorage.setItem('chat:tagIds', JSON.stringify([...selectedTagIds]));
+  }, [selectedTagIds]);
+  useEffect(() => {
+    localStorage.setItem('chat:collectionIds', JSON.stringify([...selectedCollectionIds]));
+  }, [selectedCollectionIds]);
 
   useEffect(() => {
     fetchTags().then(setTags).catch(() => {});
@@ -85,20 +109,21 @@ export function ChatView({ models, chat, onNewSession, onSendComplete }: Props) 
           <div className="flex items-center gap-3">
             {hasFilters && (
               <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" disabled={chat.streaming} className="gap-1.5 text-xs">
-                    <Filter className="h-3 w-3" />
-                    {activeFilterCount > 0 ? (
-                      <span className="truncate max-w-32">{selectedLabels.join(', ')}</span>
-                    ) : (
-                      '검색 범위'
-                    )}
-                    {activeFilterCount > 0 && (
-                      <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 ml-0.5">
-                        {activeFilterCount}
-                      </Badge>
-                    )}
-                  </Button>
+                <PopoverTrigger
+                  disabled={chat.streaming}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 h-8 text-xs shadow-xs hover:bg-accent hover:text-accent-foreground disabled:opacity-50 cursor-pointer"
+                >
+                  <Filter className="h-3 w-3" />
+                  {activeFilterCount > 0 ? (
+                    <span className="truncate max-w-32">{selectedLabels.join(', ')}</span>
+                  ) : (
+                    '검색 범위'
+                  )}
+                  {activeFilterCount > 0 && (
+                    <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 ml-0.5">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
                 </PopoverTrigger>
                 <PopoverContent className="w-52 p-3" align="end">
                   <div className="space-y-3">
@@ -167,7 +192,12 @@ export function ChatView({ models, chat, onNewSession, onSendComplete }: Props) 
         <MessageList messages={chat.messages} streaming={chat.streaming} />
       </div>
       <div className="shrink-0">
-        <ChatInput onSend={handleSend} disabled={chat.streaming} />
+        <ChatInput
+          onSend={handleSend}
+          onStop={chat.stopGeneration}
+          disabled={chat.streaming}
+          streaming={chat.streaming}
+        />
       </div>
     </div>
   );

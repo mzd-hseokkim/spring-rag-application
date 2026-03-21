@@ -1,14 +1,16 @@
 import { useRef, useState } from 'react';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { ArrowUpIcon } from 'lucide-react';
+import { ArrowUpIcon, Square } from 'lucide-react';
 
 interface Props {
   onSend: (message: string) => void;
+  onStop?: () => void;
   disabled: boolean;
+  streaming?: boolean;
 }
 
-export function ChatInput({ onSend, disabled }: Props) {
+export function ChatInput({ onSend, onStop, disabled, streaming }: Props) {
   const [input, setInput] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -37,9 +39,15 @@ export function ChatInput({ onSend, disabled }: Props) {
         className="min-h-10 max-h-32 resize-none"
         rows={1}
       />
-      <Button type="submit" size="icon" disabled={disabled || !input.trim()}>
-        <ArrowUpIcon className="size-4" />
-      </Button>
+      {streaming ? (
+        <Button type="button" variant="destructive" size="icon" onClick={onStop}>
+          <Square className="size-4" />
+        </Button>
+      ) : (
+        <Button type="submit" size="icon" disabled={disabled || !input.trim()}>
+          <ArrowUpIcon className="size-4" />
+        </Button>
+      )}
     </form>
   );
 }
