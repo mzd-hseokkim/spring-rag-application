@@ -13,6 +13,7 @@ import { AdminDocumentsPage } from '@/pages/admin/AdminDocumentsPage';
 import { AdminConversationsPage } from '@/pages/admin/AdminConversationsPage';
 import { AdminModelsPage } from '@/pages/admin/AdminModelsPage';
 import { AdminDashboardPage } from '@/pages/admin/AdminDashboardPage';
+import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
             }>
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<AdminDashboardPage />} />
+              <Route path="eval" element={<AdminEvalPage />} />
               <Route path="users" element={<AdminUsersPage />} />
               <Route path="documents" element={<AdminDocumentsPage />} />
               <Route path="conversations" element={<AdminConversationsPage />} />

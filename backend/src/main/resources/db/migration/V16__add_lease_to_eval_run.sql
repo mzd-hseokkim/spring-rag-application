@@ -1,0 +1,2 @@
+ALTER TABLE eval_run ADD COLUMN leased_until TIMESTAMP;
+ALTER TABLE eval_run ADD COLUMN leased_by VARCHAR(100);
