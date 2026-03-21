@@ -1,10 +1,11 @@
 import { NavLink, Link } from 'react-router-dom';
-import { ArrowLeft, Users, FileText, MessageSquare, Settings2 } from 'lucide-react';
+import { ArrowLeft, Users, FileText, MessageSquare, Settings2, BarChart3 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { LogOut } from 'lucide-react';
 
 const navItems = [
+  { to: '/admin/dashboard', label: '대시보드', icon: BarChart3 },
   { to: '/admin/users', label: '사용자 관리', icon: Users },
   { to: '/admin/documents', label: '문서 관리', icon: FileText },
   { to: '/admin/conversations', label: '대화 관리', icon: MessageSquare },

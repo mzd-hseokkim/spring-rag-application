@@ -42,6 +42,7 @@ public class ChatService {
     private final MultiStepReasoner multiStepReasoner;
     private final PipelineTracer pipelineTracer;
     private final EvaluationService evaluationService;
+    private final com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository;
 
     public ChatService(ModelClientProvider modelProvider,
                        SearchService searchService,
@@ -52,6 +53,7 @@ public class ChatService {
                        MultiStepReasoner multiStepReasoner,
                        PipelineTracer pipelineTracer,
                        EvaluationService evaluationService,
+                       com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository,
                        PromptLoader promptLoader) {
         this.modelProvider = modelProvider;
         this.searchService = searchService;
@@ -62,8 +64,16 @@ public class ChatService {
         this.multiStepReasoner = multiStepReasoner;
         this.pipelineTracer = pipelineTracer;
         this.evaluationService = evaluationService;
+        this.tokenUsageRepository = tokenUsageRepository;
         this.ragSystemPrompt = promptLoader.load("rag-system.txt");
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
+    }
+
+    private String resolveModelName(String modelId) {
+        if (modelId != null && !modelId.isBlank()) {
+            return modelProvider.getModelName(java.util.UUID.fromString(modelId));
+        }
+        return modelProvider.getDefaultModelName(ModelPurpose.CHAT);
     }
 
     private ChatClient chatClient(String modelId) {
@@ -105,12 +115,12 @@ public class ChatService {
         ChatResponse result = switch (decision.action()) {
             case DIRECT_ANSWER -> {
                 callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
-                pipelineTracer.logTrace(trace);
+                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
                 yield chatGeneral(sessionId, message, modelId);
             }
             case CLARIFY -> {
                 callback.accept(new AgentStepEvent("clarify", "질문 명확화 요청 중..."));
-                pipelineTracer.logTrace(trace);
+                pipelineTracer.logTrace(trace, userId, "CLARIFY");
                 yield chatClarify(sessionId, message, modelId);
             }
             case SEARCH -> {
@@ -121,17 +131,18 @@ public class ChatService {
 
                 if (subQueries != null && subQueries.size() > 1) {
                     yield chatMultiStep(sessionId, message, searchQuery, subQueries,
-                            decision.targetDocumentIds(), modelId, trace, callback);
+                            decision.targetDocumentIds(), modelId, userId, trace, callback);
                 } else {
                     callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
                     yield chatWithRag(sessionId, message, searchQuery,
-                            decision.targetDocumentIds(), modelId, trace, callback);
+                            decision.targetDocumentIds(), modelId, userId, trace, callback);
                 }
             }
         };
 
-        // 응답 완료 시 대화 메타데이터 갱신 (제목 생성 + updatedAt)
+        // 응답 완료 시 대화 메타데이터 갱신 + 토큰 사용량 저장
         StringBuilder titleCapture = new StringBuilder();
+        String chatModelName = resolveModelName(modelId);
         Flux<String> wrappedTokens = result.tokens()
                 .doOnNext(titleCapture::append)
                 .doOnComplete(() -> {
@@ -139,13 +150,22 @@ public class ChatService {
                     if (isFirstMessage) {
                         conversationManagementService.generateTitle(sessionId, message, titleCapture.toString());
                     }
+                    // 토큰 사용량 추정 저장 (문자열 길이 / 4)
+                    try {
+                        int inputTokens = message.length() / 4;
+                        int outputTokens = titleCapture.length() / 4;
+                        tokenUsageRepository.save(new com.example.rag.dashboard.TokenUsageEntity(
+                                userId, chatModelName, "CHAT", inputTokens, outputTokens, sessionId));
+                    } catch (Exception e) {
+                        // 토큰 저장 실패는 무시
+                    }
                 });
 
         return new ChatResponse(wrappedTokens, result.sources(), result.sourceRefs());
     }
 
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
-                                      List<UUID> documentIds, String modelId,
+                                      List<UUID> documentIds, String modelId, UUID userId,
                                       TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep("search");
         List<ChunkSearchResult> searchResults = searchService.search(searchQuery, documentIds);
@@ -184,7 +204,7 @@ public class ChatService {
                 .doOnNext(fullResponse::append)
                 .doOnComplete(() -> {
                     trace.endStep(Map.of("responseLength", fullResponse.length()));
-                    pipelineTracer.logTrace(trace);
+                    pipelineTracer.logTrace(trace, userId, "SEARCH");
                     conversationService.addMessage(sessionId,
                             ConversationMessage.assistant(fullResponse.toString(), sourceRefs));
                     evaluationService.evaluateIfSampled(message, context, fullResponse.toString());
@@ -195,7 +215,7 @@ public class ChatService {
 
     private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
                                         List<String> subQueries, List<UUID> documentIds,
-                                        String modelId, TraceContext trace,
+                                        String modelId, UUID userId, TraceContext trace,
                                         Consumer<AgentStepEvent> callback) {
         trace.startStep("multi_step");
         var result = multiStepReasoner.reason(searchQuery, subQueries, documentIds, callback);
@@ -212,7 +232,7 @@ public class ChatService {
         Flux<String> tokenStream = result.tokens()
                 .doOnNext(fullResponse::append)
                 .doOnComplete(() -> {
-                    pipelineTracer.logTrace(trace);
+                    pipelineTracer.logTrace(trace, userId, "SEARCH");
                     conversationService.addMessage(sessionId,
                             ConversationMessage.assistant(fullResponse.toString(), sourceRefs));
                 });

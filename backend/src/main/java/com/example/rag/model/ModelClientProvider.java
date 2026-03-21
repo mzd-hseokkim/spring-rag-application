@@ -32,6 +32,14 @@ public class ModelClientProvider {
         return clientFactory.getEmbeddingModel(model);
     }
 
+    public String getModelName(UUID modelId) {
+        return modelService.findById(modelId).getDisplayName();
+    }
+
+    public String getDefaultModelName(ModelPurpose purpose) {
+        return modelService.getDefaultModel(purpose).getDisplayName();
+    }
+
     public void evictCache(UUID modelId) {
         clientFactory.evict(modelId);
     }
