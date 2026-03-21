@@ -1,4 +1,13 @@
-import type { LlmModel } from '../../types';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+} from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import type { LlmModel } from '@/types';
 
 interface Props {
   models: LlmModel[];
@@ -18,27 +27,37 @@ export function ModelSelector({ models, selectedModelId, onSelect, disabled }: P
   }, {});
 
   const defaultModel = chatModels.find(m => m.isDefault);
+  const selectedModel = chatModels.find(m => m.id === selectedModelId);
   const currentValue = selectedModelId || '';
 
+  const displayText = selectedModel
+    ? selectedModel.displayName
+    : defaultModel
+      ? `${defaultModel.displayName} (기본)`
+      : '모델 선택';
+
   return (
-    <select
-      className="model-selector"
+    <Select
       value={currentValue}
-      onChange={e => onSelect(e.target.value || null)}
+      onValueChange={(v) => onSelect(v || null)}
       disabled={disabled}
     >
-      <option value="">
-        {defaultModel ? `${defaultModel.displayName} (기본)` : '모델 선택'}
-      </option>
-      {Object.entries(grouped).map(([provider, providerModels]) => (
-        <optgroup key={provider} label={provider}>
-          {providerModels.map(m => (
-            <option key={m.id} value={m.id}>
-              {m.displayName}{m.isDefault ? ' (기본)' : ''}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+      <SelectTrigger size="sm">
+        <span className="truncate">{displayText}</span>
+      </SelectTrigger>
+      <SelectContent>
+        {Object.entries(grouped).map(([provider, providerModels]) => (
+          <SelectGroup key={provider}>
+            <SelectLabel>{provider}</SelectLabel>
+            {providerModels.map(m => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.displayName}
+                {m.isDefault && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">기본</Badge>}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -4,6 +4,7 @@ import com.example.rag.model.ModelClientProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,9 +19,16 @@ public class VectorSearchService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public List<ChunkSearchResult> search(String query, int limit) {
+    public List<ChunkSearchResult> search(String query, int limit, List<UUID> documentIds) {
         float[] queryEmbedding = modelProvider.getEmbeddingModel().embed(query);
         String vectorStr = toVectorString(queryEmbedding);
+
+        String docFilter = buildDocumentFilter(documentIds);
+        List<Object> params = new ArrayList<>();
+        params.add(vectorStr);
+        params.addAll(documentIds);
+        params.add(vectorStr);
+        params.add(limit);
 
         return jdbcTemplate.query("""
                 SELECT c.id, c.document_id, c.content, c.chunk_index,
@@ -32,6 +40,7 @@ public class VectorSearchService {
                 LEFT JOIN document_chunk p ON p.id = c.parent_chunk_id
                 WHERE d.status = 'COMPLETED'
                   AND c.embedding IS NOT NULL
+                """ + docFilter + """
                 ORDER BY c.embedding <=> cast(? AS vector)
                 LIMIT ?
                 """,
@@ -44,7 +53,13 @@ public class VectorSearchService {
                         rs.getInt("chunk_index"),
                         rs.getDouble("similarity")
                 ),
-                vectorStr, vectorStr, limit);
+                params.toArray());
+    }
+
+    private String buildDocumentFilter(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) return "";
+        String placeholders = String.join(",", documentIds.stream().map(id -> "?").toList());
+        return "  AND d.id IN (" + placeholders + ")\n";
     }
 
     private String toVectorString(float[] embedding) {

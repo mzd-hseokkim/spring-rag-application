@@ -3,6 +3,7 @@ package com.example.rag.search;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -15,7 +16,13 @@ public class KeywordSearchService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public List<ChunkSearchResult> search(String query, int limit) {
+    public List<ChunkSearchResult> search(String query, int limit, List<UUID> documentIds) {
+        String docFilter = buildDocumentFilter(documentIds);
+        List<Object> params = new ArrayList<>();
+        params.add(query);
+        params.addAll(documentIds);
+        params.add(limit);
+
         return jdbcTemplate.query("""
                 SELECT c.id, c.document_id, c.content, c.chunk_index,
                        d.filename,
@@ -27,6 +34,7 @@ public class KeywordSearchService {
                      plainto_tsquery('simple', ?) q
                 WHERE d.status = 'COMPLETED'
                   AND c.content_tsv @@ q
+                """ + docFilter + """
                 ORDER BY rank DESC
                 LIMIT ?
                 """,
@@ -39,6 +47,12 @@ public class KeywordSearchService {
                         rs.getInt("chunk_index"),
                         rs.getDouble("rank")
                 ),
-                query, limit);
+                params.toArray());
+    }
+
+    private String buildDocumentFilter(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) return "";
+        String placeholders = String.join(",", documentIds.stream().map(id -> "?").toList());
+        return "  AND d.id IN (" + placeholders + ")\n";
     }
 }

@@ -1,6 +1,6 @@
 package com.example.rag.chat;
 
-import com.example.rag.agent.AgentAction;
+import com.example.rag.agent.AgentDecision;
 import com.example.rag.agent.AgentStepEvent;
 import com.example.rag.agent.MultiStepReasoner;
 import com.example.rag.agent.SearchAgent;
@@ -22,6 +22,7 @@ import reactor.core.publisher.Flux;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -87,10 +88,11 @@ public class ChatService {
         // Agent 판단
         trace.startStep("decide");
         callback.accept(new AgentStepEvent("decide", "행동 결정 중..."));
-        AgentAction action = searchAgent.decide(searchQuery);
-        trace.endStep(Map.of("action", action.name()));
+        AgentDecision decision = searchAgent.decide(searchQuery);
+        trace.endStep(Map.of("action", decision.action().name(),
+                "targetDocs", decision.targetDocumentIds().size()));
 
-        return switch (action) {
+        return switch (decision.action()) {
             case DIRECT_ANSWER -> {
                 callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
                 pipelineTracer.logTrace(trace);
@@ -108,19 +110,22 @@ public class ChatService {
                 trace.endStep(Map.of("isMultiStep", subQueries != null));
 
                 if (subQueries != null && subQueries.size() > 1) {
-                    yield chatMultiStep(sessionId, message, searchQuery, subQueries, modelId, trace, callback);
+                    yield chatMultiStep(sessionId, message, searchQuery, subQueries,
+                            decision.targetDocumentIds(), modelId, trace, callback);
                 } else {
                     callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
-                    yield chatWithRag(sessionId, message, searchQuery, modelId, trace, callback);
+                    yield chatWithRag(sessionId, message, searchQuery,
+                            decision.targetDocumentIds(), modelId, trace, callback);
                 }
             }
         };
     }
 
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
-                                      String modelId, TraceContext trace, Consumer<AgentStepEvent> callback) {
+                                      List<UUID> documentIds, String modelId,
+                                      TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep("search");
-        List<ChunkSearchResult> searchResults = searchService.search(searchQuery);
+        List<ChunkSearchResult> searchResults = searchService.search(searchQuery, documentIds);
         trace.endStep(Map.of("resultCount", searchResults.size()));
 
         callback.accept(new AgentStepEvent("generate", "답변 생성 중..."));
@@ -165,10 +170,11 @@ public class ChatService {
     }
 
     private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
-                                        List<String> subQueries, String modelId,
-                                        TraceContext trace, Consumer<AgentStepEvent> callback) {
+                                        List<String> subQueries, List<UUID> documentIds,
+                                        String modelId, TraceContext trace,
+                                        Consumer<AgentStepEvent> callback) {
         trace.startStep("multi_step");
-        var result = multiStepReasoner.reason(searchQuery, subQueries, callback);
+        var result = multiStepReasoner.reason(searchQuery, subQueries, documentIds, callback);
         trace.endStep(Map.of("subQueryCount", subQueries.size()));
 
         StringBuilder fullResponse = new StringBuilder();

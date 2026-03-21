@@ -52,6 +52,7 @@ public class MultiStepReasoner {
     }
 
     public ReasonResult reason(String originalQuery, List<String> subQueries,
+                               List<UUID> documentIds,
                                Consumer<AgentStepEvent> stepCallback) {
         StringBuilder subAnswers = new StringBuilder();
         Map<UUID, ChunkSearchResult> allResults = new LinkedHashMap<>();
@@ -61,7 +62,7 @@ public class MultiStepReasoner {
             stepCallback.accept(new AgentStepEvent("sub_search",
                     "하위 질문 %d/%d 검색 중: \"%s\"".formatted(i + 1, subQueries.size(), subQuery)));
 
-            List<ChunkSearchResult> results = searchService.search(subQuery);
+            List<ChunkSearchResult> results = searchService.search(subQuery, documentIds);
             results.forEach(r -> allResults.putIfAbsent(r.chunkId(), r));
 
             String context = results.stream()
@@ -86,9 +87,14 @@ public class MultiStepReasoner {
 
         stepCallback.accept(new AgentStepEvent("synthesize", "답변 종합 중..."));
 
-        // 최종 종합은 스트리밍으로 반환
+        // 전체 검색 결과를 컨텍스트로 구성
+        String fullContext = allResults.values().stream()
+                .map(ChunkSearchResult::contextContent)
+                .collect(Collectors.joining("\n\n"));
+
+        // 최종 종합: 원본 문서 컨텍스트 + 하위 답변 모두 전달
         Flux<String> tokenStream = chatClient().prompt()
-                .user(synthesizePrompt.formatted(originalQuery, subAnswers.toString()))
+                .user(synthesizePrompt.formatted(originalQuery, fullContext, subAnswers.toString()))
                 .stream()
                 .content();
 
