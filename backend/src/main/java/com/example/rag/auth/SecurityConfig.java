@@ -42,6 +42,8 @@ public class SecurityConfig {
                         // 모델 읽기/테스트는 인증된 사용자 모두 허용
                         .requestMatchers(HttpMethod.GET, "/api/models", "/api/models/*").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/models/*/test").authenticated()
+                        // 관리자 전용
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         // 모델 관리(생성/수정/삭제)는 ADMIN만
                         .requestMatchers("/api/models/**").hasRole("ADMIN")
                         // 나머지 API는 인증 필요

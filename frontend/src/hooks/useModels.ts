@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { toast } from 'sonner';
 import type { LlmModel, DiscoveredModel } from '../types';
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -13,8 +14,17 @@ export function useModels() {
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
-    const res = await fetch('/api/models', { headers: authHeaders() });
-    if (res.ok) setModels(await res.json());
+    try {
+      const res = await fetch('/api/models', { headers: authHeaders() });
+      if (res.ok) setModels(await res.json());
+      else {
+        console.error('Failed to load models:', res.status);
+        toast.error('모델 목록 조회 실패');
+      }
+    } catch (err) {
+      console.error('Failed to load models:', err);
+      toast.error('모델 목록 조회 실패');
+    }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);

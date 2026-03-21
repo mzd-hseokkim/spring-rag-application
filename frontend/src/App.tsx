@@ -3,9 +3,15 @@ import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AuthProvider } from '@/auth/AuthContext';
 import { ProtectedRoute } from '@/auth/ProtectedRoute';
+import { ProtectedAdminRoute } from '@/auth/ProtectedAdminRoute';
 import { LoginPage } from '@/pages/LoginPage';
 import { RegisterPage } from '@/pages/RegisterPage';
 import { MainPage } from '@/pages/MainPage';
+import { AdminLayout } from '@/pages/admin/AdminLayout';
+import { AdminUsersPage } from '@/pages/admin/AdminUsersPage';
+import { AdminDocumentsPage } from '@/pages/admin/AdminDocumentsPage';
+import { AdminConversationsPage } from '@/pages/admin/AdminConversationsPage';
+import { AdminModelsPage } from '@/pages/admin/AdminModelsPage';
 
 function App() {
   return (
@@ -20,6 +26,17 @@ function App() {
                 <MainPage />
               </ProtectedRoute>
             } />
+            <Route path="/admin" element={
+              <ProtectedAdminRoute>
+                <AdminLayout />
+              </ProtectedAdminRoute>
+            }>
+              <Route index element={<Navigate to="users" replace />} />
+              <Route path="users" element={<AdminUsersPage />} />
+              <Route path="documents" element={<AdminDocumentsPage />} />
+              <Route path="conversations" element={<AdminConversationsPage />} />
+              <Route path="models" element={<AdminModelsPage />} />
+            </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </TooltipProvider>

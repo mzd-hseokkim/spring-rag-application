@@ -158,6 +158,7 @@ export function useChat() {
       dispatch({ type: 'LOAD_MESSAGES', messages });
     } catch (err) {
       console.error('Failed to load conversation:', err);
+      toast.error('대화 이력 조회 실패');
       dispatch({ type: 'LOAD_MESSAGES', messages: [] });
     }
   }, []);

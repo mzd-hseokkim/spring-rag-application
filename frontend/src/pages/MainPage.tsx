@@ -1,8 +1,8 @@
+import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ChatView } from '@/components/chat/ChatView';
 import { DocumentUpload } from '@/components/document/DocumentUpload';
 import { DocumentList } from '@/components/document/DocumentList';
-import { ModelManagement } from '@/components/model/ModelManagement';
 import { ConversationList } from '@/components/conversation/ConversationList';
 import { useDocuments } from '@/hooks/useDocuments';
 import { useModels } from '@/hooks/useModels';
@@ -10,11 +10,12 @@ import { useChat } from '@/hooks/useChat';
 import { useConversations } from '@/hooks/useConversations';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
-import { LogOut } from 'lucide-react';
+import { LogOut, Settings2 } from 'lucide-react';
 import type { Conversation } from '@/types';
 
 export function MainPage() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const { documents, uploading, upload } = useDocuments();
   const modelState = useModels();
   const chat = useChat();
@@ -53,11 +54,6 @@ export function MainPage() {
             <TabsTrigger value="documents" className="flex-1 text-xs text-muted-foreground data-[state=active]:bg-secondary data-[state=active]:text-secondary-foreground">
               문서
             </TabsTrigger>
-            {isAdmin && (
-              <TabsTrigger value="models" className="flex-1 text-xs text-muted-foreground data-[state=active]:bg-secondary data-[state=active]:text-secondary-foreground">
-                모델
-              </TabsTrigger>
-            )}
           </TabsList>
           <TabsContent value="conversations" className="flex-1 overflow-y-auto p-3 mt-0">
             <ConversationList
@@ -72,19 +68,19 @@ export function MainPage() {
             <DocumentUpload onUpload={upload} uploading={uploading} isAdmin={isAdmin} />
             <DocumentList documents={documents} />
           </TabsContent>
-          {isAdmin && (
-            <TabsContent value="models" className="flex-1 overflow-y-auto p-3 mt-0">
-              <ModelManagement modelState={modelState} />
-            </TabsContent>
-          )}
         </Tabs>
 
-        <div className="border-t border-sidebar-border p-3 flex items-center gap-2">
+        <div className="border-t border-sidebar-border px-3 h-16 flex items-center gap-2">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{user?.name}</p>
             <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
           </div>
-          <Button variant="ghost" size="icon" onClick={logout} className="shrink-0">
+          {isAdmin && (
+            <Button variant="ghost" size="icon" onClick={() => navigate('/admin')} className="shrink-0" title="관리">
+              <Settings2 className="h-4 w-4" />
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" onClick={logout} className="shrink-0" title="로그아웃">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

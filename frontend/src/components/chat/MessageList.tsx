@@ -46,7 +46,9 @@ export function MessageList({ messages, streaming }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: '', messageIndex: index, rating }),
       });
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('Failed to submit feedback:', err);
+    }
   };
 
   const toggleSources = (index: number) => {

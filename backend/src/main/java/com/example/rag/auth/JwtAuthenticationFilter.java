@@ -18,9 +18,12 @@ import java.util.UUID;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final AppUserRepository appUserRepository;
 
-    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider) {
+    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider,
+                                    AppUserRepository appUserRepository) {
         this.jwtTokenProvider = jwtTokenProvider;
+        this.appUserRepository = appUserRepository;
     }
 
     @Override
@@ -32,7 +35,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = header.substring(7);
             if (jwtTokenProvider.validateToken(token)) {
                 UUID userId = jwtTokenProvider.getUserIdFromToken(token);
-                String role = jwtTokenProvider.getRoleFromToken(token);
+
+                // DB에서 현재 역할을 조회 (역할 변경 즉시 반영)
+                String role = appUserRepository.findById(userId)
+                        .map(u -> u.getRole().name())
+                        .orElse(jwtTokenProvider.getRoleFromToken(token));
 
                 var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
                 var authentication = new UsernamePasswordAuthenticationToken(

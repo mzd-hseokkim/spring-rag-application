@@ -27,7 +27,7 @@ export function ChatInput({ onSend, disabled }: Props) {
   };
 
   return (
-    <form ref={formRef} className="flex gap-2 p-3 border-t bg-background" onSubmit={handleSubmit}>
+    <form ref={formRef} className="flex items-center gap-2 px-3 h-16 border-t bg-background" onSubmit={handleSubmit}>
       <Textarea
         value={input}
         onChange={e => setInput(e.target.value)}
