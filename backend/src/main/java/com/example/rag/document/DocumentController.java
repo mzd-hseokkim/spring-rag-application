@@ -5,6 +5,7 @@ import com.example.rag.document.pipeline.IngestionPipeline;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -30,9 +31,15 @@ public class DocumentController {
     }
 
     @PostMapping
-    public ResponseEntity<DocumentResponse> upload(@RequestParam("file") MultipartFile file) {
-        // Service에서 트랜잭션 커밋 후 반환 → async 파이프라인이 document를 조회 가능
-        Document document = documentService.upload(file);
+    public ResponseEntity<DocumentResponse> upload(@RequestParam("file") MultipartFile file,
+                                                    @RequestParam(defaultValue = "false") boolean isPublic,
+                                                    Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        // ADMIN이 아니면 공용 등록 불가
+        boolean hasAdminRole = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        boolean effectivePublic = hasAdminRole && isPublic;
+        Document document = documentService.upload(file, userId, effectivePublic);
 
         try {
             byte[] fileBytes = file.getBytes();
@@ -46,8 +53,9 @@ public class DocumentController {
     }
 
     @GetMapping
-    public List<DocumentResponse> findAll() {
-        return documentService.findAll().stream()
+    public List<DocumentResponse> findAll(Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        return documentService.findAllForUser(userId).stream()
                 .map(DocumentResponse::from)
                 .toList();
     }

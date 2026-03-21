@@ -8,6 +8,7 @@ import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -39,9 +40,10 @@ public class ChatController {
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody ChatRequest request) {
+    public SseEmitter chat(@RequestBody ChatRequest request, Authentication auth) {
         inputValidator.validate(request.message());
-        rateLimiter.checkLimit(request.sessionId());
+        java.util.UUID userId = java.util.UUID.fromString(auth.getName());
+        rateLimiter.checkLimit(userId.toString());
 
         SseEmitter emitter = new SseEmitter(300_000L);
 
@@ -58,9 +60,10 @@ public class ChatController {
         // 비동기 실행: emitter가 먼저 클라이언트에 반환된 후 agent step 이벤트가 실시간으로 전송됨
         CompletableFuture.runAsync(() -> {
             try {
+                boolean includePublic = request.includePublicDocs() == null || request.includePublicDocs();
                 ChatService.ChatResponse response = chatService.chat(
                         request.sessionId(), request.message(), request.modelId(),
-                        step -> {
+                        userId, includePublic, step -> {
                             try {
                                 emitter.send(SseEmitter.event()
                                         .name("agent_step")
@@ -143,6 +146,6 @@ public class ChatController {
         return Map.of("message", e.getMessage());
     }
 
-    record ChatRequest(String sessionId, String message, String modelId) {}
+    record ChatRequest(String sessionId, String message, String modelId, Boolean includePublicDocs) {}
     record FeedbackRequest(String sessionId, int messageIndex, String rating) {}
 }

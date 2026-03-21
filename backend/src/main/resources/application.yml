@@ -63,6 +63,10 @@ app:
   guard:
     rate-limit-per-minute: 10
     max-input-length: 2000
+  jwt:
+    secret: ${JWT_SECRET:spring-rag-app-dev-secret-key-minimum-32-chars}
+    access-token-expiry: 1800000
+    refresh-token-expiry: 604800000
   model:
     ollama:
       default-base-url: http://localhost:11434

@@ -7,4 +7,18 @@ import java.util.UUID;
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     List<Document> findByStatus(DocumentStatus status);
+
+    List<Document> findByUserIdOrderByCreatedAtDesc(UUID userId);
+
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT d FROM Document d WHERE d.user.id = :userId OR d.isPublic = true ORDER BY d.createdAt DESC")
+    List<Document> findByUserIdOrIsPublicTrue(UUID userId);
+
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT d FROM Document d WHERE d.status = :status AND (d.user.id = :userId OR d.isPublic = true)")
+    List<Document> findSearchableDocuments(DocumentStatus status, UUID userId);
+
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT d FROM Document d WHERE d.status = :status AND d.user.id = :userId")
+    List<Document> findByStatusAndUserId(DocumentStatus status, UUID userId);
 }

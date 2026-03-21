@@ -11,6 +11,7 @@ public record DocumentResponse(
         DocumentStatus status,
         String errorMessage,
         int chunkCount,
+        boolean isPublic,
         LocalDateTime createdAt
 ) {
     public static DocumentResponse from(Document document) {
@@ -22,6 +23,7 @@ public record DocumentResponse(
                 document.getStatus(),
                 document.getErrorMessage(),
                 document.getChunkCount(),
+                document.isPublic(),
                 document.getCreatedAt()
         );
     }

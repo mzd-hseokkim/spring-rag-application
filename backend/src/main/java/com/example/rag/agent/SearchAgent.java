@@ -33,9 +33,11 @@ public class SearchAgent {
         return modelProvider.getChatClient(ModelPurpose.QUERY);
     }
 
-    public AgentDecision decide(String query) {
-        // 업로드된 문서 목록 조회
-        List<Document> documents = documentRepository.findByStatus(DocumentStatus.COMPLETED);
+    public AgentDecision decide(String query, UUID userId, boolean includePublicDocs) {
+        // 사용자의 문서 + (옵션) 공용 문서 조회
+        List<Document> documents = includePublicDocs
+                ? documentRepository.findSearchableDocuments(DocumentStatus.COMPLETED, userId)
+                : documentRepository.findByStatusAndUserId(DocumentStatus.COMPLETED, userId);
         String docList = documents.isEmpty() ? "(없음)" : documents.stream()
                 .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
                 .collect(Collectors.joining("\n"));

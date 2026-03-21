@@ -13,10 +13,10 @@ export function useDocuments() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const upload = async (file: File) => {
+  const upload = async (file: File, isPublic = false) => {
     setUploading(true);
     try {
-      await uploadDocument(file);
+      await uploadDocument(file, isPublic);
       // 폴링으로 상태 갱신
       const poll = setInterval(async () => {
         const docs = await fetchDocuments();

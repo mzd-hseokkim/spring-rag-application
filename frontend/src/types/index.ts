@@ -6,6 +6,7 @@ export interface Document {
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   errorMessage: string | null;
   chunkCount: number;
+  isPublic: boolean;
   createdAt: string;
 }
 
@@ -46,4 +47,31 @@ export interface DiscoveredModel {
   modelId: string;
   size: number;
   modifiedAt: string;
+}
+
+export interface Conversation {
+  id: string;
+  sessionId: string;
+  title: string | null;
+  modelName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationDetail {
+  conversation: Conversation;
+  messages: { role: 'user' | 'assistant'; content: string; timestamp: string; sources?: Source[] }[];
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: 'USER' | 'ADMIN';
+}
+
+export interface AuthResponse {
+  accessToken: string;
+  refreshToken: string;
+  user: User;
 }

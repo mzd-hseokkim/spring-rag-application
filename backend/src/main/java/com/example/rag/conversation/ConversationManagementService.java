@@ -1,0 +1,165 @@
+package com.example.rag.conversation;
+
+import com.example.rag.auth.AppUser;
+import com.example.rag.auth.AppUserRepository;
+import com.example.rag.model.LlmModel;
+import com.example.rag.model.LlmModelRepository;
+import com.example.rag.model.ModelClientProvider;
+import com.example.rag.model.ModelPurpose;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+@Service
+public class ConversationManagementService {
+
+    private static final Logger log = LoggerFactory.getLogger(ConversationManagementService.class);
+
+    private final ConversationRepository conversationRepository;
+    private final LlmModelRepository llmModelRepository;
+    private final AppUserRepository appUserRepository;
+    private final ModelClientProvider modelClientProvider;
+    private final ConversationService conversationService;
+
+    public ConversationManagementService(ConversationRepository conversationRepository,
+                                         LlmModelRepository llmModelRepository,
+                                         AppUserRepository appUserRepository,
+                                         ModelClientProvider modelClientProvider,
+                                         ConversationService conversationService) {
+        this.conversationRepository = conversationRepository;
+        this.llmModelRepository = llmModelRepository;
+        this.appUserRepository = appUserRepository;
+        this.modelClientProvider = modelClientProvider;
+        this.conversationService = conversationService;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ConversationDto> listAllForUser(UUID userId) {
+        return conversationRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+                .map(this::toDto)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ConversationDetailDto getDetail(UUID id) {
+        Conversation conv = conversationRepository.findByIdWithModel(id)
+                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+        List<ConversationMessage> messages = conversationService.getHistory(conv.getSessionId());
+        return new ConversationDetailDto(toDto(conv), messages);
+    }
+
+    @Transactional
+    public ConversationDto create(String sessionId, String modelId, UUID userId) {
+        Conversation conv = new Conversation(sessionId);
+        appUserRepository.findById(userId).ifPresent(conv::setUser);
+        if (modelId != null && !modelId.isBlank()) {
+            llmModelRepository.findById(UUID.fromString(modelId)).ifPresent(conv::setModel);
+        }
+        conversationRepository.save(conv);
+        return toDto(conv);
+    }
+
+    @Transactional
+    public Conversation getOrCreate(String sessionId, String modelId, UUID userId) {
+        Optional<Conversation> existing = conversationRepository.findBySessionId(sessionId);
+        if (existing.isPresent()) return existing.get();
+
+        Conversation conv = new Conversation(sessionId);
+        appUserRepository.findById(userId).ifPresent(conv::setUser);
+        if (modelId != null && !modelId.isBlank()) {
+            llmModelRepository.findById(UUID.fromString(modelId)).ifPresent(conv::setModel);
+        }
+        return conversationRepository.save(conv);
+    }
+
+    @Transactional
+    public ConversationDto updateTitle(UUID id, String title) {
+        Conversation conv = conversationRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+        conv.setTitle(title);
+        conversationRepository.save(conv);
+        return toDto(conv);
+    }
+
+    @Transactional
+    public void delete(UUID id) {
+        Conversation conv = conversationRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+        conversationService.deleteSession(conv.getSessionId());
+        conversationRepository.delete(conv);
+    }
+
+    @Async
+    @Transactional
+    public void generateTitle(String sessionId, String userMessage, String assistantResponse) {
+        try {
+            Conversation conv = conversationRepository.findBySessionId(sessionId).orElse(null);
+            if (conv == null || conv.getTitle() != null) return;
+
+            String prompt = """
+                    다음 대화의 제목을 한 줄로 짧게 생성해주세요. 제목만 출력하세요.
+
+                    사용자: %s
+                    AI: %s
+                    """.formatted(
+                    truncate(userMessage, 300),
+                    truncate(assistantResponse, 300));
+
+            String title = modelClientProvider.getChatClient(ModelPurpose.QUERY).prompt()
+                    .user(prompt)
+                    .call()
+                    .content();
+
+            if (title != null && !title.isBlank()) {
+                conv.setTitle(title.strip());
+                conversationRepository.save(conv);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to generate conversation title for session {}: {}", sessionId, e.getMessage());
+        }
+    }
+
+    @Transactional
+    public void touch(String sessionId) {
+        conversationRepository.findBySessionId(sessionId).ifPresent(conv -> {
+            conv.preUpdate();
+            conversationRepository.save(conv);
+        });
+    }
+
+    private ConversationDto toDto(Conversation conv) {
+        LlmModel model = conv.getModel();
+        return new ConversationDto(
+                conv.getId(),
+                conv.getSessionId(),
+                conv.getTitle(),
+                model != null ? model.getDisplayName() : null,
+                conv.getCreatedAt(),
+                conv.getUpdatedAt()
+        );
+    }
+
+    private String truncate(String text, int maxLen) {
+        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
+    }
+
+    public record ConversationDto(
+            UUID id,
+            String sessionId,
+            String title,
+            String modelName,
+            java.time.LocalDateTime createdAt,
+            java.time.LocalDateTime updatedAt
+    ) {}
+
+    public record ConversationDetailDto(
+            ConversationDto conversation,
+            List<ConversationMessage> messages
+    ) {}
+}

@@ -5,6 +5,7 @@ import com.example.rag.agent.AgentStepEvent;
 import com.example.rag.agent.MultiStepReasoner;
 import com.example.rag.agent.SearchAgent;
 import com.example.rag.common.PromptLoader;
+import com.example.rag.conversation.ConversationManagementService;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
 import com.example.rag.evaluation.EvaluationService;
@@ -35,6 +36,7 @@ public class ChatService {
     private final ModelClientProvider modelProvider;
     private final SearchService searchService;
     private final ConversationService conversationService;
+    private final ConversationManagementService conversationManagementService;
     private final QueryCompressor queryCompressor;
     private final SearchAgent searchAgent;
     private final MultiStepReasoner multiStepReasoner;
@@ -44,6 +46,7 @@ public class ChatService {
     public ChatService(ModelClientProvider modelProvider,
                        SearchService searchService,
                        ConversationService conversationService,
+                       ConversationManagementService conversationManagementService,
                        QueryCompressor queryCompressor,
                        SearchAgent searchAgent,
                        MultiStepReasoner multiStepReasoner,
@@ -53,6 +56,7 @@ public class ChatService {
         this.modelProvider = modelProvider;
         this.searchService = searchService;
         this.conversationService = conversationService;
+        this.conversationManagementService = conversationManagementService;
         this.queryCompressor = queryCompressor;
         this.searchAgent = searchAgent;
         this.multiStepReasoner = multiStepReasoner;
@@ -69,13 +73,17 @@ public class ChatService {
         return modelProvider.getChatClient(ModelPurpose.CHAT);
     }
 
-    public ChatResponse chat(String sessionId, String message, String modelId, Consumer<AgentStepEvent> stepCallback) {
+    public ChatResponse chat(String sessionId, String message, String modelId, UUID userId, boolean includePublicDocs, Consumer<AgentStepEvent> stepCallback) {
         TraceContext trace = new TraceContext(sessionId, message);
         List<AgentStepEvent> agentSteps = new ArrayList<>();
         Consumer<AgentStepEvent> callback = event -> {
             agentSteps.add(event);
             stepCallback.accept(event);
         };
+
+        // 대화 레코드 자동 생성 (첫 메시지 시)
+        boolean isFirstMessage = conversationService.getHistory(sessionId).isEmpty();
+        conversationManagementService.getOrCreate(sessionId, modelId, userId);
 
         conversationService.addMessage(sessionId, ConversationMessage.user(message));
 
@@ -88,11 +96,11 @@ public class ChatService {
         // Agent 판단
         trace.startStep("decide");
         callback.accept(new AgentStepEvent("decide", "행동 결정 중..."));
-        AgentDecision decision = searchAgent.decide(searchQuery);
+        AgentDecision decision = searchAgent.decide(searchQuery, userId, includePublicDocs);
         trace.endStep(Map.of("action", decision.action().name(),
                 "targetDocs", decision.targetDocumentIds().size()));
 
-        return switch (decision.action()) {
+        ChatResponse result = switch (decision.action()) {
             case DIRECT_ANSWER -> {
                 callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
                 pipelineTracer.logTrace(trace);
@@ -119,6 +127,19 @@ public class ChatService {
                 }
             }
         };
+
+        // 응답 완료 시 대화 메타데이터 갱신 (제목 생성 + updatedAt)
+        StringBuilder titleCapture = new StringBuilder();
+        Flux<String> wrappedTokens = result.tokens()
+                .doOnNext(titleCapture::append)
+                .doOnComplete(() -> {
+                    conversationManagementService.touch(sessionId);
+                    if (isFirstMessage) {
+                        conversationManagementService.generateTitle(sessionId, message, titleCapture.toString());
+                    }
+                });
+
+        return new ChatResponse(wrappedTokens, result.sources(), result.sourceRefs());
     }
 
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
@@ -144,6 +165,12 @@ public class ChatService {
                 질문: %s
                 """.formatted(history, context, message);
 
+        List<SourceInfo> sources = searchResults.stream()
+                .map(r -> new SourceInfo(r.documentId().toString(), r.filename(),
+                        r.chunkIndex(), truncate(r.content(), 100)))
+                .toList();
+        List<ConversationMessage.SourceRef> sourceRefs = toSourceRefs(sources);
+
         StringBuilder fullResponse = new StringBuilder();
 
         trace.startStep("generate");
@@ -157,16 +184,11 @@ public class ChatService {
                     trace.endStep(Map.of("responseLength", fullResponse.length()));
                     pipelineTracer.logTrace(trace);
                     conversationService.addMessage(sessionId,
-                            ConversationMessage.assistant(fullResponse.toString()));
+                            ConversationMessage.assistant(fullResponse.toString(), sourceRefs));
                     evaluationService.evaluateIfSampled(message, context, fullResponse.toString());
                 });
 
-        List<SourceInfo> sources = searchResults.stream()
-                .map(r -> new SourceInfo(r.documentId().toString(), r.filename(),
-                        r.chunkIndex(), truncate(r.content(), 100)))
-                .toList();
-
-        return new ChatResponse(tokenStream, sources);
+        return new ChatResponse(tokenStream, sources, sourceRefs);
     }
 
     private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
@@ -177,6 +199,12 @@ public class ChatService {
         var result = multiStepReasoner.reason(searchQuery, subQueries, documentIds, callback);
         trace.endStep(Map.of("subQueryCount", subQueries.size()));
 
+        List<SourceInfo> sources = result.searchResults().stream()
+                .map(r -> new SourceInfo(r.documentId().toString(), r.filename(),
+                        r.chunkIndex(), truncate(r.content(), 100)))
+                .toList();
+        List<ConversationMessage.SourceRef> sourceRefs = toSourceRefs(sources);
+
         StringBuilder fullResponse = new StringBuilder();
 
         Flux<String> tokenStream = result.tokens()
@@ -184,15 +212,10 @@ public class ChatService {
                 .doOnComplete(() -> {
                     pipelineTracer.logTrace(trace);
                     conversationService.addMessage(sessionId,
-                            ConversationMessage.assistant(fullResponse.toString()));
+                            ConversationMessage.assistant(fullResponse.toString(), sourceRefs));
                 });
 
-        List<SourceInfo> sources = result.searchResults().stream()
-                .map(r -> new SourceInfo(r.documentId().toString(), r.filename(),
-                        r.chunkIndex(), truncate(r.content(), 100)))
-                .toList();
-
-        return new ChatResponse(tokenStream, sources);
+        return new ChatResponse(tokenStream, sources, sourceRefs);
     }
 
     private ChatResponse chatGeneral(String sessionId, String message, String modelId) {
@@ -211,7 +234,7 @@ public class ChatService {
                 .doOnComplete(() -> conversationService.addMessage(sessionId,
                         ConversationMessage.assistant(fullResponse.toString())));
 
-        return new ChatResponse(tokenStream, List.of());
+        return new ChatResponse(tokenStream, List.of(), List.of());
     }
 
     private ChatResponse chatClarify(String sessionId, String message, String modelId) {
@@ -228,7 +251,7 @@ public class ChatService {
                 .doOnComplete(() -> conversationService.addMessage(sessionId,
                         ConversationMessage.assistant(fullResponse.toString())));
 
-        return new ChatResponse(tokenStream, List.of());
+        return new ChatResponse(tokenStream, List.of(), List.of());
     }
 
     private String buildContext(List<ChunkSearchResult> results) {
@@ -253,7 +276,13 @@ public class ChatService {
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 
-    public record ChatResponse(Flux<String> tokens, List<SourceInfo> sources) {}
+    private List<ConversationMessage.SourceRef> toSourceRefs(List<SourceInfo> sources) {
+        return sources.stream()
+                .map(s -> new ConversationMessage.SourceRef(s.documentId(), s.filename(), s.chunkIndex(), s.excerpt()))
+                .toList();
+    }
+
+    public record ChatResponse(Flux<String> tokens, List<SourceInfo> sources, List<ConversationMessage.SourceRef> sourceRefs) {}
 
     public record SourceInfo(String documentId, String filename, int chunkIndex, String excerpt) {}
 }

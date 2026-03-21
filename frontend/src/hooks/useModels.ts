@@ -1,36 +1,43 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { LlmModel, DiscoveredModel } from '../types';
 
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  const token = localStorage.getItem('accessToken');
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
 export function useModels() {
   const [models, setModels] = useState<LlmModel[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
-    const res = await fetch('/api/models');
+    const res = await fetch('/api/models', { headers: authHeaders() });
     if (res.ok) setModels(await res.json());
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   const setDefault = async (id: string) => {
-    await fetch(`/api/models/${id}/set-default`, { method: 'PATCH' });
+    await fetch(`/api/models/${id}/set-default`, { method: 'PATCH', headers: authHeaders() });
     await refresh();
   };
 
   const testModel = async (id: string) => {
-    const res = await fetch(`/api/models/${id}/test`, { method: 'POST' });
+    const res = await fetch(`/api/models/${id}/test`, { method: 'POST', headers: authHeaders() });
     return res.json();
   };
 
   const deleteModel = async (id: string) => {
-    await fetch(`/api/models/${id}`, { method: 'DELETE' });
+    await fetch(`/api/models/${id}`, { method: 'DELETE', headers: authHeaders() });
     await refresh();
   };
 
   const createModel = async (model: Partial<LlmModel>) => {
     await fetch('/api/models', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(model),
     });
     await refresh();
@@ -39,7 +46,7 @@ export function useModels() {
   const discoverOllama = async (): Promise<DiscoveredModel[]> => {
     setLoading(true);
     try {
-      const res = await fetch('/api/models/discover/ollama');
+      const res = await fetch('/api/models/discover/ollama', { headers: authHeaders() });
       return res.ok ? await res.json() : [];
     } finally {
       setLoading(false);

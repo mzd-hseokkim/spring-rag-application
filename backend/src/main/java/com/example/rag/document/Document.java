@@ -1,5 +1,6 @@
 package com.example.rag.document;
 
+import com.example.rag.auth.AppUser;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -30,6 +31,13 @@ public class Document {
 
     @Column(name = "chunk_count", nullable = false)
     private int chunkCount = 0;
+
+    @Column(name = "is_public", nullable = false)
+    private boolean isPublic = false;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private AppUser user;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -80,4 +88,10 @@ public class Document {
         this.status = DocumentStatus.FAILED;
         this.errorMessage = errorMessage;
     }
+
+    public boolean isPublic() { return isPublic; }
+    public void setPublic(boolean isPublic) { this.isPublic = isPublic; }
+
+    public AppUser getUser() { return user; }
+    public void setUser(AppUser user) { this.user = user; }
 }

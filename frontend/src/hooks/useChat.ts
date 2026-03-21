@@ -1,5 +1,7 @@
 import { useReducer, useCallback, useRef } from 'react';
+import { toast } from 'sonner';
 import type { Message, Source, AgentStep } from '../types';
+import { fetchConversationDetail } from '../api/client';
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -18,7 +20,8 @@ type ChatAction =
   | { type: 'SET_ERROR'; message: string }
   | { type: 'STREAM_START' }
   | { type: 'STREAM_END' }
-  | { type: 'NEW_SESSION' };
+  | { type: 'NEW_SESSION' }
+  | { type: 'LOAD_MESSAGES'; messages: Message[] };
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   const updateLast = (updater: (last: Message) => Message): ChatState => {
@@ -53,6 +56,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, streaming: false };
     case 'NEW_SESSION':
       return { messages: [], streaming: false };
+    case 'LOAD_MESSAGES':
+      return { messages: action.messages, streaming: false };
     default:
       return state;
   }
@@ -62,20 +67,26 @@ export function useChat() {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
   const sessionIdRef = useRef(generateSessionId());
 
-  const sendMessage = useCallback(async (content: string, modelId?: string | null) => {
+  const sendMessage = useCallback(async (content: string, modelId?: string | null, includePublicDocs?: boolean) => {
     dispatch({ type: 'SEND_MESSAGE', content });
     dispatch({ type: 'STREAM_START' });
 
     try {
-      const payload: Record<string, string> = {
+      const payload: Record<string, string | boolean> = {
         sessionId: sessionIdRef.current,
         message: content,
+        includePublicDocs: includePublicDocs ?? true,
       };
       if (modelId) payload.modelId = modelId;
 
+      const token = localStorage.getItem('accessToken');
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
 
@@ -112,13 +123,19 @@ export function useChat() {
                 if (sources.length > 0) {
                   dispatch({ type: 'SET_SOURCES', sources });
                 }
+              } else if (currentEvent === 'error') {
+                const errorMsg = parsed.message || '알 수 없는 오류가 발생했습니다.';
+                dispatch({ type: 'SET_ERROR', message: errorMsg });
+                toast.error('채팅 오류', { description: errorMsg });
               }
             } catch { /* skip malformed JSON */ }
           }
         }
       }
     } catch (err) {
-      dispatch({ type: 'SET_ERROR', message: '오류가 발생했습니다. 다시 시도해주세요.' });
+      const errorMsg = err instanceof Error ? err.message : '오류가 발생했습니다. 다시 시도해주세요.';
+      dispatch({ type: 'SET_ERROR', message: errorMsg });
+      toast.error('채팅 오류', { description: errorMsg });
     } finally {
       dispatch({ type: 'STREAM_END' });
     }
@@ -129,5 +146,28 @@ export function useChat() {
     dispatch({ type: 'NEW_SESSION' });
   }, []);
 
-  return { messages: state.messages, streaming: state.streaming, sendMessage, newSession };
+  const loadConversation = useCallback(async (conversationId: string, sessionId: string) => {
+    sessionIdRef.current = sessionId;
+    try {
+      const detail = await fetchConversationDetail(conversationId);
+      const messages: Message[] = detail.messages.map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        ...(m.sources && m.sources.length > 0 ? { sources: m.sources } : {}),
+      }));
+      dispatch({ type: 'LOAD_MESSAGES', messages });
+    } catch (err) {
+      console.error('Failed to load conversation:', err);
+      dispatch({ type: 'LOAD_MESSAGES', messages: [] });
+    }
+  }, []);
+
+  return {
+    messages: state.messages,
+    streaming: state.streaming,
+    sessionId: sessionIdRef.current,
+    sendMessage,
+    newSession,
+    loadConversation,
+  };
 }

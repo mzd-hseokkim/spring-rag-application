@@ -26,6 +26,9 @@ export function DocumentList({ documents }: Props) {
             <Badge variant={config.variant} className={`text-[10px] shrink-0 ${config.className}`}>
               {config.label}
             </Badge>
+            {doc.isPublic && (
+              <Badge variant="secondary" className="text-[10px] shrink-0">공용</Badge>
+            )}
             <span className="truncate flex-1" title={doc.filename}>{doc.filename}</span>
             {doc.status === 'COMPLETED' && (
               <span className="text-xs text-muted-foreground shrink-0">{doc.chunkCount} chunks</span>
