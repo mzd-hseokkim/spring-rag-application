@@ -1,4 +1,4 @@
-import type { Document, Conversation, ConversationDetail } from '../types';
+import type { Document, Conversation, ConversationDetail, DocumentTag, DocumentCollection } from '../types';
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
@@ -54,4 +54,68 @@ export async function deleteConversation(id: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete conversation');
+}
+
+// --- 태그 ---
+export async function fetchTags(): Promise<DocumentTag[]> {
+  const res = await fetch('/api/tags', { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch tags');
+  return res.json();
+}
+
+export async function createTag(name: string): Promise<DocumentTag> {
+  const res = await fetch('/api/tags', {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error('Failed to create tag');
+  return res.json();
+}
+
+export async function deleteTag(id: string): Promise<void> {
+  const res = await fetch(`/api/tags/${id}`, { method: 'DELETE', headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to delete tag');
+}
+
+export async function setDocumentTags(documentId: string, tagIds: string[]): Promise<Document> {
+  const res = await fetch(`/api/documents/${documentId}/tags`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ tagIds }),
+  });
+  if (!res.ok) throw new Error('Failed to set tags');
+  return res.json();
+}
+
+// --- 컬렉션 ---
+export async function fetchCollections(): Promise<DocumentCollection[]> {
+  const res = await fetch('/api/collections', { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch collections');
+  return res.json();
+}
+
+export async function createCollection(name: string, description?: string): Promise<DocumentCollection> {
+  const res = await fetch('/api/collections', {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name, description }),
+  });
+  if (!res.ok) throw new Error('Failed to create collection');
+  return res.json();
+}
+
+export async function deleteCollection(id: string): Promise<void> {
+  const res = await fetch(`/api/collections/${id}`, { method: 'DELETE', headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to delete collection');
+}
+
+export async function setDocumentCollections(documentId: string, collectionIds: string[]): Promise<Document> {
+  const res = await fetch(`/api/documents/${documentId}/collections`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ collectionIds }),
+  });
+  if (!res.ok) throw new Error('Failed to set collections');
+  return res.json();
 }

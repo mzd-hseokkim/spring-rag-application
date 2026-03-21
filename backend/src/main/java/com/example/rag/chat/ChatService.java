@@ -73,7 +73,9 @@ public class ChatService {
         return modelProvider.getChatClient(ModelPurpose.CHAT);
     }
 
-    public ChatResponse chat(String sessionId, String message, String modelId, UUID userId, boolean includePublicDocs, Consumer<AgentStepEvent> stepCallback) {
+    public ChatResponse chat(String sessionId, String message, String modelId, UUID userId,
+                             boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds,
+                             Consumer<AgentStepEvent> stepCallback) {
         TraceContext trace = new TraceContext(sessionId, message);
         List<AgentStepEvent> agentSteps = new ArrayList<>();
         Consumer<AgentStepEvent> callback = event -> {
@@ -96,7 +98,7 @@ public class ChatService {
         // Agent 판단
         trace.startStep("decide");
         callback.accept(new AgentStepEvent("decide", "행동 결정 중..."));
-        AgentDecision decision = searchAgent.decide(searchQuery, userId, includePublicDocs);
+        AgentDecision decision = searchAgent.decide(searchQuery, userId, includePublicDocs, tagIds, collectionIds);
         trace.endStep(Map.of("action", decision.action().name(),
                 "targetDocs", decision.targetDocumentIds().size()));
 

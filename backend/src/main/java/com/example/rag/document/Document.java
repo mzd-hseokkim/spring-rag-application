@@ -1,8 +1,12 @@
 package com.example.rag.document;
 
 import com.example.rag.auth.AppUser;
+import com.example.rag.document.collection.DocumentCollection;
+import com.example.rag.document.tag.DocumentTag;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -34,6 +38,18 @@ public class Document {
 
     @Column(name = "is_public", nullable = false)
     private boolean isPublic = false;
+
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(name = "document_tag_mapping",
+            joinColumns = @JoinColumn(name = "document_id"),
+            inverseJoinColumns = @JoinColumn(name = "tag_id"))
+    private Set<DocumentTag> tags = new HashSet<>();
+
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(name = "document_collection_mapping",
+            joinColumns = @JoinColumn(name = "document_id"),
+            inverseJoinColumns = @JoinColumn(name = "collection_id"))
+    private Set<DocumentCollection> collections = new HashSet<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
@@ -91,6 +107,11 @@ public class Document {
 
     public boolean isPublic() { return isPublic; }
     public void setPublic(boolean isPublic) { this.isPublic = isPublic; }
+
+    public Set<DocumentTag> getTags() { return tags; }
+    public void setTags(Set<DocumentTag> tags) { this.tags = tags; }
+    public Set<DocumentCollection> getCollections() { return collections; }
+    public void setCollections(Set<DocumentCollection> collections) { this.collections = collections; }
 
     public AppUser getUser() { return user; }
     public void setUser(AppUser user) { this.user = user; }

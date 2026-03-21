@@ -67,17 +67,20 @@ export function useChat() {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
   const sessionIdRef = useRef(generateSessionId());
 
-  const sendMessage = useCallback(async (content: string, modelId?: string | null, includePublicDocs?: boolean) => {
+  const sendMessage = useCallback(async (content: string, modelId?: string | null,
+      includePublicDocs?: boolean, tagIds?: string[], collectionIds?: string[]) => {
     dispatch({ type: 'SEND_MESSAGE', content });
     dispatch({ type: 'STREAM_START' });
 
     try {
-      const payload: Record<string, string | boolean> = {
+      const payload: Record<string, unknown> = {
         sessionId: sessionIdRef.current,
         message: content,
         includePublicDocs: includePublicDocs ?? true,
       };
       if (modelId) payload.modelId = modelId;
+      if (tagIds && tagIds.length > 0) payload.tagIds = tagIds;
+      if (collectionIds && collectionIds.length > 0) payload.collectionIds = collectionIds;
 
       const token = localStorage.getItem('accessToken');
       const res = await fetch('/api/chat', {

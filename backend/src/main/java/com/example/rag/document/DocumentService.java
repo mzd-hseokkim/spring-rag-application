@@ -40,7 +40,12 @@ public class DocumentService {
 
     @Transactional(readOnly = true)
     public Document findById(UUID id) {
-        return documentRepository.findById(id)
+        return documentRepository.findByIdWithTags(id)
                 .orElseThrow(() -> new DocumentNotFoundException(id));
+    }
+
+    @Transactional
+    public Document save(Document document) {
+        return documentRepository.save(document);
     }
 }

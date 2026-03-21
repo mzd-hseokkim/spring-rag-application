@@ -3,6 +3,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ChatView } from '@/components/chat/ChatView';
 import { DocumentUpload } from '@/components/document/DocumentUpload';
 import { DocumentList } from '@/components/document/DocumentList';
+import { TagManager } from '@/components/document/TagManager';
+import { CollectionManager } from '@/components/document/CollectionManager';
 import { ConversationList } from '@/components/conversation/ConversationList';
 import { useDocuments } from '@/hooks/useDocuments';
 import { useModels } from '@/hooks/useModels';
@@ -16,7 +18,7 @@ import type { Conversation } from '@/types';
 export function MainPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const { documents, uploading, upload } = useDocuments();
+  const { documents, uploading, upload, refresh: refreshDocs } = useDocuments();
   const modelState = useModels();
   const chat = useChat();
   const { conversations, refresh: refreshConversations, remove, rename } = useConversations();
@@ -66,7 +68,11 @@ export function MainPage() {
           </TabsContent>
           <TabsContent value="documents" className="flex-1 overflow-y-auto p-3 space-y-3 mt-0">
             <DocumentUpload onUpload={upload} uploading={uploading} isAdmin={isAdmin} />
-            <DocumentList documents={documents} />
+            <DocumentList documents={documents} onRefresh={refreshDocs} />
+            <div className="border-t border-border pt-3 space-y-3">
+              <TagManager />
+              <CollectionManager />
+            </div>
           </TabsContent>
         </Tabs>
 

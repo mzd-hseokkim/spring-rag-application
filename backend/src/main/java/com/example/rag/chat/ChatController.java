@@ -61,9 +61,15 @@ public class ChatController {
         CompletableFuture.runAsync(() -> {
             try {
                 boolean includePublic = request.includePublicDocs() == null || request.includePublicDocs();
+                List<java.util.UUID> tagIds = request.tagIds() != null
+                        ? request.tagIds().stream().map(java.util.UUID::fromString).toList()
+                        : List.of();
+                List<java.util.UUID> collectionIds = request.collectionIds() != null
+                        ? request.collectionIds().stream().map(java.util.UUID::fromString).toList()
+                        : List.of();
                 ChatService.ChatResponse response = chatService.chat(
                         request.sessionId(), request.message(), request.modelId(),
-                        userId, includePublic, step -> {
+                        userId, includePublic, tagIds, collectionIds, step -> {
                             try {
                                 emitter.send(SseEmitter.event()
                                         .name("agent_step")
@@ -146,6 +152,7 @@ public class ChatController {
         return Map.of("message", e.getMessage());
     }
 
-    record ChatRequest(String sessionId, String message, String modelId, Boolean includePublicDocs) {}
+    record ChatRequest(String sessionId, String message, String modelId, Boolean includePublicDocs,
+                       java.util.List<String> tagIds, java.util.List<String> collectionIds) {}
     record FeedbackRequest(String sessionId, int messageIndex, String rating) {}
 }

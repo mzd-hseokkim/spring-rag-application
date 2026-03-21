@@ -1,3 +1,15 @@
+export interface DocumentTag {
+  id: string;
+  name: string;
+}
+
+export interface DocumentCollection {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+}
+
 export interface Document {
   id: string;
   filename: string;
@@ -7,6 +19,8 @@ export interface Document {
   errorMessage: string | null;
   chunkCount: number;
   isPublic: boolean;
+  tags: DocumentTag[];
+  collections: DocumentCollection[];
   createdAt: string;
 }
 
