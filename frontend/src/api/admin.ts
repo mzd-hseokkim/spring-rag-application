@@ -61,6 +61,75 @@ export async function deleteAdminDocument(id: string) {
   if (!res.ok) throw new Error('Failed to delete document');
 }
 
+// --- 재인덱싱 ---
+export async function reindexDocument(id: string) {
+  const res = await fetch(`/api/admin/documents/${id}/reindex`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to start reindex');
+  return res.json();
+}
+
+export async function reindexAll() {
+  const res = await fetch(`/api/admin/documents/reindex-all`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to start reindex-all');
+  return res.json();
+}
+
+// --- 설정 ---
+export interface ChunkingSettings {
+  mode: string;
+  fixedChunkSize: number;
+  fixedOverlap: number;
+  semanticBufferSize: number;
+  semanticBreakpointPercentile: number;
+  semanticMinChunkSize: number;
+  semanticMaxChunkSize: number;
+  childChunkSize: number;
+  childOverlap: number;
+}
+
+export interface EmbeddingSettings {
+  batchSize: number;
+  concurrency: number;
+}
+
+export async function fetchChunkingSettings(): Promise<ChunkingSettings> {
+  const res = await fetch('/api/admin/settings/chunking', { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch chunking settings');
+  return res.json();
+}
+
+export async function updateChunkingSettings(settings: ChunkingSettings): Promise<ChunkingSettings> {
+  const res = await fetch('/api/admin/settings/chunking', {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error('Failed to update chunking settings');
+  return res.json();
+}
+
+export async function fetchEmbeddingSettings(): Promise<EmbeddingSettings> {
+  const res = await fetch('/api/admin/settings/embedding', { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch embedding settings');
+  return res.json();
+}
+
+export async function updateEmbeddingSettings(settings: EmbeddingSettings): Promise<EmbeddingSettings> {
+  const res = await fetch('/api/admin/settings/embedding', {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error('Failed to update embedding settings');
+  return res.json();
+}
+
 // --- 대화 ---
 export async function fetchAdminConversations(page = 0, size = 20) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });

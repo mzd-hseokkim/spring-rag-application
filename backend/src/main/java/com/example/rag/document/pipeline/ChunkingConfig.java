@@ -1,28 +1,30 @@
 package com.example.rag.document.pipeline;
 
 import com.example.rag.model.ModelClientProvider;
-import org.springframework.beans.factory.annotation.Value;
+import com.example.rag.settings.ChunkingSettings;
+import com.example.rag.settings.SettingsService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class ChunkingConfig {
 
+    /**
+     * 기본 ChunkingStrategy 빈 — ChatService 등에서 사용.
+     * IngestionPipeline은 매 실행마다 DB 설정을 직접 읽어 strategy를 생성한다.
+     */
     @Bean
-    public ChunkingStrategy chunkingStrategy(
-            @Value("${app.chunking.mode:fixed}") String mode,
-            @Value("${app.chunking.fixed.chunk-size:1000}") int fixedChunkSize,
-            @Value("${app.chunking.fixed.overlap:200}") int fixedOverlap,
-            @Value("${app.chunking.semantic.buffer-size:1}") int bufferSize,
-            @Value("${app.chunking.semantic.breakpoint-percentile:90}") double breakpointPercentile,
-            @Value("${app.chunking.semantic.min-chunk-size:200}") int minChunkSize,
-            @Value("${app.chunking.semantic.max-chunk-size:1500}") int maxChunkSize,
-            ModelClientProvider modelProvider) {
-
-        if ("semantic".equalsIgnoreCase(mode)) {
+    public ChunkingStrategy chunkingStrategy(SettingsService settingsService,
+                                              ModelClientProvider modelProvider) {
+        ChunkingSettings s = settingsService.getChunkingSettings();
+        if ("semantic".equalsIgnoreCase(s.mode())) {
             return new SemanticChunkingStrategy(
-                    modelProvider.getEmbeddingModel(), bufferSize, breakpointPercentile, minChunkSize, maxChunkSize);
+                    modelProvider.getEmbeddingModel(),
+                    s.semanticBufferSize(),
+                    s.semanticBreakpointPercentile(),
+                    s.semanticMinChunkSize(),
+                    s.semanticMaxChunkSize());
         }
-        return new FixedSizeChunkingStrategy(fixedChunkSize, fixedOverlap);
+        return new FixedSizeChunkingStrategy(s.fixedChunkSize(), s.fixedOverlap());
     }
 }

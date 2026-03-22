@@ -18,4 +18,17 @@ public interface DocumentChunkRepository extends JpaRepository<DocumentChunk, UU
     void updateEmbeddingAndTsvector(@Param("id") UUID id,
                                     @Param("embedding") String embedding,
                                     @Param("content") String content);
+
+    @Modifying
+    @Query(value = "UPDATE document_chunk SET embedding = cast(:embedding AS vector), " +
+            "content_tsv = to_tsvector('simple', :content), " +
+            "metadata = cast(:metadata AS jsonb) WHERE id = :id", nativeQuery = true)
+    void updateEmbeddingTsvectorAndMetadata(@Param("id") UUID id,
+                                             @Param("embedding") String embedding,
+                                             @Param("content") String content,
+                                             @Param("metadata") String metadata);
+
+    @Modifying
+    @Query("DELETE FROM DocumentChunk c WHERE c.document.id = :documentId")
+    void deleteByDocumentId(@Param("documentId") UUID documentId);
 }

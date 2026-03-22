@@ -1,6 +1,10 @@
 package com.example.rag.admin;
 
 import com.example.rag.auth.UserRole;
+import com.example.rag.document.pipeline.ReindexService;
+import com.example.rag.settings.ChunkingSettings;
+import com.example.rag.settings.EmbeddingSettings;
+import com.example.rag.settings.SettingsService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -18,9 +22,15 @@ import java.util.UUID;
 public class AdminController {
 
     private final AdminService adminService;
+    private final SettingsService settingsService;
+    private final ReindexService reindexService;
 
-    public AdminController(AdminService adminService) {
+    public AdminController(AdminService adminService,
+                           SettingsService settingsService,
+                           ReindexService reindexService) {
         this.adminService = adminService;
+        this.settingsService = settingsService;
+        this.reindexService = reindexService;
     }
 
     // --- 사용자 관리 ---
@@ -85,6 +95,44 @@ public class AdminController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteConversation(@PathVariable UUID id) {
         adminService.deleteConversation(id);
+    }
+
+    // --- 재인덱싱 ---
+
+    @PostMapping("/documents/{id}/reindex")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Map<String, String> reindexDocument(@PathVariable UUID id) {
+        reindexService.reindexDocument(id);
+        return Map.of("message", "재인덱싱이 시작되었습니다.");
+    }
+
+    @PostMapping("/documents/reindex-all")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Map<String, String> reindexAll() {
+        reindexService.reindexAll();
+        return Map.of("message", "전체 재인덱싱이 시작되었습니다.");
+    }
+
+    // --- 설정 ---
+
+    @GetMapping("/settings/chunking")
+    public ChunkingSettings getChunkingSettings() {
+        return settingsService.getChunkingSettings();
+    }
+
+    @PutMapping("/settings/chunking")
+    public ChunkingSettings updateChunkingSettings(@RequestBody ChunkingSettings settings) {
+        return settingsService.updateChunkingSettings(settings);
+    }
+
+    @GetMapping("/settings/embedding")
+    public EmbeddingSettings getEmbeddingSettings() {
+        return settingsService.getEmbeddingSettings();
+    }
+
+    @PutMapping("/settings/embedding")
+    public EmbeddingSettings updateEmbeddingSettings(@RequestBody EmbeddingSettings settings) {
+        return settingsService.updateEmbeddingSettings(settings);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
