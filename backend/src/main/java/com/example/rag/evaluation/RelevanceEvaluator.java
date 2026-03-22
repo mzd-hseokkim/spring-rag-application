@@ -1,5 +1,6 @@
 package com.example.rag.evaluation;
 
+import com.example.rag.common.PromptLoader;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
 import org.slf4j.Logger;
@@ -12,21 +13,12 @@ public class RelevanceEvaluator {
 
     private static final Logger log = LoggerFactory.getLogger("evaluation.relevance");
 
-    private static final String PROMPT = """
-            아래 질문과 답변이 주어졌을 때, 답변이 질문에 적절한지 1~5 점수로 평가하세요.
-            숫자만 답하세요.
-
-            [질문]
-            %s
-
-            [답변]
-            %s
-            """;
-
+    private final String prompt;
     private final ModelClientProvider modelProvider;
 
-    public RelevanceEvaluator(ModelClientProvider modelProvider) {
+    public RelevanceEvaluator(ModelClientProvider modelProvider, PromptLoader promptLoader) {
         this.modelProvider = modelProvider;
+        this.prompt = promptLoader.load("eval-relevance.txt");
     }
 
     private ChatClient chatClient() {
@@ -36,7 +28,7 @@ public class RelevanceEvaluator {
     public void evaluate(String query, String response) {
         try {
             String result = chatClient().prompt()
-                    .user(PROMPT.formatted(query, truncate(response, 1000)))
+                    .user(prompt.formatted(query, truncate(response, 1000)))
                     .call()
                     .content();
             if (result == null) {

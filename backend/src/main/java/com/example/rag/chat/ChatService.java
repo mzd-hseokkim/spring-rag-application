@@ -33,6 +33,7 @@ public class ChatService {
 
     private final String ragSystemPrompt;
     private final String generalSystemPrompt;
+    private final String clarifyPrompt;
 
     private final ModelClientProvider modelProvider;
     private final SearchService searchService;
@@ -70,6 +71,7 @@ public class ChatService {
         this.tokenUsageRepository = tokenUsageRepository;
         this.ragSystemPrompt = promptLoader.load("rag-system.txt");
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
+        this.clarifyPrompt = promptLoader.load("clarify.txt");
         this.mergeAnalysis = mergeAnalysis;
     }
 
@@ -324,7 +326,7 @@ public class ChatService {
     }
 
     private ChatResponse chatClarify(String sessionId, String message, String modelId) {
-        String prompt = "사용자의 질문이 모호합니다. 질문을 더 구체적으로 해달라고 정중하게 요청하세요.\n\n질문: " + message;
+        String prompt = clarifyPrompt.formatted(message);
 
         StringBuilder fullResponse = new StringBuilder();
 

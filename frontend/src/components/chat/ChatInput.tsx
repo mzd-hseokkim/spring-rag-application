@@ -93,7 +93,7 @@ export function ChatInput({ onSend, onStop, onFileDrop, disabled, streaming, foc
   return (
     <form
       ref={formRef}
-      className={`relative flex items-center gap-2 px-3 h-16 border-t bg-background transition-colors ${
+      className={`relative flex items-center gap-2 px-3 h-14 border-t bg-background transition-colors ${
         dragOver ? 'bg-primary/5 border-primary' : ''
       }`}
       onSubmit={handleSubmit}
