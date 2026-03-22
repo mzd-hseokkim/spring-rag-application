@@ -44,7 +44,7 @@ export async function fetchMe(accessToken: string): Promise<User> {
   return res.json();
 }
 
-export async function updateProfile(name: string, avatarUrl: string | null): Promise<User> {
+export async function updateProfile(name: string): Promise<User> {
   const token = localStorage.getItem('accessToken');
   const res = await fetch('/api/auth/profile', {
     method: 'PUT',
@@ -52,10 +52,43 @@ export async function updateProfile(name: string, avatarUrl: string | null): Pro
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ name, avatarUrl }),
+    body: JSON.stringify({ name }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: '프로필 수정에 실패했습니다.' }));
+    throw new Error(body.message);
+  }
+  return res.json();
+}
+
+export async function uploadAvatar(file: File): Promise<User> {
+  const token = localStorage.getItem('accessToken');
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch('/api/auth/avatar', {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: '아바타 업로드에 실패했습니다.' }));
+    throw new Error(body.message);
+  }
+  return res.json();
+}
+
+export async function deleteAvatar(): Promise<User> {
+  const token = localStorage.getItem('accessToken');
+  const res = await fetch('/api/auth/avatar', {
+    method: 'DELETE',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: '아바타 삭제에 실패했습니다.' }));
     throw new Error(body.message);
   }
   return res.json();

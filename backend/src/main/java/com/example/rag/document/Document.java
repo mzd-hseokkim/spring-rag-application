@@ -36,6 +36,9 @@ public class Document {
     @Column(name = "chunk_count", nullable = false)
     private int chunkCount = 0;
 
+    @Column(name = "stored_path", length = 1000)
+    private String storedPath;
+
     @Column(name = "is_public", nullable = false)
     private boolean isPublic = false;
 
@@ -104,6 +107,9 @@ public class Document {
         this.status = DocumentStatus.FAILED;
         this.errorMessage = errorMessage;
     }
+
+    public String getStoredPath() { return storedPath; }
+    public void setStoredPath(String storedPath) { this.storedPath = storedPath; }
 
     public boolean isPublic() { return isPublic; }
     public void setPublic(boolean isPublic) { this.isPublic = isPublic; }

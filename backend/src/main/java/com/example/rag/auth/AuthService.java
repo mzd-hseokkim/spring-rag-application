@@ -1,30 +1,42 @@
 package com.example.rag.auth;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class AuthService {
 
     private static final String USER_NOT_FOUND = "사용자를 찾을 수 없습니다.";
+    private static final Set<String> ALLOWED_IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/gif", "image/webp");
+    private static final long MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
 
     private final AppUserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
+    private final Path avatarDir;
 
     public AuthService(AppUserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
                        JwtTokenProvider jwtTokenProvider,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       @Value("${app.upload.avatar-dir}") String avatarDirPath) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.passwordEncoder = passwordEncoder;
+        this.avatarDir = Paths.get(avatarDirPath).toAbsolutePath();
     }
 
     @Transactional
@@ -93,13 +105,66 @@ public class AuthService {
     }
 
     @Transactional
-    public UserDto updateProfile(UUID userId, String name, String avatarUrl) {
+    public UserDto updateProfile(UUID userId, String name) {
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
         if (name != null && !name.isBlank()) user.setName(name.trim());
-        if (avatarUrl != null) user.setAvatarUrl(avatarUrl.isBlank() ? null : avatarUrl.trim());
         userRepository.save(user);
         return toDto(user);
+    }
+
+    @Transactional
+    public UserDto uploadAvatar(UUID userId, MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("파일이 비어 있습니다.");
+        }
+        if (file.getSize() > MAX_AVATAR_SIZE) {
+            throw new IllegalArgumentException("이미지 크기는 5MB 이하여야 합니다.");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !ALLOWED_IMAGE_TYPES.contains(contentType)) {
+            throw new IllegalArgumentException("지원하지 않는 이미지 형식입니다. (JPEG, PNG, GIF, WebP)");
+        }
+
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
+
+        // delete old avatar file if exists
+        deleteAvatarFile(user.getAvatarUrl());
+
+        String ext = contentType.substring(contentType.indexOf('/') + 1);
+        String filename = userId + "." + ext;
+        try {
+            Files.createDirectories(avatarDir);
+            Files.write(avatarDir.resolve(filename), file.getBytes());
+        } catch (IOException e) {
+            throw new RuntimeException("아바타 저장에 실패했습니다.", e);
+        }
+
+        user.setAvatarUrl("/uploads/avatars/" + filename);
+        userRepository.save(user);
+        return toDto(user);
+    }
+
+    @Transactional
+    public UserDto deleteAvatar(UUID userId) {
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
+        deleteAvatarFile(user.getAvatarUrl());
+        user.setAvatarUrl(null);
+        userRepository.save(user);
+        return toDto(user);
+    }
+
+    private void deleteAvatarFile(String avatarUrl) {
+        if (avatarUrl != null && avatarUrl.startsWith("/uploads/avatars/")) {
+            String filename = avatarUrl.substring("/uploads/avatars/".length());
+            try {
+                Files.deleteIfExists(avatarDir.resolve(filename));
+            } catch (IOException ignored) {
+                // best effort
+            }
+        }
     }
 
     @Transactional

@@ -1,20 +1,21 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/auth/AuthContext';
-import { updateProfile, changePassword } from '@/api/auth';
+import { updateProfile, changePassword, uploadAvatar, deleteAvatar } from '@/api/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { ArrowLeft, User as UserIcon } from 'lucide-react';
+import { ArrowLeft, Camera, Trash2, User as UserIcon } from 'lucide-react';
 
 export function SettingsPage() {
   const { user, updateUser } = useAuth();
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState(user?.name || '');
-  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || '');
   const [saving, setSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -24,13 +25,42 @@ export function SettingsPage() {
   const handleProfileSave = async () => {
     setSaving(true);
     try {
-      const updated = await updateProfile(name, avatarUrl || null);
+      const updated = await updateProfile(name);
       updateUser(updated);
       toast.success('프로필이 저장되었습니다.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '프로필 저장 실패');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const updated = await uploadAvatar(file);
+      updateUser(updated);
+      toast.success('프로필 이미지가 변경되었습니다.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '이미지 업로드 실패');
+    } finally {
+      setUploadingAvatar(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleAvatarDelete = async () => {
+    setUploadingAvatar(true);
+    try {
+      const updated = await deleteAvatar();
+      updateUser(updated);
+      toast.success('프로필 이미지가 삭제되었습니다.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '이미지 삭제 실패');
+    } finally {
+      setUploadingAvatar(false);
     }
   };
 
@@ -73,34 +103,62 @@ export function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center overflow-hidden shrink-0">
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt="avatar" className="w-full h-full object-cover"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; e.target.parentElement?.querySelector('.avatar-fallback')?.classList.remove('hidden'); }} />
-                ) : null}
-                <UserIcon className={`size-8 text-muted-foreground avatar-fallback ${avatarUrl ? 'hidden' : ''}`} />
+              <div className="relative group">
+                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                  {user?.avatarUrl ? (
+                    <img src={user.avatarUrl} alt="avatar" className="w-full h-full object-cover"
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; e.target.parentElement?.querySelector('.avatar-fallback')?.classList.remove('hidden'); }} />
+                  ) : null}
+                  <UserIcon className={`size-8 text-muted-foreground avatar-fallback ${user?.avatarUrl ? 'hidden' : ''}`} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingAvatar}
+                  className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                >
+                  <Camera className="size-5 text-white" />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  onChange={handleAvatarUpload}
+                  className="hidden"
+                />
               </div>
               <div className="flex-1 space-y-1">
                 <p className="text-sm text-muted-foreground">{user?.email}</p>
                 <p className="text-xs text-muted-foreground">
                   {user?.role === 'ADMIN' ? '관리자' : '일반 사용자'}
                 </p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingAvatar}
+                    className="text-xs text-primary hover:underline cursor-pointer"
+                  >
+                    {uploadingAvatar ? '업로드 중...' : '사진 변경'}
+                  </button>
+                  {user?.avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={handleAvatarDelete}
+                      disabled={uploadingAvatar}
+                      className="text-xs text-destructive hover:underline cursor-pointer flex items-center gap-0.5"
+                    >
+                      <Trash2 className="size-3" />
+                      삭제
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium">이름</label>
               <Input value={name} onChange={e => setName(e.target.value)} />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">프로필 이미지 URL</label>
-              <Input
-                value={avatarUrl}
-                onChange={e => setAvatarUrl(e.target.value)}
-                placeholder="https://example.com/avatar.jpg"
-              />
-              <p className="text-xs text-muted-foreground">외부 이미지 URL을 입력하세요.</p>
             </div>
 
             <Button onClick={handleProfileSave} disabled={saving || !name.trim()}>

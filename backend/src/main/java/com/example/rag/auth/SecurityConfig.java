@@ -23,10 +23,12 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final AppUserRepository appUserRepository;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
-        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+    public SecurityConfig(JwtTokenProvider jwtTokenProvider, AppUserRepository appUserRepository) {
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.appUserRepository = appUserRepository;
     }
 
     @Bean
@@ -39,6 +41,7 @@ public class SecurityConfig {
                         // SSE 비동기 디스패치는 인증 체크 스킵
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/ws/**").permitAll()
+                        .requestMatchers("/uploads/avatars/**").permitAll()
                         .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/refresh").permitAll()
                         // 모델 읽기/테스트는 인증된 사용자 모두 허용
                         .requestMatchers(HttpMethod.GET, "/api/models", "/api/models/*").authenticated()
@@ -51,7 +54,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().permitAll()
                 )
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new JwtAuthenticationFilter(jwtTokenProvider, appUserRepository), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 import java.util.UUID;
@@ -66,7 +67,19 @@ public class AuthController {
     @PutMapping("/profile")
     public AuthService.UserDto updateProfile(@RequestBody ProfileRequest request, Authentication auth) {
         UUID userId = UUID.fromString(auth.getName());
-        return authService.updateProfile(userId, request.name(), request.avatarUrl());
+        return authService.updateProfile(userId, request.name());
+    }
+
+    @PostMapping("/avatar")
+    public AuthService.UserDto uploadAvatar(@RequestParam("file") MultipartFile file, Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        return authService.uploadAvatar(userId, file);
+    }
+
+    @DeleteMapping("/avatar")
+    public AuthService.UserDto deleteAvatar(Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        return authService.deleteAvatar(userId);
     }
 
     @PutMapping("/password")
@@ -85,6 +98,6 @@ public class AuthController {
     record RegisterRequest(String email, String password, String name) {}
     record LoginRequest(String email, String password) {}
     record RefreshRequest(String refreshToken) {}
-    record ProfileRequest(String name, String avatarUrl) {}
+    record ProfileRequest(String name) {}
     record PasswordChangeRequest(String currentPassword, String newPassword) {}
 }

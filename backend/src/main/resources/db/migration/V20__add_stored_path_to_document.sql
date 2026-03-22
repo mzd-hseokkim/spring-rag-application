@@ -1,0 +1,1 @@
+ALTER TABLE document ADD COLUMN stored_path VARCHAR(1000);

@@ -6,6 +6,8 @@ import com.example.rag.document.pipeline.IngestionEventPublisher;
 import com.example.rag.document.pipeline.IngestionPipeline;
 import com.example.rag.document.tag.DocumentTag;
 import com.example.rag.document.tag.DocumentTagRepository;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -90,6 +92,17 @@ public class DocumentController {
                 request.collectionIds().stream().map(UUID::fromString).toList()));
         doc.setCollections(collections);
         return DocumentResponse.from(documentService.save(doc));
+    }
+
+    @GetMapping("/{id}/file")
+    public ResponseEntity<Resource> downloadFile(@PathVariable UUID id) {
+        Document document = documentService.findById(id);
+        Resource resource = documentService.loadFile(document);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + document.getFilename() + "\"")
+                .contentType(MediaType.parseMediaType(document.getContentType()))
+                .body(resource);
     }
 
     @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
