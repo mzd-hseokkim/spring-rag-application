@@ -43,3 +43,36 @@ export async function fetchMe(accessToken: string): Promise<User> {
   if (!res.ok) throw new Error('Unauthorized');
   return res.json();
 }
+
+export async function updateProfile(name: string, avatarUrl: string | null): Promise<User> {
+  const token = localStorage.getItem('accessToken');
+  const res = await fetch('/api/auth/profile', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ name, avatarUrl }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: '프로필 수정에 실패했습니다.' }));
+    throw new Error(body.message);
+  }
+  return res.json();
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const token = localStorage.getItem('accessToken');
+  const res = await fetch('/api/auth/password', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: '비밀번호 변경에 실패했습니다.' }));
+    throw new Error(body.message);
+  }
+}

@@ -11,9 +11,11 @@ export function useDocuments() {
     try {
       const docs = await fetchDocuments();
       setDocuments(docs);
+      return docs;
     } catch (err) {
       console.error('Failed to load documents:', err);
       toast.error('문서 목록 조회 실패');
+      return [];
     }
   }, []);
 

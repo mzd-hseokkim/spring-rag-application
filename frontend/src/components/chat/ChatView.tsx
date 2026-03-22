@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
-import { Filter } from 'lucide-react';
+import { Filter, FileUp, Check, Loader2, X } from 'lucide-react';
 import { fetchTags, fetchCollections } from '@/api/client';
 import type { LlmModel, Message, DocumentTag, DocumentCollection } from '@/types';
 
@@ -21,15 +21,23 @@ interface ChatState {
   stopGeneration: () => void;
 }
 
+export interface FileUploadStatus {
+  filename: string;
+  status: 'uploading' | 'processing' | 'completed' | 'failed';
+}
+
 interface Props {
   models: LlmModel[];
   chat: ChatState;
   onNewSession: () => void;
   onSendComplete: () => void;
+  onFileDrop?: (file: File) => void;
+  uploadStatus?: FileUploadStatus | null;
+  onDismissUpload?: () => void;
   filterRefreshKey?: number;
 }
 
-export function ChatView({ models, chat, onNewSession, onSendComplete, filterRefreshKey = 0 }: Props) {
+export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDrop, uploadStatus, onDismissUpload, filterRefreshKey = 0 }: Props) {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(
     () => localStorage.getItem('chat:modelId')
   );
@@ -192,12 +200,37 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, filterRef
       <div className="flex-1 min-h-0">
         <MessageList messages={chat.messages} streaming={chat.streaming} />
       </div>
+      {uploadStatus && (
+        <div className="shrink-0 px-4 py-2 border-t bg-muted/30 animate-page-in">
+          <div className="flex items-center gap-2 text-sm">
+            {uploadStatus.status === 'uploading' && <Loader2 className="size-4 animate-spin text-primary" />}
+            {uploadStatus.status === 'processing' && <Loader2 className="size-4 animate-spin text-yellow-600" />}
+            {uploadStatus.status === 'completed' && <Check className="size-4 text-green-600" />}
+            {uploadStatus.status === 'failed' && <X className="size-4 text-destructive" />}
+            <FileUp className="size-3.5 text-muted-foreground" />
+            <span className="truncate flex-1">{uploadStatus.filename}</span>
+            <span className="text-xs text-muted-foreground shrink-0">
+              {uploadStatus.status === 'uploading' && '업로드 중...'}
+              {uploadStatus.status === 'processing' && '처리 중...'}
+              {uploadStatus.status === 'completed' && '완료'}
+              {uploadStatus.status === 'failed' && '실패'}
+            </span>
+            {(uploadStatus.status === 'completed' || uploadStatus.status === 'failed') && (
+              <button onClick={onDismissUpload} className="text-muted-foreground hover:text-foreground">
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="shrink-0">
         <ChatInput
           onSend={handleSend}
           onStop={chat.stopGeneration}
+          onFileDrop={onFileDrop}
           disabled={chat.streaming}
           streaming={chat.streaming}
+          focusKey={chat.sessionId}
         />
       </div>
     </div>

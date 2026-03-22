@@ -28,6 +28,9 @@ public class AppUser {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "avatar_url", length = 500)
+    private String avatarUrl;
+
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
@@ -60,5 +63,9 @@ public class AppUser {
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
 
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setName(String name) { this.name = name; }
+    public void setPassword(String password) { this.password = password; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
     public void setRole(UserRole role) { this.role = role; }
 }

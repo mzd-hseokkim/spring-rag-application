@@ -63,6 +63,19 @@ public class AuthController {
         auditService.log(userId, null, "LOGOUT");
     }
 
+    @PutMapping("/profile")
+    public AuthService.UserDto updateProfile(@RequestBody ProfileRequest request, Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        return authService.updateProfile(userId, request.name(), request.avatarUrl());
+    }
+
+    @PutMapping("/password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void changePassword(@RequestBody PasswordChangeRequest request, Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        authService.changePassword(userId, request.currentPassword(), request.newPassword());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleError(IllegalArgumentException e) {
@@ -72,4 +85,6 @@ public class AuthController {
     record RegisterRequest(String email, String password, String name) {}
     record LoginRequest(String email, String password) {}
     record RefreshRequest(String refreshToken) {}
+    record ProfileRequest(String name, String avatarUrl) {}
+    record PasswordChangeRequest(String currentPassword, String newPassword) {}
 }

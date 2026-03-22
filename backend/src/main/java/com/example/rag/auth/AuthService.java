@@ -90,10 +90,34 @@ public class AuthService {
         return new AuthResponse(accessToken, refreshTokenValue, toDto(user));
     }
 
-    private UserDto toDto(AppUser user) {
-        return new UserDto(user.getId(), user.getEmail(), user.getName(), user.getRole());
+    @Transactional
+    public UserDto updateProfile(UUID userId, String name, String avatarUrl) {
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+        if (name != null && !name.isBlank()) user.setName(name.trim());
+        if (avatarUrl != null) user.setAvatarUrl(avatarUrl.isBlank() ? null : avatarUrl.trim());
+        userRepository.save(user);
+        return toDto(user);
     }
 
-    public record UserDto(UUID id, String email, String name, UserRole role) {}
+    @Transactional
+    public void changePassword(UUID userId, String currentPassword, String newPassword) {
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new IllegalArgumentException("현재 비밀번호가 올바르지 않습니다.");
+        }
+        if (newPassword.length() < 8) {
+            throw new IllegalArgumentException("새 비밀번호는 8자 이상이어야 합니다.");
+        }
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+
+    private UserDto toDto(AppUser user) {
+        return new UserDto(user.getId(), user.getEmail(), user.getName(), user.getRole(), user.getAvatarUrl());
+    }
+
+    public record UserDto(UUID id, String email, String name, UserRole role, String avatarUrl) {}
     public record AuthResponse(String accessToken, String refreshToken, UserDto user) {}
 }

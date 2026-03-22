@@ -15,6 +15,7 @@ import { AdminConversationsPage } from '@/pages/admin/AdminConversationsPage';
 import { AdminModelsPage } from '@/pages/admin/AdminModelsPage';
 import { AdminDashboardPage } from '@/pages/admin/AdminDashboardPage';
 import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
+import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 
 function App() {
@@ -29,6 +30,11 @@ function App() {
             <Route path="/" element={
               <ProtectedRoute>
                 <MainPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/settings" element={
+              <ProtectedRoute>
+                <SettingsPage />
               </ProtectedRoute>
             } />
             <Route path="/admin" element={

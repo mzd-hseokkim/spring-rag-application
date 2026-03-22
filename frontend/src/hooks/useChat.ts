@@ -66,9 +66,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
 export function useChat() {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
-  const sessionIdRef = useRef(generateSessionId());
+  const sessionIdRef = useRef(localStorage.getItem('chat:sessionId') || generateSessionId());
+  const conversationIdRef = useRef(localStorage.getItem('chat:conversationId') || '');
   const clientRef = useRef<Client | null>(null);
   const connectedRef = useRef(false);
+  const restoredRef = useRef(false);
 
   // WebSocket 연결
   useEffect(() => {
@@ -133,6 +135,29 @@ export function useChat() {
     return () => {
       client.deactivate();
     };
+  }, []);
+
+  // 마운트 시 이전 대화 복원
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const savedConvId = conversationIdRef.current;
+    const savedSessionId = sessionIdRef.current;
+    if (savedConvId && savedSessionId) {
+      fetchConversationDetail(savedConvId).then(detail => {
+        const messages: Message[] = detail.messages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          ...(m.sources && m.sources.length > 0 ? { sources: m.sources } : {}),
+        }));
+        dispatch({ type: 'LOAD_MESSAGES', messages });
+      }).catch(() => {
+        // 복원 실패 시 새 세션
+        sessionIdRef.current = generateSessionId();
+        localStorage.removeItem('chat:sessionId');
+        localStorage.removeItem('chat:conversationId');
+      });
+    }
   }, []);
 
   const sendMessage = useCallback(async (content: string, modelId?: string | null,
@@ -229,11 +254,17 @@ export function useChat() {
 
   const newSession = useCallback(() => {
     sessionIdRef.current = generateSessionId();
+    conversationIdRef.current = '';
+    localStorage.setItem('chat:sessionId', sessionIdRef.current);
+    localStorage.removeItem('chat:conversationId');
     dispatch({ type: 'NEW_SESSION' });
   }, []);
 
   const loadConversation = useCallback(async (conversationId: string, sessionId: string) => {
     sessionIdRef.current = sessionId;
+    conversationIdRef.current = conversationId;
+    localStorage.setItem('chat:sessionId', sessionId);
+    localStorage.setItem('chat:conversationId', conversationId);
     try {
       const detail = await fetchConversationDetail(conversationId);
       const messages: Message[] = detail.messages.map(m => ({
