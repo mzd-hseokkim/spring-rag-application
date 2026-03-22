@@ -10,6 +10,7 @@ import type { Document, DocumentTag, DocumentCollection } from '@/types';
 interface Props {
   documents: Document[];
   onRefresh?: () => void;
+  refreshKey?: number;
 }
 
 const STATUS_CONFIG: Record<string, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline'; className: string }> = {
@@ -19,14 +20,14 @@ const STATUS_CONFIG: Record<string, { label: string; variant: 'default' | 'secon
   FAILED: { label: '실패', variant: 'destructive', className: '' },
 };
 
-export function DocumentList({ documents, onRefresh }: Props) {
+export function DocumentList({ documents, onRefresh, refreshKey = 0 }: Props) {
   const [allTags, setAllTags] = useState<DocumentTag[]>([]);
   const [allCollections, setAllCollections] = useState<DocumentCollection[]>([]);
 
   useEffect(() => {
     fetchTags().then(setAllTags).catch(() => {});
     fetchCollections().then(setAllCollections).catch(() => {});
-  }, []);
+  }, [refreshKey]);
 
   const handleTagToggle = async (doc: Document, tagId: string, checked: boolean) => {
     const currentIds = doc.tags?.map(t => t.id) || [];

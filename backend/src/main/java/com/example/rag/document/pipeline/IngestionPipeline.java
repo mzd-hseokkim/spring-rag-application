@@ -78,29 +78,57 @@ public class IngestionPipeline {
             String text = parse(contentType, fileBytes);
             log.info("Document {} parsed: {} characters", documentId, text.length());
 
-            // 2. 시맨틱 청킹 → parent 청크
+            // 2. 표/비표 세그먼트 분리 → 청킹
             ChunkingStrategy strategy = buildChunkingStrategy(chunkSettings);
-            List<String> parentChunks = strategy.chunk(text);
-            log.info("Document {} chunked: {} parents", documentId, parentChunks.size());
-
-            // 3. 각 parent → child 분할 (설정 가능한 파라미터)
             FixedSizeChunkingStrategy childChunker =
                     new FixedSizeChunkingStrategy(chunkSettings.childChunkSize(), chunkSettings.childOverlap());
 
+            List<TableAwareChunker.Segment> segments = TableAwareChunker.splitSegments(text);
+            List<String> parentChunks = new ArrayList<>();
+            List<Boolean> parentIsTable = new ArrayList<>();
+
+            for (var segment : segments) {
+                if (segment.isTable()) {
+                    // 표는 하나의 parent 청크로 유지
+                    parentChunks.add(segment.content());
+                    parentIsTable.add(true);
+                } else {
+                    // 비표 텍스트는 기존 전략으로 청킹
+                    List<String> chunks = strategy.chunk(segment.content());
+                    for (String chunk : chunks) {
+                        parentChunks.add(chunk);
+                        parentIsTable.add(false);
+                    }
+                }
+            }
+            log.info("Document {} chunked: {} parents ({} tables)",
+                    documentId, parentChunks.size(),
+                    parentIsTable.stream().filter(b -> b).count());
+
+            // 3. 각 parent → child 분할
             List<String> allChildContents = new ArrayList<>();
             List<Integer> childToParentIndex = new ArrayList<>();
             List<Map<String, Object>> childMetadata = new ArrayList<>();
 
             for (int p = 0; p < parentChunks.size(); p++) {
-                List<String> children = childChunker.chunk(parentChunks.get(p));
+                boolean isTable = parentIsTable.get(p);
                 String sectionHeader = detectSectionHeader(parentChunks.get(p));
+
+                List<String> children;
+                if (isTable) {
+                    // 표 청크는 분할하지 않고 그대로 유지
+                    children = List.of(parentChunks.get(p));
+                } else {
+                    children = childChunker.chunk(parentChunks.get(p));
+                }
+
                 for (String child : children) {
                     allChildContents.add(child);
                     childToParentIndex.add(p);
-                    // 메타데이터: 문서 제목 + 섹션 헤더
                     Map<String, Object> meta = new LinkedHashMap<>();
                     if (filename != null) meta.put("documentTitle", filename);
                     if (sectionHeader != null) meta.put("sectionHeader", sectionHeader);
+                    if (isTable) meta.put("type", "TABLE");
                     meta.put("parentIndex", p);
                     childMetadata.add(meta);
                 }

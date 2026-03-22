@@ -26,9 +26,10 @@ interface Props {
   chat: ChatState;
   onNewSession: () => void;
   onSendComplete: () => void;
+  filterRefreshKey?: number;
 }
 
-export function ChatView({ models, chat, onNewSession, onSendComplete }: Props) {
+export function ChatView({ models, chat, onNewSession, onSendComplete, filterRefreshKey = 0 }: Props) {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(
     () => localStorage.getItem('chat:modelId')
   );
@@ -62,7 +63,7 @@ export function ChatView({ models, chat, onNewSession, onSendComplete }: Props) 
   useEffect(() => {
     fetchTags().then(setTags).catch(() => {});
     fetchCollections().then(setCollections).catch(() => {});
-  }, []);
+  }, [filterRefreshKey]);
 
   const toggleTag = (id: string) => {
     setSelectedTagIds(prev => {

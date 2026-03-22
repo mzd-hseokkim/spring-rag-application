@@ -169,14 +169,24 @@ export function MessageList({ messages, streaming }: Props) {
                 )}
 
                 {expandedSources[i] && msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {msg.sources.map((s, j) => (
-                      <div key={j} className="flex gap-1.5 items-baseline text-xs text-muted-foreground py-0.5 pl-1">
-                        <span className="font-medium text-primary">{s.filename}</span>
-                        <span className="text-[11px]">#{s.chunkIndex}</span>
-                        <span className="text-[11px] truncate">{s.excerpt}</span>
-                      </div>
-                    ))}
+                  <div className="mt-1.5 space-y-1.5">
+                    {msg.sources.map((s, j) => {
+                      const isTableExcerpt = s.excerpt.trimStart().startsWith('|');
+                      return (
+                        <div key={j} className="text-xs text-muted-foreground py-0.5 pl-1">
+                          <div className="flex gap-1.5 items-baseline">
+                            <span className="font-medium text-primary">{s.filename}</span>
+                            <span className="text-[11px]">#{s.chunkIndex}</span>
+                            {!isTableExcerpt && <span className="text-[11px] truncate">{s.excerpt}</span>}
+                          </div>
+                          {isTableExcerpt && (
+                            <div className="mt-1 overflow-x-auto [&_table]:border-collapse [&_table]:text-[11px] [&_table]:w-full [&_th]:border [&_th]:border-border [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:bg-muted [&_th]:font-semibold [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-0.5">
+                              <Markdown remarkPlugins={[remarkGfm]}>{s.excerpt}</Markdown>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

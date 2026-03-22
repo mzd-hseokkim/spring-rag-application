@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ChatView } from '@/components/chat/ChatView';
@@ -22,6 +23,11 @@ export function MainPage() {
   const { documents, uploading, upload, refresh: refreshDocs } = useDocuments();
   const modelState = useModels();
   const chat = useChat();
+  const [tagColRefreshKey, setTagColRefreshKey] = useState(0);
+  const bumpTagColKey = () => {
+    setTagColRefreshKey(k => k + 1);
+    refreshDocs();
+  };
   const { conversations, refresh: refreshConversations, remove, rename } = useConversations();
 
   const isAdmin = user?.role === 'ADMIN';
@@ -71,11 +77,11 @@ export function MainPage() {
             <div className="bg-background text-foreground rounded-lg m-2 p-3 space-y-3">
               <DocumentUpload onUpload={upload} uploading={uploading} isAdmin={isAdmin} />
               <div className="space-y-3">
-                <TagManager />
-                <CollectionManager />
+                <TagManager onTagsChange={bumpTagColKey} />
+                <CollectionManager onCollectionsChange={bumpTagColKey} />
               </div>
               <div className="border-t border-border pt-3">
-                <DocumentList documents={documents} onRefresh={refreshDocs} />
+                <DocumentList documents={documents} onRefresh={refreshDocs} refreshKey={tagColRefreshKey} />
               </div>
             </div>
           </TabsContent>
@@ -104,6 +110,7 @@ export function MainPage() {
           chat={chat}
           onNewSession={handleNewSession}
           onSendComplete={handleSendComplete}
+          filterRefreshKey={tagColRefreshKey}
         />
       </main>
     </div>
