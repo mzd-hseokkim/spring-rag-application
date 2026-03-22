@@ -1,7 +1,6 @@
 package com.example.rag.document;
 
 import com.example.rag.auth.AppUserRepository;
-import com.example.rag.auth.AppUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;

@@ -44,10 +44,10 @@ public class QueryCompressor {
 
         String prompt = compressPrompt.formatted(historyText, currentMessage);
 
-        return chatClient().prompt()
+        String result = chatClient().prompt()
                 .user(prompt)
                 .call()
-                .content()
-                .trim();
+                .content();
+        return result != null ? result.trim() : currentMessage;
     }
 }

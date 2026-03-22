@@ -71,6 +71,9 @@ public class ReindexService {
             });
 
             // 복원된 텍스트로 재처리 (contentType은 text/plain으로 — 이미 파싱된 텍스트)
+            if (fullText == null) {
+                throw new IllegalStateException("재인덱싱할 텍스트 복원에 실패했습니다.");
+            }
             pipeline.doProcess(documentId, "text/plain", fullText.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         } catch (Exception e) {

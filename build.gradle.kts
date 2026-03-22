@@ -1,3 +1,14 @@
+plugins {
+    id("org.sonarqube") version "7.2.3.7755"
+}
+
+sonar {
+    properties {
+        property("sonar.projectKey", "spring-rag-server")
+        property("sonar.host.url", "http://localhost:9000")
+    }
+}
+
 tasks.register<Exec>("pnpmInstall") {
     group = "frontend"
     description = "Install frontend dependencies"

@@ -19,7 +19,7 @@ public class TableAwareChunker {
 
     // 마크다운 표: |로 시작하는 연속 행 (2행 이상)
     private static final Pattern MD_TABLE = Pattern.compile(
-            "((?:^\\|.+\\|[ \\t]*\\n){2,})", Pattern.MULTILINE);
+            "((?:^\\|.+\\|[ \\t]*\\n){2,}+)", Pattern.MULTILINE);
 
     /**
      * 텍스트를 표와 비표 세그먼트로 분리한다.
@@ -36,16 +36,7 @@ public class TableAwareChunker {
         }
 
         // 마크다운 표 감지 (HTML 블록과 겹치지 않는 것만)
-        Matcher mdMatcher = MD_TABLE.matcher(text);
-        while (mdMatcher.find()) {
-            int start = mdMatcher.start();
-            int end = mdMatcher.end();
-            boolean overlaps = tableRanges.stream()
-                    .anyMatch(r -> start < r[1] && end > r[0]);
-            if (!overlaps) {
-                tableRanges.add(new int[]{start, end});
-            }
-        }
+        addNonOverlappingMdTables(text, tableRanges);
 
         // 범위 정렬
         tableRanges.sort((a, b) -> Integer.compare(a[0], b[0]));
@@ -78,6 +69,19 @@ public class TableAwareChunker {
         }
 
         return segments;
+    }
+
+    private static void addNonOverlappingMdTables(String text, List<int[]> tableRanges) {
+        Matcher mdMatcher = MD_TABLE.matcher(text);
+        while (mdMatcher.find()) {
+            int start = mdMatcher.start();
+            int end = mdMatcher.end();
+            boolean overlaps = tableRanges.stream()
+                    .anyMatch(r -> start < r[1] && end > r[0]);
+            if (!overlaps) {
+                tableRanges.add(new int[]{start, end});
+            }
+        }
     }
 
     public record Segment(String content, boolean isTable) {}

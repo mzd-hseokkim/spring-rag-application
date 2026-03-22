@@ -184,7 +184,9 @@ public class SemanticChunkingStrategy implements ChunkingStrategy {
     }
 
     private double cosine(float[] a, float[] b) {
-        double dot = 0, normA = 0, normB = 0;
+        double dot = 0;
+        double normA = 0;
+        double normB = 0;
         for (int i = 0; i < a.length; i++) {
             dot += a[i] * b[i];
             normA += a[i] * a[i];

@@ -36,8 +36,11 @@ public class QueryExpander {
         String response = chatClient().prompt()
                 .user(prompt)
                 .call()
-                .content()
-                .trim();
+                .content();
+        if (response == null) {
+            return List.of(query);
+        }
+        response = response.trim();
 
         List<String> queries = new ArrayList<>();
         queries.add(query);

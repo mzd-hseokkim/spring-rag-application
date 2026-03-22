@@ -44,11 +44,14 @@ public class MultiStepReasoner {
         String response = chatClient().prompt()
                 .user(decomposePrompt.formatted(query))
                 .call()
-                .content()
-                .trim();
+                .content();
+        if (response == null) {
+            return List.of();
+        }
+        response = response.trim();
 
         if (response.toUpperCase().contains("SINGLE")) {
-            return null;
+            return List.of();
         }
 
         return Arrays.stream(response.split("\n"))

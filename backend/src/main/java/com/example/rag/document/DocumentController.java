@@ -54,7 +54,7 @@ public class DocumentController {
             byte[] fileBytes = file.getBytes();
             ingestionPipeline.process(document.getId(), file.getContentType(), fileBytes);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read file", e);
+            throw new com.example.rag.common.RagException("Failed to read file", e);
         }
 
         return ResponseEntity.status(HttpStatus.ACCEPTED)

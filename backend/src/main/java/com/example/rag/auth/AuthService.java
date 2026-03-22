@@ -10,6 +10,8 @@ import java.util.UUID;
 @Service
 public class AuthService {
 
+    private static final String USER_NOT_FOUND = "사용자를 찾을 수 없습니다.";
+
     private final AppUserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
@@ -69,7 +71,7 @@ public class AuthService {
 
     public UserDto getUser(UUID userId) {
         AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
         return toDto(user);
     }
 
@@ -93,7 +95,7 @@ public class AuthService {
     @Transactional
     public UserDto updateProfile(UUID userId, String name, String avatarUrl) {
         AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
         if (name != null && !name.isBlank()) user.setName(name.trim());
         if (avatarUrl != null) user.setAvatarUrl(avatarUrl.isBlank() ? null : avatarUrl.trim());
         userRepository.save(user);
@@ -103,7 +105,7 @@ public class AuthService {
     @Transactional
     public void changePassword(UUID userId, String currentPassword, String newPassword) {
         AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND));
         if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
             throw new IllegalArgumentException("현재 비밀번호가 올바르지 않습니다.");
         }

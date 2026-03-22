@@ -22,6 +22,7 @@ frontend/dist/
 # Environment
 .env
 *.log
+gradle.properties
 
 # OS
 .DS_Store

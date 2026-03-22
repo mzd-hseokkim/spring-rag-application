@@ -59,10 +59,12 @@ public class SearchAgent {
         String response = chatClient().prompt()
                 .user(prompt)
                 .call()
-                .content()
-                .trim();
+                .content();
+        if (response == null) {
+            return new AnalysisResult(AgentAction.DIRECT_ANSWER, "", List.of(), null);
+        }
 
-        return parseAnalysisResponse(response, documents);
+        return parseAnalysisResponse(response.trim(), documents);
     }
 
     /**
@@ -79,10 +81,12 @@ public class SearchAgent {
         String response = chatClient().prompt()
                 .user(decidePrompt.formatted(docList, query))
                 .call()
-                .content()
-                .trim();
+                .content();
+        if (response == null) {
+            return AgentDecision.directAnswer();
+        }
 
-        String upper = response.toUpperCase();
+        String upper = response.trim().toUpperCase();
         if (upper.contains("DIRECT_ANSWER") || upper.contains("DIRECT")) {
             return AgentDecision.directAnswer();
         }

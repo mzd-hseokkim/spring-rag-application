@@ -22,7 +22,7 @@ public class PromptLoader {
             }
             return content.trim();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load prompt: " + name, e);
+            throw new RagException("Failed to load prompt: " + name, e);
         }
     }
 }

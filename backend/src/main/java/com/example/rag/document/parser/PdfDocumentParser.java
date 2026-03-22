@@ -43,14 +43,14 @@ public class PdfDocumentParser implements DocumentParser {
             // 텍스트 끝에 추출된 표 추가 (마크다운 형식)
             StringBuilder sb = new StringBuilder(text);
             for (int i = 0; i < tables.size(); i++) {
-                sb.append("\n\n<!-- TABLE %d -->\n".formatted(i + 1));
+                sb.append("\n\n<!-- TABLE ").append(i + 1).append(" -->\n");
                 sb.append(tables.get(i));
                 sb.append("\n<!-- /TABLE -->\n");
             }
             return sb.toString();
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to parse PDF", e);
+            throw new com.example.rag.common.RagException("Failed to parse PDF", e);
         }
     }
 

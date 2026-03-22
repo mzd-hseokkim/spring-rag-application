@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 
 @Service
@@ -50,7 +49,7 @@ public class ConversationService {
             redisTemplate.opsForList().trim(key, -maxMessages, -1);
             redisTemplate.expire(key, ttl);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize message", e);
+            throw new com.example.rag.common.RagException("Failed to serialize message", e);
         }
 
         // DB 영속 저장
@@ -106,7 +105,7 @@ public class ConversationService {
                     try {
                         return objectMapper.readValue(json, ConversationMessage.class);
                     } catch (JsonProcessingException e) {
-                        throw new RuntimeException("Failed to deserialize message", e);
+                        throw new com.example.rag.common.RagException("Failed to deserialize message", e);
                     }
                 })
                 .toList();

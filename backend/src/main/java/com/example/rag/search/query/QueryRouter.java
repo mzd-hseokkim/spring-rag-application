@@ -22,12 +22,14 @@ public class QueryRouter {
     }
 
     public QueryRoute route(String query) {
-        String response = chatClient().prompt()
+        String raw = chatClient().prompt()
                 .user(routePrompt.formatted(query))
                 .call()
-                .content()
-                .trim()
-                .toUpperCase();
+                .content();
+        if (raw == null) {
+            return QueryRoute.RAG;
+        }
+        String response = raw.trim().toUpperCase();
 
         if (response.contains("GENERAL")) {
             return QueryRoute.GENERAL;

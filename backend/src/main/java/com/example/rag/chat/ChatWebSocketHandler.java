@@ -19,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ChatWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
+    private static final String TYPE_ERROR = "error";
+    private static final String KEY_MESSAGE = "message";
 
     private final ChatService chatService;
     private final InputValidator inputValidator;
@@ -45,7 +47,7 @@ public class ChatWebSocketHandler {
             inputValidator.validate(request.message());
             rateLimiter.checkLimit(userId);
         } catch (Exception e) {
-            sendToUser(userId, Map.of("type", "error", "message", e.getMessage()));
+            sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, e.getMessage()));
             return;
         }
 
@@ -69,7 +71,7 @@ public class ChatWebSocketHandler {
                         step -> sendToUser(userId, Map.of(
                                 "type", "agent_step",
                                 "step", step.step(),
-                                "message", step.message()
+                                KEY_MESSAGE, step.message()
                         ))
                 );
 
@@ -77,7 +79,7 @@ public class ChatWebSocketHandler {
                         token -> sendToUser(userId, Map.of("type", "token", "content", token)),
                         error -> {
                             log.error("Chat stream error for session {}: {}", sessionId, error.getMessage());
-                            sendToUser(userId, Map.of("type", "error", "message", error.getMessage()));
+                            sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, error.getMessage()));
                             activeStreams.remove(sessionId);
                         },
                         () -> {
@@ -91,7 +93,7 @@ public class ChatWebSocketHandler {
 
             } catch (Exception e) {
                 log.error("Chat error for session {}: {}", sessionId, e.getMessage());
-                sendToUser(userId, Map.of("type", "error", "message", e.getMessage()));
+                sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, e.getMessage()));
             }
         });
     }

@@ -3,10 +3,13 @@ package com.example.rag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 @SpringBootTest
 class RagApplicationTests {
 
     @Test
-    void contextLoads() {
+    void contextLoads(org.springframework.context.ApplicationContext context) {
+        assertNotNull(context);
     }
 }

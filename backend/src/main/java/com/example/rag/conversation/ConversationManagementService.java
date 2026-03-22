@@ -1,6 +1,5 @@
 package com.example.rag.conversation;
 
-import com.example.rag.auth.AppUser;
 import com.example.rag.auth.AppUserRepository;
 import com.example.rag.model.LlmModel;
 import com.example.rag.model.LlmModelRepository;
@@ -20,6 +19,7 @@ import java.util.UUID;
 public class ConversationManagementService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationManagementService.class);
+    private static final String CONVERSATION_NOT_FOUND = "Conversation not found: ";
 
     private final ConversationRepository conversationRepository;
     private final LlmModelRepository llmModelRepository;
@@ -49,7 +49,7 @@ public class ConversationManagementService {
     @Transactional(readOnly = true)
     public ConversationDetailDto getDetail(UUID id) {
         Conversation conv = conversationRepository.findByIdWithModel(id)
-                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(CONVERSATION_NOT_FOUND + id));
         List<ConversationMessage> messages = conversationService.getHistory(conv.getSessionId());
         return new ConversationDetailDto(toDto(conv), messages);
     }
@@ -81,7 +81,7 @@ public class ConversationManagementService {
     @Transactional
     public ConversationDto updateTitle(UUID id, String title) {
         Conversation conv = conversationRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(CONVERSATION_NOT_FOUND + id));
         conv.setTitle(title);
         conversationRepository.save(conv);
         return toDto(conv);
@@ -90,7 +90,7 @@ public class ConversationManagementService {
     @Transactional
     public void delete(UUID id) {
         Conversation conv = conversationRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Conversation not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(CONVERSATION_NOT_FOUND + id));
         conversationService.deleteSession(conv.getSessionId());
         conversationRepository.delete(conv);
     }

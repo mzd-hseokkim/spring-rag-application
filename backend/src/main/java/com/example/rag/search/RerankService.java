@@ -58,8 +58,11 @@ public class RerankService {
             String response = chatClient().prompt()
                     .user(rerankPrompt.formatted(query, truncatedContent))
                     .call()
-                    .content()
-                    .trim();
+                    .content();
+            if (response == null) {
+                return chunk.score();
+            }
+            response = response.trim();
 
             String digits = response.replaceAll("[^0-9.]", "");
             return digits.isEmpty() ? 0.0 : Math.min(10.0, Double.parseDouble(digits));

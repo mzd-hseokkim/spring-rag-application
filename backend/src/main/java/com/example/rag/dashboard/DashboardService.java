@@ -16,6 +16,9 @@ import java.util.Map;
 @Service
 public class DashboardService {
 
+    private static final String KEY_INPUT_TOKENS = "inputTokens";
+    private static final String KEY_OUTPUT_TOKENS = "outputTokens";
+
     private final PipelineTraceRepository traceRepository;
     private final TokenUsageRepository tokenUsageRepository;
     private final AppUserRepository userRepository;
@@ -82,8 +85,8 @@ public class DashboardService {
         return tokenUsageRepository.sumByDay(after).stream()
                 .map(row -> Map.<String, Object>of(
                         "date", row[0].toString(),
-                        "inputTokens", ((Number) row[1]).longValue(),
-                        "outputTokens", ((Number) row[2]).longValue()))
+                        KEY_INPUT_TOKENS, ((Number) row[1]).longValue(),
+                        KEY_OUTPUT_TOKENS, ((Number) row[2]).longValue()))
                 .toList();
     }
 
@@ -94,8 +97,8 @@ public class DashboardService {
                 .map(row -> Map.<String, Object>of(
                         "email", row[0].toString(),
                         "name", row[1].toString(),
-                        "inputTokens", ((Number) row[2]).longValue(),
-                        "outputTokens", ((Number) row[3]).longValue(),
+                        KEY_INPUT_TOKENS, ((Number) row[2]).longValue(),
+                        KEY_OUTPUT_TOKENS, ((Number) row[3]).longValue(),
                         "requestCount", ((Number) row[4]).longValue()))
                 .toList();
     }
@@ -107,8 +110,8 @@ public class DashboardService {
                 .map(row -> Map.<String, Object>of(
                         "modelName", row[0].toString(),
                         "purpose", row[1].toString(),
-                        "inputTokens", ((Number) row[2]).longValue(),
-                        "outputTokens", ((Number) row[3]).longValue(),
+                        KEY_INPUT_TOKENS, ((Number) row[2]).longValue(),
+                        KEY_OUTPUT_TOKENS, ((Number) row[3]).longValue(),
                         "requestCount", ((Number) row[4]).longValue()))
                 .toList();
     }

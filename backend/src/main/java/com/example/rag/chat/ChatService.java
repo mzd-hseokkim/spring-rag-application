@@ -28,6 +28,9 @@ import java.util.stream.Collectors;
 @Service
 public class ChatService {
 
+    private static final String STEP_GENERATE = "generate";
+    private static final String STEP_SEARCH = "search";
+
     private final String ragSystemPrompt;
     private final String generalSystemPrompt;
 
@@ -84,6 +87,7 @@ public class ChatService {
         return modelProvider.getChatClient(ModelPurpose.CHAT);
     }
 
+    @SuppressWarnings("java:S107")
     public ChatResponse chat(String sessionId, String message, String modelId, UUID userId,
                              boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds,
                              Consumer<AgentStepEvent> stepCallback) {
@@ -133,6 +137,7 @@ public class ChatService {
 
     // ========== 3단계 통합 파이프라인 (merge-analysis: true) ==========
 
+    @SuppressWarnings("java:S107") // internal pipeline method — parameter object adds unnecessary indirection
     private ChatResponse chatMergedPipeline(String sessionId, String message, String modelId,
                                              UUID userId, boolean includePublicDocs,
                                              List<UUID> tagIds, List<UUID> collectionIds,
@@ -148,22 +153,22 @@ public class ChatService {
 
         return switch (analysis.action()) {
             case DIRECT_ANSWER -> {
-                callback.accept(new AgentStepEvent("generate", "직접 답변 생성 중..."));
+                callback.accept(new AgentStepEvent(STEP_GENERATE, "직접 답변 생성 중..."));
                 pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
                 yield chatGeneral(sessionId, message, modelId);
             }
             case CLARIFY -> {
-                callback.accept(new AgentStepEvent("generate", "질문 명확화 요청 중..."));
+                callback.accept(new AgentStepEvent(STEP_GENERATE, "질문 명확화 요청 중..."));
                 pipelineTracer.logTrace(trace, userId, "CLARIFY");
                 yield chatClarify(sessionId, message, modelId);
             }
             case SEARCH -> {
                 String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
                 if (analysis.isMultiStep()) {
-                    yield chatMultiStep(sessionId, message, searchQuery, analysis.subQueries(),
-                            analysis.targetDocumentIds(), modelId, userId, trace, callback);
+                    yield chatMultiStep(sessionId, searchQuery, analysis.subQueries(),
+                            analysis.targetDocumentIds(), userId, trace, callback);
                 } else {
-                    callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
+                    callback.accept(new AgentStepEvent(STEP_SEARCH, "문서 검색 중..."));
                     yield chatWithRag(sessionId, message, searchQuery,
                             analysis.targetDocumentIds(), modelId, userId, trace, callback);
                 }
@@ -173,6 +178,7 @@ public class ChatService {
 
     // ========== 레거시 파이프라인 (merge-analysis: false) ==========
 
+    @SuppressWarnings("java:S107")
     private ChatResponse chatLegacyPipeline(String sessionId, String message, String modelId,
                                              UUID userId, boolean includePublicDocs,
                                              List<UUID> tagIds, List<UUID> collectionIds,
@@ -205,13 +211,13 @@ public class ChatService {
                 callback.accept(new AgentStepEvent("decompose", "질문 복잡도 분석 중..."));
                 trace.startStep("decompose");
                 List<String> subQueries = multiStepReasoner.decompose(searchQuery);
-                trace.endStep(Map.of("isMultiStep", subQueries != null));
+                trace.endStep(Map.of("isMultiStep", !subQueries.isEmpty()));
 
-                if (subQueries != null && subQueries.size() > 1) {
-                    yield chatMultiStep(sessionId, message, searchQuery, subQueries,
-                            decision.targetDocumentIds(), modelId, userId, trace, callback);
+                if (subQueries.size() > 1) {
+                    yield chatMultiStep(sessionId, searchQuery, subQueries,
+                            decision.targetDocumentIds(), userId, trace, callback);
                 } else {
-                    callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
+                    callback.accept(new AgentStepEvent(STEP_SEARCH, "문서 검색 중..."));
                     yield chatWithRag(sessionId, message, searchQuery,
                             decision.targetDocumentIds(), modelId, userId, trace, callback);
                 }
@@ -221,14 +227,15 @@ public class ChatService {
 
     // ========== 공통 메서드 ==========
 
+    @SuppressWarnings("java:S107")
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
                                       List<UUID> documentIds, String modelId, UUID userId,
                                       TraceContext trace, Consumer<AgentStepEvent> callback) {
-        trace.startStep("search");
+        trace.startStep(STEP_SEARCH);
         List<ChunkSearchResult> searchResults = searchService.search(searchQuery, documentIds);
         trace.endStep(Map.of("resultCount", searchResults.size()));
 
-        callback.accept(new AgentStepEvent("generate", "답변 생성 중..."));
+        callback.accept(new AgentStepEvent(STEP_GENERATE, "답변 생성 중..."));
 
         String context = buildContext(searchResults);
         String history = buildHistory(sessionId);
@@ -252,7 +259,7 @@ public class ChatService {
 
         StringBuilder fullResponse = new StringBuilder();
 
-        trace.startStep("generate");
+        trace.startStep(STEP_GENERATE);
         Flux<String> tokenStream = chatClient(modelId).prompt()
                 .system(ragSystemPrompt)
                 .user(userPrompt)
@@ -270,9 +277,9 @@ public class ChatService {
         return new ChatResponse(tokenStream, sources, sourceRefs);
     }
 
-    private ChatResponse chatMultiStep(String sessionId, String message, String searchQuery,
+    private ChatResponse chatMultiStep(String sessionId, String searchQuery,
                                         List<String> subQueries, List<UUID> documentIds,
-                                        String modelId, UUID userId, TraceContext trace,
+                                        UUID userId, TraceContext trace,
                                         Consumer<AgentStepEvent> callback) {
         trace.startStep("multi_step");
         var result = multiStepReasoner.reason(searchQuery, subQueries, documentIds, callback);
@@ -300,7 +307,7 @@ public class ChatService {
     private ChatResponse chatGeneral(String sessionId, String message, String modelId) {
         String history = buildHistory(sessionId);
         String userPrompt = history.equals("(없음)") ? message
-                : "[이전 대화]\n%s\n\n질문: %s".formatted(history, message);
+                : "[이전 대화]" + "\n" + history + "\n\n" + "질문: " + message;
 
         StringBuilder fullResponse = new StringBuilder();
 
@@ -335,7 +342,7 @@ public class ChatService {
 
     private String buildContext(List<ChunkSearchResult> results) {
         return results.stream()
-                .map(r -> "[출처: %s, 청크 %d]\n%s".formatted(r.filename(), r.chunkIndex(), r.contextContent()))
+                .map(r -> "[출처: " + r.filename() + ", 청크 " + r.chunkIndex() + "]\n" + r.contextContent())
                 .collect(Collectors.joining("\n\n"));
     }
 

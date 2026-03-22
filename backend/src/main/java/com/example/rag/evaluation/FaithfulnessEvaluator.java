@@ -35,17 +35,22 @@ public class FaithfulnessEvaluator {
 
     public void evaluate(String context, String response) {
         try {
-            String result = chatClient().prompt()
+            String raw = chatClient().prompt()
                     .user(PROMPT.formatted(truncate(context, 2000), truncate(response, 1000)))
                     .call()
-                    .content()
-                    .trim()
-                    .toUpperCase();
+                    .content();
+            if (raw == null) {
+                log.warn("faithfulness evaluation returned null");
+                return;
+            }
+            String result = raw.trim().toUpperCase();
 
             boolean faithful = result.contains("FAITHFUL") && !result.contains("NOT_FAITHFUL");
-            log.info("faithfulness={} response_preview=\"{}\"",
-                    faithful ? "FAITHFUL" : "NOT_FAITHFUL",
-                    truncate(response, 50));
+            if (log.isInfoEnabled()) {
+                log.info("faithfulness={} response_preview=\"{}\"",
+                        faithful ? "FAITHFUL" : "NOT_FAITHFUL",
+                        truncate(response, 50));
+            }
         } catch (Exception e) {
             log.warn("Faithfulness evaluation failed: {}", e.getMessage());
         }

@@ -32,6 +32,7 @@ public class AutoEvalService {
     private static final Logger log = LoggerFactory.getLogger(AutoEvalService.class);
     private static final int LEASE_SECONDS = 30;
     private static final int HEARTBEAT_SECONDS = 10;
+    private static final String FAILED_STATUS = "FAILED";
 
     private final String instanceId = UUID.randomUUID().toString().substring(0, 8);
 
@@ -126,6 +127,7 @@ public class AutoEvalService {
     }
 
     private ScheduledFuture<?> startHeartbeat(UUID runId) {
+        @SuppressWarnings("resource") // lifecycle managed by caller via ScheduledFuture.cancel + shutdown
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         return scheduler.scheduleAtFixedRate(() -> {
             try {
@@ -152,22 +154,7 @@ public class AutoEvalService {
                         .toList();
 
                 for (DocumentChunk chunk : parentChunks) {
-                    try {
-                        String prompt = questionGenPrompt.formatted(questionsPerChunk, chunk.getContent());
-                        String response = modelProvider.getChatClient(ModelPurpose.QUERY)
-                                .prompt().user(prompt).call().content();
-
-                        List<Map<String, String>> qas = parseQaList(response);
-                        for (Map<String, String> qa : qas) {
-                            questionRepository.save(new EvalQuestionEntity(
-                                    runId, docId,
-                                    qa.getOrDefault("question", ""),
-                                    qa.getOrDefault("expectedAnswer", ""),
-                                    qa.getOrDefault("type", "FACTUAL")));
-                        }
-                    } catch (Exception e) {
-                        log.warn("Failed to generate questions for chunk {}: {}", chunk.getId(), e.getMessage());
-                    }
+                    generateQuestionsForChunk(runId, docId, chunk, questionsPerChunk);
                 }
             }
 
@@ -180,7 +167,7 @@ public class AutoEvalService {
 
         } catch (Exception e) {
             log.error("Question generation failed for run {}: {}", runId, e.getMessage());
-            updateStatus(runId, "FAILED");
+            updateStatus(runId, FAILED_STATUS);
             releaseLease(runId);
         } finally {
             if (heartbeat != null) heartbeat.cancel(false);
@@ -203,39 +190,9 @@ public class AutoEvalService {
                     .toList();
 
             for (EvalQuestionEntity q : pendingQuestions) {
-                try {
-                    RagResult result = callRag(q.getQuestion());
-                    q.setActualResponse(result.response());
-                    q.setRetrievedContext(result.context());
-
-                    String judgeInput = judgePrompt.formatted(
-                            q.getQuestion(), q.getExpectedAnswer(),
-                            result.response(), truncate(result.context(), 2000));
-                    String judgeResponse = modelProvider.getChatClient(ModelPurpose.QUERY)
-                            .prompt().user(judgeInput).call().content();
-
-                    Map<String, Object> scores = parseJudgeResult(judgeResponse);
-                    q.setFaithfulness(toDouble(scores.get("faithfulness")));
-                    q.setRelevance(toDouble(scores.get("relevance")));
-                    q.setCorrectness(toDouble(scores.get("correctness")));
-                    q.setJudgeComment((String) scores.getOrDefault("comment", ""));
-                    q.setStatus("COMPLETED");
-
-                } catch (Exception e) {
-                    log.warn("Eval failed for question {}: {}", q.getId(), e.getMessage());
-                    q.setStatus("FAILED");
-                    q.setJudgeComment("평가 실패: " + e.getMessage());
-                }
-
+                evaluateQuestion(q);
                 questionRepository.save(q);
-
-                // completedQuestions 갱신 (PENDING이 아닌 것의 수)
-                long completed = questionRepository.findByEvalRunIdOrderByCreatedAt(runId).stream()
-                        .filter(x -> !"PENDING".equals(x.getStatus()))
-                        .count();
-                EvalRunEntity run = runRepository.findById(runId).orElseThrow();
-                run.setCompletedQuestions((int) completed);
-                runRepository.save(run);
+                updateCompletedCount(runId);
             }
 
             // 완료 처리
@@ -250,7 +207,7 @@ public class AutoEvalService {
 
         } catch (Exception e) {
             log.error("Eval run failed for {}: {}", runId, e.getMessage());
-            updateStatus(runId, "FAILED");
+            updateStatus(runId, FAILED_STATUS);
             releaseLease(runId);
         } finally {
             if (heartbeat != null) heartbeat.cancel(false);
@@ -270,16 +227,69 @@ public class AutoEvalService {
         List<ChunkSearchResult> results = searchService.search(searchQuery, List.of());
 
         String context = results.stream()
-                .map(r -> "[%s, 청크 %d]\n%s".formatted(r.filename(), r.chunkIndex(), r.contextContent()))
+                .map(r -> "[" + r.filename() + ", 청크 " + r.chunkIndex() + "]\n" + r.contextContent())
                 .collect(Collectors.joining("\n\n"));
 
         String response = modelProvider.getChatClient(ModelPurpose.CHAT).prompt()
                 .system(ragSystemPrompt)
-                .user("[컨텍스트]\n%s\n\n질문: %s".formatted(context, question))
+                .user("[컨텍스트]\n" + context + "\n\n질문: " + question)
                 .call()
                 .content();
 
         return new RagResult(response, context);
+    }
+
+    private void generateQuestionsForChunk(UUID runId, UUID docId, DocumentChunk chunk, int questionsPerChunk) {
+        try {
+            String prompt = questionGenPrompt.formatted(questionsPerChunk, chunk.getContent());
+            String response = modelProvider.getChatClient(ModelPurpose.QUERY)
+                    .prompt().user(prompt).call().content();
+
+            List<Map<String, String>> qas = parseQaList(response);
+            for (Map<String, String> qa : qas) {
+                questionRepository.save(new EvalQuestionEntity(
+                        runId, docId,
+                        qa.getOrDefault("question", ""),
+                        qa.getOrDefault("expectedAnswer", ""),
+                        qa.getOrDefault("type", "FACTUAL")));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to generate questions for chunk {}: {}", chunk.getId(), e.getMessage());
+        }
+    }
+
+    private void evaluateQuestion(EvalQuestionEntity q) {
+        try {
+            RagResult result = callRag(q.getQuestion());
+            q.setActualResponse(result.response());
+            q.setRetrievedContext(result.context());
+
+            String judgeInput = judgePrompt.formatted(
+                    q.getQuestion(), q.getExpectedAnswer(),
+                    result.response(), truncate(result.context(), 2000));
+            String judgeResponse = modelProvider.getChatClient(ModelPurpose.QUERY)
+                    .prompt().user(judgeInput).call().content();
+
+            Map<String, Object> scores = parseJudgeResult(judgeResponse);
+            q.setFaithfulness(toDouble(scores.get("faithfulness")));
+            q.setRelevance(toDouble(scores.get("relevance")));
+            q.setCorrectness(toDouble(scores.get("correctness")));
+            q.setJudgeComment((String) scores.getOrDefault("comment", ""));
+            q.setStatus("COMPLETED");
+        } catch (Exception e) {
+            log.warn("Eval failed for question {}: {}", q.getId(), e.getMessage());
+            q.setStatus(FAILED_STATUS);
+            q.setJudgeComment("평가 실패: " + e.getMessage());
+        }
+    }
+
+    private void updateCompletedCount(UUID runId) {
+        long completed = questionRepository.findByEvalRunIdOrderByCreatedAt(runId).stream()
+                .filter(x -> !"PENDING".equals(x.getStatus()))
+                .count();
+        EvalRunEntity run = runRepository.findById(runId).orElseThrow();
+        run.setCompletedQuestions((int) completed);
+        runRepository.save(run);
     }
 
     private void updateStatus(UUID runId, String status) {

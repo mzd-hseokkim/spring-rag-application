@@ -51,7 +51,7 @@ public class ModelClientFactory {
 
     private EmbeddingModel createEmbeddingModel(LlmModel model) {
         if (model.getProvider() != ModelProvider.OLLAMA) {
-            throw new RuntimeException("Embedding is only supported for OLLAMA provider");
+            throw new com.example.rag.common.RagException("Embedding is only supported for OLLAMA provider");
         }
         OllamaApi api = OllamaApi.builder().baseUrl(model.getBaseUrl()).build();
         return OllamaEmbeddingModel.builder()
@@ -93,7 +93,7 @@ public class ModelClientFactory {
 
     private String resolveApiKey(String apiKeyRef) {
         if (apiKeyRef == null || apiKeyRef.isBlank()) {
-            throw new RuntimeException("API key is not set");
+            throw new com.example.rag.common.RagException("API key is not set");
         }
         // API 키 값이 직접 입력된 경우 (sk-로 시작) 그대로 사용
         if (apiKeyRef.startsWith("sk-")) {
@@ -102,7 +102,7 @@ public class ModelClientFactory {
         // 환경변수명인 경우 환경변수에서 조회
         String key = System.getenv(apiKeyRef);
         if (key == null || key.isBlank()) {
-            throw new RuntimeException("Environment variable not found: " + apiKeyRef);
+            throw new com.example.rag.common.RagException("Environment variable not found: " + apiKeyRef);
         }
         return key;
     }

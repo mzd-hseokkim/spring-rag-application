@@ -38,12 +38,18 @@ public class RelevanceEvaluator {
             String result = chatClient().prompt()
                     .user(PROMPT.formatted(query, truncate(response, 1000)))
                     .call()
-                    .content()
-                    .trim();
+                    .content();
+            if (result == null) {
+                log.warn("relevance evaluation returned null");
+                return;
+            }
+            result = result.trim();
 
-            String digits = result.replaceAll("[^0-9]", "");
+            String digits = result.replaceAll("\\D", "");
             int score = digits.isEmpty() ? 0 : Integer.parseInt(digits.substring(0, 1));
-            log.info("relevance_score={} query=\"{}\"", score, truncate(query, 50));
+            if (log.isInfoEnabled()) {
+                log.info("relevance_score={} query=\"{}\"", score, truncate(query, 50));
+            }
         } catch (Exception e) {
             log.warn("Relevance evaluation failed: {}", e.getMessage());
         }

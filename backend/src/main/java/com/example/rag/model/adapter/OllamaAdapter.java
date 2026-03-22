@@ -35,7 +35,7 @@ public class OllamaAdapter {
             }
             return models;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to discover Ollama models at " + url + ": " + e.getMessage());
+            throw new com.example.rag.common.RagException("Failed to discover Ollama models at " + url + ": " + e.getMessage());
         }
     }
 

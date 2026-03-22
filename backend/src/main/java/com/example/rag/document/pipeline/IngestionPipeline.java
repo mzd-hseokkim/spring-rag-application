@@ -26,6 +26,7 @@ import java.util.regex.Pattern;
 public class IngestionPipeline {
 
     private static final Logger log = LoggerFactory.getLogger(IngestionPipeline.class);
+    private static final String PROCESSING_STATUS = "PROCESSING";
     private static final Pattern SECTION_HEADER = Pattern.compile(
             "^(?:#{1,6}\\s+.+|[A-Z가-힣].{0,80}\\n[=\\-]{3,})$", Pattern.MULTILINE);
 
@@ -69,7 +70,7 @@ public class IngestionPipeline {
                 documentRepository.save(doc);
                 return doc.getFilename();
             });
-            eventPublisher.publish(documentId, "PROCESSING", "파싱 중...");
+            eventPublisher.publish(documentId, PROCESSING_STATUS, "파싱 중...");
 
             ChunkingSettings chunkSettings = settingsService.getChunkingSettings();
             EmbeddingSettings embedSettings = settingsService.getEmbeddingSettings();
@@ -86,21 +87,7 @@ public class IngestionPipeline {
             List<TableAwareChunker.Segment> segments = TableAwareChunker.splitSegments(text);
             List<String> parentChunks = new ArrayList<>();
             List<Boolean> parentIsTable = new ArrayList<>();
-
-            for (var segment : segments) {
-                if (segment.isTable()) {
-                    // 표는 하나의 parent 청크로 유지
-                    parentChunks.add(segment.content());
-                    parentIsTable.add(true);
-                } else {
-                    // 비표 텍스트는 기존 전략으로 청킹
-                    List<String> chunks = strategy.chunk(segment.content());
-                    for (String chunk : chunks) {
-                        parentChunks.add(chunk);
-                        parentIsTable.add(false);
-                    }
-                }
-            }
+            buildParentChunks(segments, strategy, parentChunks, parentIsTable);
             log.info("Document {} chunked: {} parents ({} tables)",
                     documentId, parentChunks.size(),
                     parentIsTable.stream().filter(b -> b).count());
@@ -109,32 +96,10 @@ public class IngestionPipeline {
             List<String> allChildContents = new ArrayList<>();
             List<Integer> childToParentIndex = new ArrayList<>();
             List<Map<String, Object>> childMetadata = new ArrayList<>();
-
-            for (int p = 0; p < parentChunks.size(); p++) {
-                boolean isTable = parentIsTable.get(p);
-                String sectionHeader = detectSectionHeader(parentChunks.get(p));
-
-                List<String> children;
-                if (isTable) {
-                    // 표 청크는 분할하지 않고 그대로 유지
-                    children = List.of(parentChunks.get(p));
-                } else {
-                    children = childChunker.chunk(parentChunks.get(p));
-                }
-
-                for (String child : children) {
-                    allChildContents.add(child);
-                    childToParentIndex.add(p);
-                    Map<String, Object> meta = new LinkedHashMap<>();
-                    if (filename != null) meta.put("documentTitle", filename);
-                    if (sectionHeader != null) meta.put("sectionHeader", sectionHeader);
-                    if (isTable) meta.put("type", "TABLE");
-                    meta.put("parentIndex", p);
-                    childMetadata.add(meta);
-                }
-            }
+            buildChildChunks(parentChunks, parentIsTable, childChunker, filename,
+                    allChildContents, childToParentIndex, childMetadata);
             log.info("Document {} child chunks: {}", documentId, allChildContents.size());
-            eventPublisher.publish(documentId, "PROCESSING",
+            eventPublisher.publish(documentId, PROCESSING_STATUS,
                     "임베딩 생성 중... (" + allChildContents.size() + "개 청크)");
 
             // 4. 배치 + 병렬 임베딩
@@ -189,6 +154,47 @@ public class IngestionPipeline {
         }
     }
 
+    private void buildParentChunks(List<TableAwareChunker.Segment> segments, ChunkingStrategy strategy,
+                                       List<String> parentChunks, List<Boolean> parentIsTable) {
+        for (var segment : segments) {
+            if (segment.isTable()) {
+                parentChunks.add(segment.content());
+                parentIsTable.add(true);
+            } else {
+                List<String> chunks = strategy.chunk(segment.content());
+                for (String chunk : chunks) {
+                    parentChunks.add(chunk);
+                    parentIsTable.add(false);
+                }
+            }
+        }
+    }
+
+    private void buildChildChunks(List<String> parentChunks, List<Boolean> parentIsTable,
+                                   FixedSizeChunkingStrategy childChunker, String filename,
+                                   List<String> allChildContents, List<Integer> childToParentIndex,
+                                   List<Map<String, Object>> childMetadata) {
+        for (int p = 0; p < parentChunks.size(); p++) {
+            boolean isTable = parentIsTable.get(p);
+            String sectionHeader = detectSectionHeader(parentChunks.get(p));
+
+            List<String> children = isTable
+                    ? List.of(parentChunks.get(p))
+                    : childChunker.chunk(parentChunks.get(p));
+
+            for (String child : children) {
+                allChildContents.add(child);
+                childToParentIndex.add(p);
+                Map<String, Object> meta = new LinkedHashMap<>();
+                if (filename != null) meta.put("documentTitle", filename);
+                if (sectionHeader != null) meta.put("sectionHeader", sectionHeader);
+                if (isTable) meta.put("type", "TABLE");
+                meta.put("parentIndex", p);
+                childMetadata.add(meta);
+            }
+        }
+    }
+
     private ChunkingStrategy buildChunkingStrategy(ChunkingSettings s) {
         if ("semantic".equalsIgnoreCase(s.mode())) {
             return new SemanticChunkingStrategy(
@@ -228,9 +234,8 @@ public class IngestionPipeline {
             batches.add(new int[]{i, Math.min(i + batchSize, texts.size())});
         }
 
-        ExecutorService executor = Executors.newFixedThreadPool(
-                Math.min(concurrency, batches.size()));
-        try {
+        try (ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(concurrency, batches.size()))) {
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (int[] range : batches) {
                 futures.add(CompletableFuture.runAsync(() -> {
@@ -239,15 +244,13 @@ public class IngestionPipeline {
                         int done = completed.incrementAndGet();
                         // 10% 단위로 진행률 보고
                         if (total >= 10 && done % Math.max(1, total / 10) == 0) {
-                            eventPublisher.publish(documentId, "PROCESSING",
+                            eventPublisher.publish(documentId, PROCESSING_STATUS,
                                     "임베딩 생성 중... (" + done + "/" + total + ")");
                         }
                     }
                 }, executor));
             }
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-        } finally {
-            executor.shutdown();
         }
         return result;
     }

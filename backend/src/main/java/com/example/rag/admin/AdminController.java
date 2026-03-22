@@ -23,6 +23,10 @@ import java.util.UUID;
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminController {
 
+    private static final String KEY_IS_PUBLIC = "isPublic";
+    private static final String TARGET_DOCUMENT = "DOCUMENT";
+    private static final String KEY_MESSAGE = "message";
+
     private final AdminService adminService;
     private final SettingsService settingsService;
     private final ReindexService reindexService;
@@ -83,9 +87,9 @@ public class AdminController {
     public AdminService.AdminDocumentDto updatePublic(@PathVariable UUID id,
                                                        @RequestBody Map<String, Boolean> body,
                                                        Authentication auth) {
-        AdminService.AdminDocumentDto result = adminService.updatePublic(id, body.get("isPublic"));
-        auditService.log(currentUserId(auth), null, "TOGGLE_PUBLIC", "DOCUMENT", id.toString(),
-                Map.of("isPublic", body.get("isPublic")), null);
+        AdminService.AdminDocumentDto result = adminService.updatePublic(id, body.get(KEY_IS_PUBLIC));
+        auditService.log(currentUserId(auth), null, "TOGGLE_PUBLIC", TARGET_DOCUMENT, id.toString(),
+                Map.of(KEY_IS_PUBLIC, body.get(KEY_IS_PUBLIC)), null);
         return result;
     }
 
@@ -93,7 +97,7 @@ public class AdminController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteDocument(@PathVariable UUID id, Authentication auth) {
         adminService.deleteDocument(id);
-        auditService.log(currentUserId(auth), null, "DELETE_DOCUMENT", "DOCUMENT", id.toString());
+        auditService.log(currentUserId(auth), null, "DELETE_DOCUMENT", TARGET_DOCUMENT, id.toString());
     }
 
     // --- 대화 관리 ---
@@ -122,16 +126,16 @@ public class AdminController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String, String> reindexDocument(@PathVariable UUID id, Authentication auth) {
         reindexService.reindexDocument(id);
-        auditService.log(currentUserId(auth), null, "REINDEX", "DOCUMENT", id.toString());
-        return Map.of("message", "재인덱싱이 시작되었습니다.");
+        auditService.log(currentUserId(auth), null, "REINDEX", TARGET_DOCUMENT, id.toString());
+        return Map.of(KEY_MESSAGE, "재인덱싱이 시작되었습니다.");
     }
 
     @PostMapping("/documents/reindex-all")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String, String> reindexAll(Authentication auth) {
         reindexService.reindexAll();
-        auditService.log(currentUserId(auth), null, "REINDEX_ALL", "DOCUMENT", null);
-        return Map.of("message", "전체 재인덱싱이 시작되었습니다.");
+        auditService.log(currentUserId(auth), null, "REINDEX_ALL", TARGET_DOCUMENT, null);
+        return Map.of(KEY_MESSAGE, "전체 재인덱싱이 시작되었습니다.");
     }
 
     // --- 설정 ---
@@ -178,6 +182,6 @@ public class AdminController {
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleError(IllegalArgumentException e) {
-        return Map.of("message", e.getMessage());
+        return Map.of(KEY_MESSAGE, e.getMessage());
     }
 }
