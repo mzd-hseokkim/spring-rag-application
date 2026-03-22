@@ -1,5 +1,6 @@
 package com.example.rag.admin;
 
+import com.example.rag.audit.AuditService;
 import com.example.rag.auth.UserRole;
 import com.example.rag.document.pipeline.ReindexService;
 import com.example.rag.settings.ChunkingSettings;
@@ -13,6 +14,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 
@@ -24,13 +26,20 @@ public class AdminController {
     private final AdminService adminService;
     private final SettingsService settingsService;
     private final ReindexService reindexService;
+    private final AuditService auditService;
 
     public AdminController(AdminService adminService,
                            SettingsService settingsService,
-                           ReindexService reindexService) {
+                           ReindexService reindexService,
+                           AuditService auditService) {
         this.adminService = adminService;
         this.settingsService = settingsService;
         this.reindexService = reindexService;
+        this.auditService = auditService;
+    }
+
+    private UUID currentUserId(Authentication auth) {
+        return UUID.fromString(auth.getName());
     }
 
     // --- 사용자 관리 ---
@@ -46,16 +55,20 @@ public class AdminController {
     public AdminService.AdminUserDto updateRole(@PathVariable UUID id,
                                                  @RequestBody Map<String, String> body,
                                                  Authentication auth) {
-        UUID currentUserId = UUID.fromString(auth.getName());
+        UUID adminId = currentUserId(auth);
         UserRole role = UserRole.valueOf(body.get("role"));
-        return adminService.updateRole(id, role, currentUserId);
+        AdminService.AdminUserDto result = adminService.updateRole(id, role, adminId);
+        auditService.log(adminId, null, "CHANGE_ROLE", "USER", id.toString(),
+                Map.of("newRole", role.name()), null);
+        return result;
     }
 
     @DeleteMapping("/users/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteUser(@PathVariable UUID id, Authentication auth) {
-        UUID currentUserId = UUID.fromString(auth.getName());
-        adminService.deleteUser(id, currentUserId);
+        UUID adminId = currentUserId(auth);
+        adminService.deleteUser(id, adminId);
+        auditService.log(adminId, null, "DELETE_USER", "USER", id.toString());
     }
 
     // --- 문서 관리 ---
@@ -68,14 +81,19 @@ public class AdminController {
 
     @PatchMapping("/documents/{id}/public")
     public AdminService.AdminDocumentDto updatePublic(@PathVariable UUID id,
-                                                       @RequestBody Map<String, Boolean> body) {
-        return adminService.updatePublic(id, body.get("isPublic"));
+                                                       @RequestBody Map<String, Boolean> body,
+                                                       Authentication auth) {
+        AdminService.AdminDocumentDto result = adminService.updatePublic(id, body.get("isPublic"));
+        auditService.log(currentUserId(auth), null, "TOGGLE_PUBLIC", "DOCUMENT", id.toString(),
+                Map.of("isPublic", body.get("isPublic")), null);
+        return result;
     }
 
     @DeleteMapping("/documents/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteDocument(@PathVariable UUID id) {
+    public void deleteDocument(@PathVariable UUID id, Authentication auth) {
         adminService.deleteDocument(id);
+        auditService.log(currentUserId(auth), null, "DELETE_DOCUMENT", "DOCUMENT", id.toString());
     }
 
     // --- 대화 관리 ---
@@ -93,23 +111,26 @@ public class AdminController {
 
     @DeleteMapping("/conversations/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteConversation(@PathVariable UUID id) {
+    public void deleteConversation(@PathVariable UUID id, Authentication auth) {
         adminService.deleteConversation(id);
+        auditService.log(currentUserId(auth), null, "DELETE_CONVERSATION", "CONVERSATION", id.toString());
     }
 
     // --- 재인덱싱 ---
 
     @PostMapping("/documents/{id}/reindex")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public Map<String, String> reindexDocument(@PathVariable UUID id) {
+    public Map<String, String> reindexDocument(@PathVariable UUID id, Authentication auth) {
         reindexService.reindexDocument(id);
+        auditService.log(currentUserId(auth), null, "REINDEX", "DOCUMENT", id.toString());
         return Map.of("message", "재인덱싱이 시작되었습니다.");
     }
 
     @PostMapping("/documents/reindex-all")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public Map<String, String> reindexAll() {
+    public Map<String, String> reindexAll(Authentication auth) {
         reindexService.reindexAll();
+        auditService.log(currentUserId(auth), null, "REINDEX_ALL", "DOCUMENT", null);
         return Map.of("message", "전체 재인덱싱이 시작되었습니다.");
     }
 
@@ -121,8 +142,10 @@ public class AdminController {
     }
 
     @PutMapping("/settings/chunking")
-    public ChunkingSettings updateChunkingSettings(@RequestBody ChunkingSettings settings) {
-        return settingsService.updateChunkingSettings(settings);
+    public ChunkingSettings updateChunkingSettings(@RequestBody ChunkingSettings settings, Authentication auth) {
+        ChunkingSettings result = settingsService.updateChunkingSettings(settings);
+        auditService.log(currentUserId(auth), null, "UPDATE_SETTINGS", "CHUNKING", null);
+        return result;
     }
 
     @GetMapping("/settings/embedding")
@@ -131,8 +154,25 @@ public class AdminController {
     }
 
     @PutMapping("/settings/embedding")
-    public EmbeddingSettings updateEmbeddingSettings(@RequestBody EmbeddingSettings settings) {
-        return settingsService.updateEmbeddingSettings(settings);
+    public EmbeddingSettings updateEmbeddingSettings(@RequestBody EmbeddingSettings settings, Authentication auth) {
+        EmbeddingSettings result = settingsService.updateEmbeddingSettings(settings);
+        auditService.log(currentUserId(auth), null, "UPDATE_SETTINGS", "EMBEDDING", null);
+        return result;
+    }
+
+    // --- 감사 로그 ---
+
+    @GetMapping("/audit-logs")
+    public Page<AuditService.AuditLogDto> getAuditLogs(
+            @RequestParam(required = false) String action,
+            @RequestParam(required = false) UUID userId,
+            @RequestParam(required = false) LocalDateTime from,
+            @RequestParam(required = false) LocalDateTime to,
+            @PageableDefault(size = 30, sort = "createdAt") Pageable pageable) {
+        if (action == null && userId == null && from == null && to == null) {
+            return auditService.findAll(pageable);
+        }
+        return auditService.search(action, userId, from, to, pageable);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

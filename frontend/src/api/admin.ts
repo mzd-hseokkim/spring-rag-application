@@ -130,6 +130,15 @@ export async function updateEmbeddingSettings(settings: EmbeddingSettings): Prom
   return res.json();
 }
 
+// --- 감사 로그 ---
+export async function fetchAuditLogs(page = 0, size = 30, action?: string) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (action) params.set('action', action);
+  const res = await fetch(`/api/admin/audit-logs?${params}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch audit logs');
+  return res.json();
+}
+
 // --- 대화 ---
 export async function fetchAdminConversations(page = 0, size = 20) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });

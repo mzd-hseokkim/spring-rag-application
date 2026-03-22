@@ -15,6 +15,7 @@ import { AdminConversationsPage } from '@/pages/admin/AdminConversationsPage';
 import { AdminModelsPage } from '@/pages/admin/AdminModelsPage';
 import { AdminDashboardPage } from '@/pages/admin/AdminDashboardPage';
 import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
+import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 
 function App() {
   return (
@@ -42,6 +43,7 @@ function App() {
               <Route path="documents" element={<AdminDocumentsPage />} />
               <Route path="conversations" element={<AdminConversationsPage />} />
               <Route path="models" element={<AdminModelsPage />} />
+              <Route path="audit" element={<AdminAuditPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

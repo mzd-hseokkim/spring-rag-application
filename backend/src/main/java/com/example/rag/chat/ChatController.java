@@ -1,11 +1,13 @@
 package com.example.rag.chat;
 
+import com.example.rag.audit.AuditService;
 import com.example.rag.common.guard.InputValidationException;
 import com.example.rag.common.guard.InputValidator;
 import com.example.rag.common.guard.RateLimitExceededException;
 import com.example.rag.common.guard.RateLimiter;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -28,22 +30,31 @@ public class ChatController {
     private final ConversationService conversationService;
     private final InputValidator inputValidator;
     private final RateLimiter rateLimiter;
+    private final AuditService auditService;
 
     public ChatController(ChatService chatService,
                           ConversationService conversationService,
                           InputValidator inputValidator,
-                          RateLimiter rateLimiter) {
+                          RateLimiter rateLimiter,
+                          AuditService auditService) {
         this.chatService = chatService;
         this.conversationService = conversationService;
         this.inputValidator = inputValidator;
         this.rateLimiter = rateLimiter;
+        this.auditService = auditService;
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody ChatRequest request, Authentication auth) {
+    public SseEmitter chat(@RequestBody ChatRequest request, Authentication auth,
+                           HttpServletResponse httpResponse) {
         inputValidator.validate(request.message());
         java.util.UUID userId = java.util.UUID.fromString(auth.getName());
-        rateLimiter.checkLimit(userId.toString());
+        boolean isAdmin = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        RateLimiter.RateLimitInfo rateInfo = rateLimiter.checkLimit(userId.toString(), "chat", isAdmin);
+        httpResponse.setHeader("X-RateLimit-Limit", String.valueOf(rateInfo.limit()));
+        httpResponse.setHeader("X-RateLimit-Remaining", String.valueOf(rateInfo.remaining()));
+        httpResponse.setHeader("X-RateLimit-Reset", String.valueOf(rateInfo.resetMs() / 1000));
 
         SseEmitter emitter = new SseEmitter(300_000L);
 
@@ -148,7 +159,15 @@ public class ChatController {
 
     @ExceptionHandler(RateLimitExceededException.class)
     @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
-    public Map<String, String> handleRateLimit(RateLimitExceededException e) {
+    public Map<String, String> handleRateLimit(RateLimitExceededException e, HttpServletResponse response,
+                                                Authentication auth) {
+        response.setHeader("X-RateLimit-Limit", String.valueOf(e.getLimit()));
+        response.setHeader("X-RateLimit-Remaining", "0");
+        response.setHeader("Retry-After", String.valueOf(e.getRetryAfterMs() / 1000));
+        if (auth != null) {
+            auditService.log(java.util.UUID.fromString(auth.getName()), null,
+                    "RATE_LIMIT_EXCEEDED", "CHAT", null);
+        }
         return Map.of("message", e.getMessage());
     }
 

@@ -65,6 +65,7 @@ app:
     sample-rate: 0.1
   guard:
     rate-limit-per-minute: 10
+    admin-rate-limit-per-minute: 30
     max-input-length: 2000
   jwt:
     secret: ${JWT_SECRET:spring-rag-app-dev-secret-key-minimum-32-chars}

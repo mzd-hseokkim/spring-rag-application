@@ -36,7 +36,9 @@ dependencies {
     implementation("org.springframework.ai:spring-ai-starter-model-anthropic")
     implementation("org.springframework.ai:spring-ai-starter-model-ollama")
     implementation("org.apache.pdfbox:pdfbox:3.0.4")
-    implementation("technology.tabula:tabula:1.0.5")
+    implementation("technology.tabula:tabula:1.0.5") {
+        exclude(group = "org.slf4j", module = "slf4j-simple")
+    }
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
 
