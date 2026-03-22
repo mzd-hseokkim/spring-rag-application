@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { ThemeProvider } from 'next-themes';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AuthProvider } from '@/auth/AuthContext';
@@ -17,6 +18,7 @@ import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
 
 function App() {
   return (
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
     <BrowserRouter>
       <AuthProvider>
         <TooltipProvider>
@@ -47,6 +49,7 @@ function App() {
         <Toaster richColors position="top-right" />
       </AuthProvider>
     </BrowserRouter>
+    </ThemeProvider>
   );
 }
 

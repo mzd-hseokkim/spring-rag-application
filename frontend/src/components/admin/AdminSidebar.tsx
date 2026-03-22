@@ -3,6 +3,7 @@ import { ArrowLeft, Users, FileText, MessageSquare, Settings2, BarChart3, FlaskC
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { LogOut } from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 const navItems = [
   { to: '/admin/dashboard', label: '대시보드', icon: BarChart3 },
@@ -21,7 +22,7 @@ export function AdminSidebar() {
       <div className="p-3">
         <Link
           to="/"
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-md hover:bg-sidebar-accent/50"
+          className="flex items-center gap-2 text-sm text-sidebar-foreground/60 hover:text-sidebar-foreground transition-colors px-2 py-1.5 rounded-md hover:bg-sidebar-accent/50"
         >
           <ArrowLeft className="h-4 w-4" />
           채팅으로 돌아가기
@@ -29,7 +30,7 @@ export function AdminSidebar() {
       </div>
 
       <div className="px-5 py-2">
-        <h2 className="text-sm font-semibold text-sidebar-foreground">관리</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/40">관리</h2>
       </div>
 
       <nav className="flex-1 px-3 space-y-0.5">
@@ -38,10 +39,10 @@ export function AdminSidebar() {
             key={item.to}
             to={item.to}
             className={({ isActive }) =>
-              `flex items-center gap-2.5 px-2 py-2 rounded-md text-sm transition-colors ${
+              `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
                 isActive
                   ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
+                  : 'text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
               }`
             }
           >
@@ -54,9 +55,10 @@ export function AdminSidebar() {
       <div className="border-t border-sidebar-border px-3 h-16 flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium truncate">{user?.name}</p>
-          <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+          <p className="text-xs text-sidebar-foreground/40 truncate">{user?.email}</p>
         </div>
-        <Button variant="ghost" size="icon" onClick={logout} className="shrink-0">
+        <ThemeToggle />
+        <Button variant="ghost" size="icon" onClick={logout} className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50">
           <LogOut className="h-4 w-4" />
         </Button>
       </div>

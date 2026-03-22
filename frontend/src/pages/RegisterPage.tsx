@@ -4,6 +4,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Sparkles } from 'lucide-react';
 
 export function RegisterPage() {
   const [name, setName] = useState('');
@@ -41,14 +42,18 @@ export function RegisterPage() {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-background">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-center text-xl">회원가입</CardTitle>
+      <Card className="w-full max-w-sm animate-page-in">
+        <CardHeader className="text-center">
+          <div className="mx-auto w-12 h-12 rounded-xl bg-primary flex items-center justify-center mb-3">
+            <Sparkles className="size-6 text-primary-foreground" />
+          </div>
+          <CardTitle className="text-xl">회원가입</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">새 계정을 만들어 시작하세요</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <p className="text-sm text-destructive text-center">{error}</p>
+              <p className="text-sm text-destructive text-center bg-destructive/10 py-2 rounded-lg">{error}</p>
             )}
             <Input
               type="text"
@@ -83,7 +88,7 @@ export function RegisterPage() {
             </Button>
             <p className="text-sm text-center text-muted-foreground">
               이미 계정이 있으신가요?{' '}
-              <Link to="/login" className="text-primary underline">로그인</Link>
+              <Link to="/login" className="text-primary font-medium hover:underline">로그인</Link>
             </p>
           </form>
         </CardContent>

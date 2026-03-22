@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { dashboardApi } from '@/api/dashboard';
 
-const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c'];
+const COLORS = ['#011936', '#465362', '#ED254E', '#4A90A4'];
 
 export function OverviewTab() {
   const [overview, setOverview] = useState<Record<string, number>>({});
@@ -43,7 +43,7 @@ export function OverviewTab() {
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Line type="monotone" dataKey="count" stroke="#8884d8" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="count" stroke="#011936" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </Card>

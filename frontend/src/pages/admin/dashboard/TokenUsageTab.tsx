@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { dashboardApi } from '@/api/dashboard';
 
-const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#a4a4ff', '#ffb366'];
+const COLORS = ['#011936', '#465362', '#ED254E', '#4A90A4', '#7B8794', '#D64045'];
 
 export function TokenUsageTab() {
   const [days, setDays] = useState(30);
@@ -43,8 +43,8 @@ export function TokenUsageTab() {
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
               <Legend />
-              <Line type="monotone" dataKey="inputTokens" name="입력" stroke="#8884d8" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="outputTokens" name="출력" stroke="#82ca9d" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="inputTokens" name="입력" stroke="#011936" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="outputTokens" name="출력" stroke="#ED254E" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </Card>

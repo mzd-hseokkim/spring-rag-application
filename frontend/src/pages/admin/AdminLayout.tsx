@@ -6,7 +6,9 @@ export function AdminLayout() {
     <div className="flex h-screen bg-background">
       <AdminSidebar />
       <main className="flex-1 overflow-auto p-6">
-        <Outlet />
+        <div className="animate-page-in">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
