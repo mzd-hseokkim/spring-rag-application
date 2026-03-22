@@ -1,9 +1,6 @@
 package com.example.rag.chat;
 
-import com.example.rag.agent.AgentDecision;
-import com.example.rag.agent.AgentStepEvent;
-import com.example.rag.agent.MultiStepReasoner;
-import com.example.rag.agent.SearchAgent;
+import com.example.rag.agent.*;
 import com.example.rag.common.PromptLoader;
 import com.example.rag.conversation.ConversationManagementService;
 import com.example.rag.conversation.ConversationMessage;
@@ -17,6 +14,7 @@ import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
 import com.example.rag.search.query.QueryCompressor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -43,6 +41,7 @@ public class ChatService {
     private final PipelineTracer pipelineTracer;
     private final EvaluationService evaluationService;
     private final com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository;
+    private final boolean mergeAnalysis;
 
     public ChatService(ModelClientProvider modelProvider,
                        SearchService searchService,
@@ -54,7 +53,8 @@ public class ChatService {
                        PipelineTracer pipelineTracer,
                        EvaluationService evaluationService,
                        com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository,
-                       PromptLoader promptLoader) {
+                       PromptLoader promptLoader,
+                       @Value("${app.rag.merge-analysis:true}") boolean mergeAnalysis) {
         this.modelProvider = modelProvider;
         this.searchService = searchService;
         this.conversationService = conversationService;
@@ -67,18 +67,19 @@ public class ChatService {
         this.tokenUsageRepository = tokenUsageRepository;
         this.ragSystemPrompt = promptLoader.load("rag-system.txt");
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
+        this.mergeAnalysis = mergeAnalysis;
     }
 
     private String resolveModelName(String modelId) {
         if (modelId != null && !modelId.isBlank()) {
-            return modelProvider.getModelName(java.util.UUID.fromString(modelId));
+            return modelProvider.getModelName(UUID.fromString(modelId));
         }
         return modelProvider.getDefaultModelName(ModelPurpose.CHAT);
     }
 
     private ChatClient chatClient(String modelId) {
         if (modelId != null && !modelId.isBlank()) {
-            return modelProvider.getChatClient(java.util.UUID.fromString(modelId));
+            return modelProvider.getChatClient(UUID.fromString(modelId));
         }
         return modelProvider.getChatClient(ModelPurpose.CHAT);
     }
@@ -93,12 +94,89 @@ public class ChatService {
             stepCallback.accept(event);
         };
 
-        // 대화 레코드 자동 생성 (첫 메시지 시)
         boolean isFirstMessage = conversationService.getHistory(sessionId).isEmpty();
         conversationManagementService.getOrCreate(sessionId, modelId, userId);
-
         conversationService.addMessage(sessionId, ConversationMessage.user(message));
 
+        ChatResponse result;
+
+        if (mergeAnalysis) {
+            result = chatMergedPipeline(sessionId, message, modelId, userId,
+                    includePublicDocs, tagIds, collectionIds, trace, callback);
+        } else {
+            result = chatLegacyPipeline(sessionId, message, modelId, userId,
+                    includePublicDocs, tagIds, collectionIds, trace, callback);
+        }
+
+        // 응답 완료 시 대화 메타데이터 갱신 + 토큰 사용량 저장
+        StringBuilder titleCapture = new StringBuilder();
+        String chatModelName = resolveModelName(modelId);
+        Flux<String> wrappedTokens = result.tokens()
+                .doOnNext(titleCapture::append)
+                .doOnComplete(() -> {
+                    conversationManagementService.touch(sessionId);
+                    if (isFirstMessage) {
+                        conversationManagementService.generateTitle(sessionId, message, titleCapture.toString());
+                    }
+                    try {
+                        int inputTokens = message.length() / 4;
+                        int outputTokens = titleCapture.length() / 4;
+                        tokenUsageRepository.save(new com.example.rag.dashboard.TokenUsageEntity(
+                                userId, chatModelName, "CHAT", inputTokens, outputTokens, sessionId));
+                    } catch (Exception e) {
+                        // 토큰 저장 실패는 무시
+                    }
+                });
+
+        return new ChatResponse(wrappedTokens, result.sources(), result.sourceRefs());
+    }
+
+    // ========== 3단계 통합 파이프라인 (merge-analysis: true) ==========
+
+    private ChatResponse chatMergedPipeline(String sessionId, String message, String modelId,
+                                             UUID userId, boolean includePublicDocs,
+                                             List<UUID> tagIds, List<UUID> collectionIds,
+                                             TraceContext trace, Consumer<AgentStepEvent> callback) {
+        // Stage 1: 분석 (compress + decide + decompose 통합)
+        trace.startStep("analyze");
+        callback.accept(new AgentStepEvent("analyze", "질문 분석 중..."));
+        AnalysisResult analysis = searchAgent.analyze(
+                sessionId, message, userId, includePublicDocs, tagIds, collectionIds);
+        trace.endStep(Map.of("action", analysis.action().name(),
+                "searchQuery", analysis.searchQuery(),
+                "isMultiStep", analysis.isMultiStep()));
+
+        return switch (analysis.action()) {
+            case DIRECT_ANSWER -> {
+                callback.accept(new AgentStepEvent("generate", "직접 답변 생성 중..."));
+                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
+                yield chatGeneral(sessionId, message, modelId);
+            }
+            case CLARIFY -> {
+                callback.accept(new AgentStepEvent("generate", "질문 명확화 요청 중..."));
+                pipelineTracer.logTrace(trace, userId, "CLARIFY");
+                yield chatClarify(sessionId, message, modelId);
+            }
+            case SEARCH -> {
+                String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
+                if (analysis.isMultiStep()) {
+                    yield chatMultiStep(sessionId, message, searchQuery, analysis.subQueries(),
+                            analysis.targetDocumentIds(), modelId, userId, trace, callback);
+                } else {
+                    callback.accept(new AgentStepEvent("search", "문서 검색 중..."));
+                    yield chatWithRag(sessionId, message, searchQuery,
+                            analysis.targetDocumentIds(), modelId, userId, trace, callback);
+                }
+            }
+        };
+    }
+
+    // ========== 레거시 파이프라인 (merge-analysis: false) ==========
+
+    private ChatResponse chatLegacyPipeline(String sessionId, String message, String modelId,
+                                             UUID userId, boolean includePublicDocs,
+                                             List<UUID> tagIds, List<UUID> collectionIds,
+                                             TraceContext trace, Consumer<AgentStepEvent> callback) {
         // 대화 압축
         trace.startStep("compress");
         callback.accept(new AgentStepEvent("compress", "질문 분석 중..."));
@@ -112,7 +190,7 @@ public class ChatService {
         trace.endStep(Map.of("action", decision.action().name(),
                 "targetDocs", decision.targetDocumentIds().size()));
 
-        ChatResponse result = switch (decision.action()) {
+        return switch (decision.action()) {
             case DIRECT_ANSWER -> {
                 callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
                 pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
@@ -139,30 +217,9 @@ public class ChatService {
                 }
             }
         };
-
-        // 응답 완료 시 대화 메타데이터 갱신 + 토큰 사용량 저장
-        StringBuilder titleCapture = new StringBuilder();
-        String chatModelName = resolveModelName(modelId);
-        Flux<String> wrappedTokens = result.tokens()
-                .doOnNext(titleCapture::append)
-                .doOnComplete(() -> {
-                    conversationManagementService.touch(sessionId);
-                    if (isFirstMessage) {
-                        conversationManagementService.generateTitle(sessionId, message, titleCapture.toString());
-                    }
-                    // 토큰 사용량 추정 저장 (문자열 길이 / 4)
-                    try {
-                        int inputTokens = message.length() / 4;
-                        int outputTokens = titleCapture.length() / 4;
-                        tokenUsageRepository.save(new com.example.rag.dashboard.TokenUsageEntity(
-                                userId, chatModelName, "CHAT", inputTokens, outputTokens, sessionId));
-                    } catch (Exception e) {
-                        // 토큰 저장 실패는 무시
-                    }
-                });
-
-        return new ChatResponse(wrappedTokens, result.sources(), result.sourceRefs());
     }
+
+    // ========== 공통 메서드 ==========
 
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
                                       List<UUID> documentIds, String modelId, UUID userId,

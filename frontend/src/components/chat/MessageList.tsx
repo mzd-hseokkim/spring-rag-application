@@ -17,6 +17,7 @@ interface Props {
 }
 
 const STEP_ICONS: Record<string, ReactNode> = {
+  analyze: <Brain className="size-3.5" />,
   compress: <Search className="size-3.5" />,
   decide: <Brain className="size-3.5" />,
   decompose: <ListTree className="size-3.5" />,

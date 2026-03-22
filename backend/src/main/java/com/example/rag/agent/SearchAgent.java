@@ -1,46 +1,170 @@
 package com.example.rag.agent;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.conversation.ConversationMessage;
+import com.example.rag.conversation.ConversationService;
 import com.example.rag.document.Document;
 import com.example.rag.document.DocumentRepository;
 import com.example.rag.document.DocumentStatus;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Component
 public class SearchAgent {
 
     private final String decidePrompt;
+    private final String analyzePrompt;
     private final ModelClientProvider modelProvider;
     private final DocumentRepository documentRepository;
+    private final ConversationService conversationService;
+    private final int maxSubQueries;
 
     public SearchAgent(ModelClientProvider modelProvider,
                        PromptLoader promptLoader,
-                       DocumentRepository documentRepository) {
+                       DocumentRepository documentRepository,
+                       ConversationService conversationService,
+                       @Value("${app.rag.max-sub-queries:3}") int maxSubQueries) {
         this.modelProvider = modelProvider;
         this.decidePrompt = promptLoader.load("agent-decide.txt");
+        this.analyzePrompt = promptLoader.load("analyze.txt");
         this.documentRepository = documentRepository;
+        this.conversationService = conversationService;
+        this.maxSubQueries = maxSubQueries;
     }
 
     private ChatClient chatClient() {
         return modelProvider.getChatClient(ModelPurpose.QUERY);
     }
 
+    /**
+     * 통합 분석 — compress + decide + decompose를 단일 LLM 호출로 수행.
+     */
+    public AnalysisResult analyze(String sessionId, String message, UUID userId,
+                                   boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds) {
+        List<Document> documents = getFilteredDocuments(userId, includePublicDocs, tagIds, collectionIds);
+
+        String docList = documents.isEmpty() ? "(없음)" : documents.stream()
+                .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
+                .collect(Collectors.joining("\n"));
+
+        String historyText = buildHistoryText(sessionId);
+        String prompt = analyzePrompt.formatted(historyText, docList, message);
+
+        String response = chatClient().prompt()
+                .user(prompt)
+                .call()
+                .content()
+                .trim();
+
+        return parseAnalysisResponse(response, documents);
+    }
+
+    /**
+     * 기존 decide 메서드 — 하위 호환용으로 유지.
+     */
     public AgentDecision decide(String query, UUID userId, boolean includePublicDocs,
                                List<UUID> tagIds, List<UUID> collectionIds) {
-        // 사용자의 문서 + (옵션) 공용 문서 조회
+        List<Document> documents = getFilteredDocuments(userId, includePublicDocs, tagIds, collectionIds);
+
+        String docList = documents.isEmpty() ? "(없음)" : documents.stream()
+                .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
+                .collect(Collectors.joining("\n"));
+
+        String response = chatClient().prompt()
+                .user(decidePrompt.formatted(docList, query))
+                .call()
+                .content()
+                .trim();
+
+        String upper = response.toUpperCase();
+        if (upper.contains("DIRECT_ANSWER") || upper.contains("DIRECT")) {
+            return AgentDecision.directAnswer();
+        }
+        if (upper.contains("CLARIFY")) {
+            return AgentDecision.clarify();
+        }
+
+        List<UUID> targetIds = extractDocumentIds(response, documents);
+        return AgentDecision.search(targetIds);
+    }
+
+    private AnalysisResult parseAnalysisResponse(String response, List<Document> documents) {
+        String actionStr = extractField(response, "ACTION:");
+        String queryStr = extractField(response, "QUERY:");
+        String docsStr = extractField(response, "DOCUMENTS:");
+        String subStr = extractAfterField(response, "SUB_QUERIES:");
+
+        // Action
+        AgentAction action = AgentAction.SEARCH;
+        if (actionStr.contains("DIRECT_ANSWER") || actionStr.contains("DIRECT")) {
+            action = AgentAction.DIRECT_ANSWER;
+        } else if (actionStr.contains("CLARIFY")) {
+            action = AgentAction.CLARIFY;
+        }
+
+        // Search query
+        String searchQuery = queryStr.isBlank() ? "" : queryStr;
+
+        // Target documents
+        List<UUID> targetIds;
+        if (docsStr.isBlank() || docsStr.equalsIgnoreCase("ALL")) {
+            targetIds = List.of();
+        } else {
+            targetIds = extractDocumentIds(docsStr, documents);
+        }
+
+        // Sub-queries
+        List<String> subQueries = null;
+        if (!subStr.isBlank() && !subStr.equalsIgnoreCase("NONE")) {
+            subQueries = Arrays.stream(subStr.split("\n"))
+                    .map(s -> s.replaceFirst("^[-\\d.]+\\s*", "").trim())
+                    .filter(s -> !s.isEmpty() && !s.equalsIgnoreCase("NONE"))
+                    .limit(maxSubQueries)
+                    .toList();
+            if (subQueries.isEmpty()) subQueries = null;
+        }
+
+        return new AnalysisResult(action, searchQuery, targetIds, subQueries);
+    }
+
+    private String extractField(String text, String field) {
+        for (String line : text.split("\n")) {
+            if (line.toUpperCase().startsWith(field.toUpperCase())) {
+                return line.substring(field.length()).trim();
+            }
+        }
+        return "";
+    }
+
+    private String extractAfterField(String text, String field) {
+        int idx = text.toUpperCase().indexOf(field.toUpperCase());
+        if (idx < 0) return "";
+        return text.substring(idx + field.length()).trim();
+    }
+
+    private List<UUID> extractDocumentIds(String text, List<Document> documents) {
+        List<UUID> ids = new ArrayList<>();
+        for (Document doc : documents) {
+            String shortId = doc.getId().toString().substring(0, 8);
+            if (text.contains(shortId)) {
+                ids.add(doc.getId());
+            }
+        }
+        return ids;
+    }
+
+    private List<Document> getFilteredDocuments(UUID userId, boolean includePublicDocs,
+                                                 List<UUID> tagIds, List<UUID> collectionIds) {
         List<Document> documents = includePublicDocs
                 ? documentRepository.findSearchableDocuments(DocumentStatus.COMPLETED, userId)
                 : documentRepository.findByStatusAndUserId(DocumentStatus.COMPLETED, userId);
 
-        // 태그/컬렉션 필터 (OR 조건: 선택된 태그 중 하나라도 또는 선택된 컬렉션 중 하나라도 매칭)
         boolean hasTagFilter = tagIds != null && !tagIds.isEmpty();
         boolean hasColFilter = collectionIds != null && !collectionIds.isEmpty();
         if (hasTagFilter || hasColFilter) {
@@ -54,34 +178,15 @@ public class SearchAgent {
                     })
                     .toList();
         }
+        return documents;
+    }
 
-        String docList = documents.isEmpty() ? "(없음)" : documents.stream()
-                .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
+    private String buildHistoryText(String sessionId) {
+        List<ConversationMessage> history = conversationService.getHistory(sessionId);
+        List<ConversationMessage> previous = history.subList(0, Math.max(0, history.size() - 1));
+        if (previous.isEmpty()) return "(없음)";
+        return previous.stream()
+                .map(m -> "%s: %s".formatted(m.role(), m.content()))
                 .collect(Collectors.joining("\n"));
-
-        String response = chatClient().prompt()
-                .user(decidePrompt.formatted(docList, query))
-                .call()
-                .content()
-                .trim();
-
-        // 응답 파싱
-        String upper = response.toUpperCase();
-        if (upper.contains("DIRECT_ANSWER") || upper.contains("DIRECT")) {
-            return AgentDecision.directAnswer();
-        }
-        if (upper.contains("CLARIFY")) {
-            return AgentDecision.clarify();
-        }
-
-        // SEARCH — 대상 문서 ID 추출
-        List<UUID> targetIds = new ArrayList<>();
-        for (Document doc : documents) {
-            String shortId = doc.getId().toString().substring(0, 8);
-            if (response.contains(shortId)) {
-                targetIds.add(doc.getId());
-            }
-        }
-        return AgentDecision.search(targetIds);
     }
 }

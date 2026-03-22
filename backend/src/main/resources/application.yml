@@ -58,6 +58,9 @@ app:
   search:
     expansion-count: 3
     rerank-candidates: 15
+  rag:
+    max-sub-queries: 3
+    merge-analysis: true
   evaluation:
     sample-rate: 0.1
   guard:

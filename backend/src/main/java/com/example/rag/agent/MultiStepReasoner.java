@@ -6,10 +6,13 @@ import com.example.rag.model.ModelPurpose;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -20,14 +23,17 @@ public class MultiStepReasoner {
     private final String synthesizePrompt;
     private final ModelClientProvider modelProvider;
     private final SearchService searchService;
+    private final int maxSubQueries;
 
     public MultiStepReasoner(ModelClientProvider modelProvider,
                              PromptLoader promptLoader,
-                             SearchService searchService) {
+                             SearchService searchService,
+                             @Value("${app.rag.max-sub-queries:3}") int maxSubQueries) {
         this.modelProvider = modelProvider;
         this.decomposePrompt = promptLoader.load("decompose.txt");
         this.synthesizePrompt = promptLoader.load("synthesize.txt");
         this.searchService = searchService;
+        this.maxSubQueries = maxSubQueries;
     }
 
     private ChatClient chatClient() {
@@ -48,53 +54,52 @@ public class MultiStepReasoner {
         return Arrays.stream(response.split("\n"))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
+                .limit(maxSubQueries)
                 .toList();
     }
 
+    /**
+     * 병렬 검색 + 종합 생성.
+     * 서브쿼리를 병렬로 검색한 뒤, 모든 결과를 합쳐서 한 번에 답변을 생성한다.
+     */
     public ReasonResult reason(String originalQuery, List<String> subQueries,
                                List<UUID> documentIds,
                                Consumer<AgentStepEvent> stepCallback) {
-        StringBuilder subAnswers = new StringBuilder();
-        Map<UUID, ChunkSearchResult> allResults = new LinkedHashMap<>();
 
-        for (int i = 0; i < subQueries.size(); i++) {
-            String subQuery = subQueries.get(i);
-            stepCallback.accept(new AgentStepEvent("sub_search",
-                    "하위 질문 %d/%d 검색 중: \"%s\"".formatted(i + 1, subQueries.size(), subQuery)));
+        // 서브쿼리 수 제한
+        List<String> limitedQueries = subQueries.size() > maxSubQueries
+                ? subQueries.subList(0, maxSubQueries) : subQueries;
 
-            List<ChunkSearchResult> results = searchService.search(subQuery, documentIds);
-            results.forEach(r -> allResults.putIfAbsent(r.chunkId(), r));
+        stepCallback.accept(new AgentStepEvent("search",
+                "%d개 하위 질문 병렬 검색 중...".formatted(limitedQueries.size())));
 
-            String context = results.stream()
-                    .map(ChunkSearchResult::contextContent)
-                    .collect(Collectors.joining("\n\n"));
+        // 병렬 검색
+        Map<UUID, ChunkSearchResult> allResults = new ConcurrentHashMap<>();
+        List<CompletableFuture<List<ChunkSearchResult>>> futures = limitedQueries.stream()
+                .map(subQuery -> CompletableFuture.supplyAsync(() ->
+                        searchService.search(subQuery, documentIds)))
+                .toList();
 
-            stepCallback.accept(new AgentStepEvent("sub_answer",
-                    "하위 질문 %d/%d 답변 생성 중...".formatted(i + 1, subQueries.size())));
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-            String subAnswer = chatClient().prompt()
-                    .user("다음 컨텍스트를 바탕으로 질문에 간단히 답하세요.\n\n[컨텍스트]\n%s\n\n질문: %s"
-                            .formatted(context, subQuery))
-                    .call()
-                    .content()
-                    .trim();
-
-            stepCallback.accept(new AgentStepEvent("sub_done",
-                    "하위 질문 %d/%d 완료".formatted(i + 1, subQueries.size())));
-
-            subAnswers.append("Q: %s\nA: %s\n\n".formatted(subQuery, subAnswer));
+        for (var future : futures) {
+            future.join().forEach(r -> allResults.putIfAbsent(r.chunkId(), r));
         }
 
-        stepCallback.accept(new AgentStepEvent("synthesize", "답변 종합 중..."));
+        stepCallback.accept(new AgentStepEvent("generate",
+                "%d개 검색 결과로 답변 종합 중...".formatted(allResults.size())));
 
-        // 전체 검색 결과를 컨텍스트로 구성
         String fullContext = allResults.values().stream()
                 .map(ChunkSearchResult::contextContent)
                 .collect(Collectors.joining("\n\n"));
 
-        // 최종 종합: 원본 문서 컨텍스트 + 하위 답변 모두 전달
+        // 서브쿼리 목록을 컨텍스트에 포함
+        String subQuerySummary = limitedQueries.stream()
+                .map(q -> "- " + q)
+                .collect(Collectors.joining("\n"));
+
         Flux<String> tokenStream = chatClient().prompt()
-                .user(synthesizePrompt.formatted(originalQuery, fullContext, subAnswers.toString()))
+                .user(synthesizePrompt.formatted(originalQuery, fullContext, subQuerySummary))
                 .stream()
                 .content();
 
