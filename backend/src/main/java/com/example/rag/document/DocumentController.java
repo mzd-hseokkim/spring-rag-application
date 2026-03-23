@@ -46,18 +46,23 @@ public class DocumentController {
                                                     @RequestParam(defaultValue = "false") boolean isPublic,
                                                     Authentication auth) {
         UUID userId = UUID.fromString(auth.getName());
+
+        // transferTo() 후 임시 파일이 사라지므로 미리 읽어둔다
+        byte[] fileBytes;
+        String contentType = file.getContentType();
+        try {
+            fileBytes = file.getBytes();
+        } catch (IOException e) {
+            throw new com.example.rag.common.RagException("Failed to read file", e);
+        }
+
         // ADMIN이 아니면 공용 등록 불가
         boolean hasAdminRole = auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
         boolean effectivePublic = hasAdminRole && isPublic;
         Document document = documentService.upload(file, userId, effectivePublic);
 
-        try {
-            byte[] fileBytes = file.getBytes();
-            ingestionPipeline.process(document.getId(), file.getContentType(), fileBytes);
-        } catch (IOException e) {
-            throw new com.example.rag.common.RagException("Failed to read file", e);
-        }
+        ingestionPipeline.process(document.getId(), contentType, fileBytes);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(DocumentResponse.from(document));

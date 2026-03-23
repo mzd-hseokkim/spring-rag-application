@@ -9,11 +9,16 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     private final JwtTokenProvider jwtTokenProvider;
     private final AppUserRepository appUserRepository;
@@ -27,10 +32,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                      FilterChain filterChain) throws ServletException, IOException {
-        String header = request.getHeader("Authorization");
+        String token = resolveToken(request);
 
-        if (header != null && header.startsWith("Bearer ")) {
-            String token = header.substring(7);
+        if (token != null) {
+            log.debug("Token found for {} (source: {}, length: {})",
+                    request.getServletPath(),
+                    request.getHeader("Authorization") != null ? "header" : "query",
+                    token.length());
             if (jwtTokenProvider.validateToken(token)) {
                 UUID userId = jwtTokenProvider.getUserIdFromToken(token);
 
@@ -46,7 +54,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
 
+        if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            log.warn("Token present but authentication not set for {}", request.getServletPath());
+        }
+        if (token == null && request.getServletPath().startsWith("/api/generations")) {
+            log.warn("No token for generation endpoint: {} query: {}", request.getServletPath(), request.getQueryString());
+        }
+
         filterChain.doFilter(request, response);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        // 1) Authorization 헤더
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            return header.substring(7);
+        }
+        // 2) Query param (SSE 등 EventSource에서 헤더 설정 불가 시)
+        String queryToken = request.getParameter("token");
+        if (queryToken != null && !queryToken.isBlank()) {
+            return queryToken;
+        }
+        return null;
     }
 
     @Override

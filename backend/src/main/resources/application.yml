@@ -36,6 +36,12 @@ spring:
       host: localhost
       port: 6381
 
+  thymeleaf:
+    prefix: classpath:/templates/
+    suffix: .html
+    mode: HTML
+    check-template-location: true
+
   servlet:
     multipart:
       max-file-size: 50MB
@@ -82,6 +88,8 @@ logging:
   level:
     pipeline.trace: INFO
     evaluation: INFO
+    com.example.rag.generation: DEBUG
+    com.example.rag.auth.JwtAuthenticationFilter: DEBUG
 
 server:
   port: 8080

@@ -17,6 +17,7 @@ import { AdminDashboardPage } from '@/pages/admin/AdminDashboardPage';
 import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
+import { GeneratePage } from '@/pages/GeneratePage';
 
 function App() {
   return (
@@ -35,6 +36,11 @@ function App() {
             <Route path="/settings" element={
               <ProtectedRoute>
                 <SettingsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/generate" element={
+              <ProtectedRoute>
+                <GeneratePage />
               </ProtectedRoute>
             } />
             <Route path="/admin" element={

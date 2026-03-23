@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title th:text="${outline.title()}">문서 제목</title>
+    <style>
+        /* ── CSS Variables (향후 테마 확장용) ── */
+        :root {
+            --color-primary: #1e3a5f;
+            --color-primary-light: #2a5a8f;
+            --color-accent: #3b82f6;
+            --color-accent-light: #eff6ff;
+            --color-text: #1f2937;
+            --color-text-secondary: #6b7280;
+            --color-border: #e5e7eb;
+            --color-bg: #ffffff;
+            --color-bg-subtle: #f9fafb;
+            --color-highlight-bg: #f0f9ff;
+            --color-highlight-border: #bae6fd;
+            --font-sans: 'Pretendard', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+            --radius: 8px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+
+        /* ── Reset & Base ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-sans);
+            color: var(--color-text);
+            background: var(--color-bg);
+            line-height: 1.8;
+            font-size: 15px;
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 40px 32px;
+        }
+
+        /* ── Cover Page ── */
+        .cover-page {
+            text-align: center;
+            padding: 80px 40px;
+            margin-bottom: 48px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+            color: #ffffff;
+            border-radius: var(--radius);
+        }
+        .cover-page h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+        .cover-page .summary {
+            font-size: 1.05rem;
+            opacity: 0.9;
+            max-width: 600px;
+            margin: 0 auto 24px;
+            line-height: 1.7;
+        }
+        .cover-page .date {
+            font-size: 0.9rem;
+            opacity: 0.7;
+            border-top: 1px solid rgba(255,255,255,0.3);
+            padding-top: 20px;
+            display: inline-block;
+        }
+
+        /* ── Table of Contents ── */
+        .toc {
+            background: var(--color-bg-subtle);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            padding: 28px 32px;
+            margin-bottom: 48px;
+        }
+        .toc h2 {
+            font-size: 1.1rem;
+            color: var(--color-primary);
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+        .toc ol {
+            counter-reset: toc-counter;
+            list-style: none;
+        }
+        .toc ol li {
+            counter-increment: toc-counter;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--color-border);
+        }
+        .toc ol li:last-child { border-bottom: none; }
+        .toc ol li::before {
+            content: counter(toc-counter) ".";
+            color: var(--color-accent);
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        .toc a {
+            color: var(--color-text);
+            text-decoration: none;
+        }
+        .toc a:hover { color: var(--color-accent); }
+
+        /* ── Sections ── */
+        .section {
+            margin-bottom: 48px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid var(--color-border);
+        }
+        .section:last-of-type { border-bottom: none; }
+        .section h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--color-primary);
+            margin-bottom: 20px;
+            padding-bottom: 8px;
+            border-bottom: 3px solid var(--color-accent);
+            display: inline-block;
+        }
+
+        /* ── Section Body (Markdown rendered) ── */
+        .section-body h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 10px; color: var(--color-primary-light); }
+        .section-body h4 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 8px; }
+        .section-body p { margin-bottom: 14px; }
+        .section-body ul, .section-body ol { margin: 10px 0 14px 24px; }
+        .section-body li { margin-bottom: 4px; }
+        .section-body code {
+            background: var(--color-bg-subtle);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 0.9em;
+        }
+        .section-body pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 16px 20px;
+            border-radius: var(--radius);
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+        .section-body pre code { background: none; color: inherit; padding: 0; }
+        .section-body blockquote {
+            border-left: 4px solid var(--color-accent);
+            padding: 12px 20px;
+            margin: 16px 0;
+            background: var(--color-accent-light);
+            border-radius: 0 var(--radius) var(--radius) 0;
+        }
+
+        /* ── Highlights ── */
+        .highlights {
+            background: var(--color-highlight-bg);
+            border: 1px solid var(--color-highlight-border);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            margin-top: 20px;
+        }
+        .highlights h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--color-accent);
+            margin-bottom: 10px;
+        }
+        .highlights ul { list-style: none; }
+        .highlights li {
+            padding: 4px 0 4px 20px;
+            position: relative;
+        }
+        .highlights li::before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: var(--color-accent);
+            font-weight: 700;
+        }
+
+        /* ── Tables ── */
+        .data-table { margin: 20px 0; overflow-x: auto; }
+        .data-table caption {
+            font-size: 0.9rem;
+            color: var(--color-text-secondary);
+            margin-bottom: 8px;
+            text-align: left;
+            font-style: italic;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+        thead { background: var(--color-primary); color: #ffffff; }
+        th {
+            padding: 12px 16px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            text-align: left;
+        }
+        td {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--color-border);
+            font-size: 0.9rem;
+        }
+        tbody tr:nth-child(even) { background: var(--color-bg-subtle); }
+        tbody tr:hover { background: var(--color-accent-light); }
+
+        /* ── References ── */
+        .references {
+            background: var(--color-bg-subtle);
+            border-radius: var(--radius);
+            padding: 24px 28px;
+            margin-top: 48px;
+        }
+        .references h2 {
+            font-size: 1.1rem;
+            color: var(--color-primary);
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .references ul { list-style: decimal; padding-left: 20px; }
+        .references li {
+            font-size: 0.9rem;
+            color: var(--color-text-secondary);
+            padding: 3px 0;
+        }
+
+        /* ── Print / PDF ── */
+        @media print {
+            body { max-width: none; padding: 0; }
+            .cover-page { page-break-after: always; }
+            .section { page-break-inside: avoid; }
+            .toc { page-break-after: always; }
+        }
+        @page {
+            size: A4;
+            margin: 2.5cm;
+        }
+    </style>
+</head>
+<body>
+    <!-- 표지 -->
+    <div class="cover-page">
+        <h1 th:text="${outline.title()}">문서 제목</h1>
+        <p class="summary" th:text="${outline.summary()}">요약</p>
+        <p class="date" th:text="${#temporals.format(generatedAt, 'yyyy년 MM월 dd일')}"></p>
+    </div>
+
+    <!-- 목차 -->
+    <div class="toc">
+        <h2>목차</h2>
+        <ol>
+            <li th:each="section : ${sections}">
+                <a th:text="${section.title()}" th:href="'#' + ${section.key()}"></a>
+            </li>
+        </ol>
+    </div>
+
+    <!-- 본문 섹션들 -->
+    <div th:each="section : ${sections}" class="section" th:id="${section.key()}">
+        <h2 th:text="${section.title()}">섹션 제목</h2>
+
+        <div class="section-body" th:utext="${section.contentHtml()}">본문 내용</div>
+
+        <!-- 핵심 포인트 -->
+        <div th:if="${!section.highlights().isEmpty()}" class="highlights">
+            <h3>핵심 포인트</h3>
+            <ul>
+                <li th:each="point : ${section.highlights()}" th:text="${point}"></li>
+            </ul>
+        </div>
+
+        <!-- 표 -->
+        <div th:each="tbl : ${section.tables()}" class="data-table">
+            <table>
+                <caption th:text="${tbl.caption()}"></caption>
+                <thead>
+                    <tr>
+                        <th th:each="header : ${tbl.headers()}" th:text="${header}"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="row : ${tbl.rows()}">
+                        <td th:each="cell : ${row}" th:text="${cell}"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 참고 출처 -->
+    <div th:if="${!allReferences.isEmpty()}" class="references">
+        <h2>참고 자료</h2>
+        <ul>
+            <li th:each="ref : ${allReferences}" th:text="${ref}"></li>
+        </ul>
+    </div>
+</body>
+</html>

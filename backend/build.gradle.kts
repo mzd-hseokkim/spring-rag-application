@@ -39,6 +39,10 @@ dependencies {
     implementation("technology.tabula:tabula:1.0.5") {
         exclude(group = "org.slf4j", module = "slf4j-simple")
     }
+    implementation("org.apache.poi:poi-ooxml:5.5.1")
+    implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
+    implementation("io.github.openhtmltopdf:openhtmltopdf-pdfbox:1.1.37")
+    implementation("org.commonmark:commonmark:0.24.0")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
 
@@ -50,4 +54,8 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+tasks.withType<JavaExec> {
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dconsole.encoding=UTF-8")
 }

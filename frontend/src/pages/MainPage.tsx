@@ -15,7 +15,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { LogOut, Settings2, PanelLeftClose, PanelLeft, MoreHorizontal, UserCog, Moon, Sun } from 'lucide-react';
+import { LogOut, Settings2, PanelLeftClose, PanelLeft, MoreHorizontal, UserCog, Moon, Sun, FileText } from 'lucide-react';
 import type { Conversation } from '@/types';
 
 export function MainPage() {
@@ -138,6 +138,7 @@ export function MainPage() {
               <MoreHorizontal className="h-4 w-4" />
             </PopoverTrigger>
             <PopoverContent className="w-44 p-1" align="end" side="top">
+              <MenuButton icon={<FileText className="h-4 w-4" />} label="문서 생성" onClick={() => navigate('/generate')} />
               <MenuButton icon={<UserCog className="h-4 w-4" />} label="개인설정" onClick={() => navigate('/settings')} />
               <ThemeMenuItem />
               {isAdmin && (
