@@ -377,6 +377,70 @@ public class GenerationWorkflowService {
         }
     }
 
+    /**
+     * 위자드 Step 5: 생성된 섹션들을 HTML로 렌더링 (async)
+     */
+    @Async("ingestionExecutor")
+    public void renderWizardDocument(UUID jobId) {
+        GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
+                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+        try {
+            job.setStatus(GenerationStatus.RENDERING);
+            job.setCurrentStep(5);
+            job.setStepStatus("PROCESSING");
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.status(GenerationStatus.RENDERING, "최종 문서를 렌더링하고 있습니다..."));
+
+            // 목차에서 DocumentOutline 구성
+            List<OutlineNode> outlineNodes = outlineExtractor.fromJson(job.getOutline());
+            String title = outlineNodes.isEmpty() ? "제안서" : outlineNodes.get(0).title();
+            DocumentOutline outline = new DocumentOutline(title, "", buildSectionPlans(outlineNodes));
+
+            // 섹션 파싱
+            List<SectionContent> sections;
+            try {
+                sections = objectMapper.readValue(job.getGeneratedSections(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {});
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to parse generated sections", e);
+            }
+
+            // HTML 렌더링
+            String outputPath = rendererService.render(job.getTemplate(), outline, sections, job.getUser().getId(), job.getId());
+            job.setOutputFilePath(outputPath);
+            job.setCurrentStep(5);
+            job.setStepStatus("COMPLETE");
+            job.setStatus(GenerationStatus.COMPLETE);
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.complete("/api/generations/" + job.getId() + "/download"));
+            log.info("Generation job {} - wizard rendering complete, output: {}", jobId, outputPath);
+
+        } catch (Exception e) {
+            log.error("Generation job {} wizard rendering failed", jobId, e);
+            job.setErrorMessage(e.getMessage());
+            job.setStepStatus("FAILED");
+            job.setStatus(GenerationStatus.FAILED);
+            jobRepository.save(job);
+            emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    private List<SectionPlan> buildSectionPlans(List<OutlineNode> nodes) {
+        List<SectionPlan> plans = new ArrayList<>();
+        for (OutlineNode node : nodes) {
+            if (node.children().isEmpty()) {
+                plans.add(new SectionPlan(node.key(), node.title(), node.description(), List.of(), 500));
+            } else {
+                for (OutlineNode child : node.children()) {
+                    plans.add(new SectionPlan(child.key(), child.title(), child.description(), List.of(), 500));
+                }
+            }
+        }
+        return plans;
+    }
+
     private SectionContent generateWithRetry(SectionPlan plan, String systemPrompt,
                                              List<String> ragContext,
                                              List<SectionContent> previousSections) {

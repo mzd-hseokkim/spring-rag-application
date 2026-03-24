@@ -86,6 +86,14 @@ public class GenerationController {
         return generationService.saveSection(id, key, sectionJson);
     }
 
+    /**
+     * 위자드 Step 5: HTML 렌더링 시작
+     */
+    @PostMapping("/{id}/render")
+    public void render(@PathVariable UUID id) {
+        generationService.startRendering(id);
+    }
+
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
     record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch) {}
 

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { SectionEditor } from '@/components/generation/SectionEditor';
@@ -151,6 +151,11 @@ export function GeneratePage() {
   const [totalSectionsCount, setTotalSectionsCount] = useState(0);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [includeWebSearch, setIncludeWebSearch] = useState(false);
+
+  // Step 5 state
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
 
   useEffect(() => {
     gen.loadTemplates();
@@ -353,6 +358,69 @@ export function GeneratePage() {
     setSections(prev => prev.map((s, i) => i === index ? updated : s));
   };
 
+  // Step 5: 렌더링 시작
+  const handleStartRendering = async () => {
+    if (!jobId) return;
+    setRendering(true);
+    setRenderError(null);
+    setPreviewHtml(null);
+    setWizardStep(5);
+    try {
+      await startRendering(jobId);
+
+      const token = localStorage.getItem('accessToken');
+      const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
+      const es = new EventSource(url);
+
+      es.addEventListener('complete', () => {
+        es.close();
+        // 미리보기 HTML 로드
+        const previewUrl = getPreviewUrl(jobId) + (token ? `?token=${token}` : '');
+        fetch(previewUrl, { headers: { 'Authorization': `Bearer ${token}` } })
+          .then(r => r.ok ? r.text() : Promise.reject('Failed'))
+          .then(html => setPreviewHtml(html))
+          .catch(() => setRenderError('미리보기 로드에 실패했습니다.'));
+        setRendering(false);
+        gen.loadJobs();
+      });
+
+      es.addEventListener('error', (e) => {
+        try {
+          const data: GenerationProgressEvent = JSON.parse((e as MessageEvent).data);
+          setRenderError(data.message || '렌더링 중 오류가 발생했습니다.');
+        } catch {
+          setRenderError('렌더링 중 오류가 발생했습니다.');
+        }
+        es.close();
+        setRendering(false);
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) return;
+        setRenderError('서버와의 연결이 끊어졌습니다.');
+        es.close();
+        setRendering(false);
+      };
+    } catch (e) {
+      setRenderError(e instanceof Error ? e.message : '렌더링 실패');
+      setRendering(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!jobId) return;
+    const token = localStorage.getItem('accessToken') || '';
+    const res = await fetch(getDownloadUrl(jobId), { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `proposal-${new Date().toISOString().slice(0, 10)}.html`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   const handleReset = () => {
     gen.reset();
     setUserInput('');
@@ -373,6 +441,9 @@ export function GeneratePage() {
     setTotalSectionsCount(0);
     setGenerateError(null);
     setIncludeWebSearch(false);
+    setRendering(false);
+    setRenderError(null);
+    setPreviewHtml(null);
   };
 
   return (
@@ -568,28 +639,69 @@ export function GeneratePage() {
                   <Button variant="outline" onClick={() => setWizardStep(3)} disabled={generating}>
                     <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (요구사항)
                   </Button>
-                  <Button onClick={() => setWizardStep(5)} disabled={generating || sections.length === 0}>
-                    <ArrowRight className="h-4 w-4 mr-1.5" />미리보기
+                  <Button onClick={handleStartRendering} disabled={generating || sections.length === 0}>
+                    <ArrowRight className="h-4 w-4 mr-1.5" />렌더링 & 미리보기
                   </Button>
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {/* ── Step 5: 미리보기 (Phase D에서 구현) ── */}
+          {/* ── Step 5: 미리보기 & 출력 ── */}
           {wizardStep === 5 && (
             <Card>
               <CardHeader>
                 <CardTitle>미리보기 & 출력</CardTitle>
-                <CardDescription>HTML 미리보기와 PDF 다운로드는 다음 업데이트에서 제공됩니다.</CardDescription>
+                <CardDescription>
+                  {rendering ? '문서를 렌더링하고 있습니다...' :
+                    previewHtml ? '렌더링이 완료되었습니다. 미리보기를 확인하고 다운로드하세요.' :
+                    '렌더링을 시작합니다.'}
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">
-                  {sections.length}개 섹션 내용이 생성되었습니다. 렌더링 및 PDF 출력 기능은 곧 구현됩니다.
-                </p>
-                <Button variant="outline" onClick={() => setWizardStep(4)}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />내용 수정으로 돌아가기
-                </Button>
+              <CardContent className="space-y-4">
+                {rendering && (
+                  <div className="flex items-center gap-3 py-12 justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    <span className="text-sm text-muted-foreground">HTML 문서를 렌더링하고 있습니다...</span>
+                  </div>
+                )}
+
+                {previewHtml && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b">
+                      <span className="text-xs text-muted-foreground">미리보기</span>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => {
+                          const token = localStorage.getItem('accessToken') || '';
+                          window.open(`${getPreviewUrl(jobId!)}?token=${token}`, '_blank');
+                        }} className="h-7 text-xs">
+                          새 탭에서 열기
+                        </Button>
+                        <Button size="sm" onClick={handleDownload} className="h-7 text-xs">
+                          <Download className="h-3.5 w-3.5 mr-1" />다운로드
+                        </Button>
+                      </div>
+                    </div>
+                    <iframe
+                      srcDoc={previewHtml}
+                      className="w-full border-0"
+                      style={{ height: '600px' }}
+                      title="문서 미리보기"
+                    />
+                  </div>
+                )}
+
+                {renderError && (
+                  <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 rounded-md p-3">
+                    <AlertCircle className="h-4 w-4 shrink-0" />{renderError}
+                  </div>
+                )}
+
+                <div className="flex justify-between">
+                  <Button variant="outline" onClick={() => setWizardStep(4)}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />내용 수정으로 돌아가기
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )}

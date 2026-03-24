@@ -178,6 +178,14 @@ export async function saveSection(jobId: string, sectionKey: string, section: un
   return res.json();
 }
 
+export async function startRendering(jobId: string): Promise<void> {
+  const res = await fetch(`/api/generations/${jobId}/render`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to start rendering');
+}
+
 export function getStreamUrl(jobId: string): string {
   return `/api/generations/${jobId}/stream`;
 }

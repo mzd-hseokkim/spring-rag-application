@@ -186,6 +186,27 @@ public class GenerationService {
     }
 
     /**
+     * Step 5: HTML 렌더링 시작 (async)
+     */
+    @Transactional
+    public void startRendering(UUID jobId) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setStatus(GenerationStatus.RENDERING);
+        job.setCurrentStep(5);
+        job.setStepStatus("PROCESSING");
+        job.setErrorMessage(null);
+        jobRepository.save(job);
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workflowService.renderWizardDocument(jobId);
+            }
+        });
+    }
+
+    /**
      * 기존 단일 플로우 (하위호환)
      */
     @Transactional
