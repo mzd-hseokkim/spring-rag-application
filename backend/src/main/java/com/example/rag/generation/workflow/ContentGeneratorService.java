@@ -23,7 +23,7 @@ public class ContentGeneratorService {
             "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[]}";
 
     private static final String SECTION_V2_FORMAT =
-            "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[],\"layoutHint\":\"시각적 배치 권장사항\"}";
+            "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[],\"layoutType\":\"TEXT_FULL|TEXT_TABLE|COMPARE_2COL|PROCESS_HORIZONTAL|KPI_CARDS|TABLE_FULL|TEXT_IMAGE|IMAGE_FULL\",\"layoutData\":{}}";
 
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;

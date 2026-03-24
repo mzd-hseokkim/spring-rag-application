@@ -230,6 +230,131 @@
             padding: 3px 0;
         }
 
+        /* ── Layout: COMPARE_2COL ── */
+        .compare-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 20px 0;
+        }
+        .compare-col {
+            padding: 20px;
+            border-radius: var(--radius);
+            border: 1px solid var(--color-border);
+        }
+        .compare-left { background: #fef3c7; border-color: #fbbf24; }
+        .compare-right { background: #d1fae5; border-color: #34d399; }
+        .compare-label {
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid;
+        }
+        .compare-label-left { color: #b45309; border-color: #fbbf24; }
+        .compare-label-right { color: #047857; border-color: #34d399; }
+
+        /* ── Layout: PROCESS_HORIZONTAL ── */
+        .process-flow {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 24px 0;
+            overflow-x: auto;
+            padding: 8px 0;
+        }
+        .process-step {
+            flex: 1;
+            min-width: 120px;
+            text-align: center;
+            padding: 16px 12px;
+            background: var(--color-accent-light);
+            border-radius: var(--radius);
+            border: 1px solid var(--color-border);
+            position: relative;
+        }
+        .step-number {
+            width: 32px;
+            height: 32px;
+            background: var(--color-accent);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.85rem;
+            margin: 0 auto 8px;
+        }
+        .step-label { font-weight: 600; font-size: 0.9rem; margin-bottom: 4px; }
+        .step-desc { font-size: 0.8rem; color: var(--color-text-secondary); }
+        .step-arrow {
+            position: absolute;
+            right: -18px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.2rem;
+            color: var(--color-accent);
+            font-weight: 700;
+            z-index: 1;
+        }
+
+        /* ── Layout: KPI_CARDS ── */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin: 24px 0;
+        }
+        .kpi-card {
+            text-align: center;
+            padding: 24px 16px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+            color: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+        }
+        .kpi-value { font-size: 2rem; font-weight: 800; margin-bottom: 4px; }
+        .kpi-label { font-size: 0.95rem; font-weight: 600; margin-bottom: 8px; }
+        .kpi-desc { font-size: 0.8rem; opacity: 0.85; }
+
+        /* ── Layout: TEXT_IMAGE / IMAGE_FULL ── */
+        .text-image-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 16px 0;
+        }
+        .image-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+            background: var(--color-bg-subtle);
+            border: 2px dashed var(--color-border);
+            border-radius: var(--radius);
+            padding: 24px;
+            text-align: center;
+        }
+        .image-placeholder-full { min-height: 300px; }
+        .placeholder-icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.5; }
+        .placeholder-text {
+            font-size: 0.85rem;
+            color: var(--color-text-secondary);
+            max-width: 300px;
+            line-height: 1.5;
+        }
+        .image-caption {
+            font-size: 0.85rem;
+            color: var(--color-text-secondary);
+            text-align: center;
+            margin-top: 8px;
+            font-style: italic;
+        }
+
         /* ── Print / PDF ── */
         @media print {
             body { max-width: none; padding: 0; }
@@ -261,36 +386,18 @@
         </ol>
     </div>
 
-    <!-- 본문 섹션들 -->
+    <!-- 본문 섹션들 (레이아웃별 분기) -->
     <div th:each="section : ${sections}" class="section" th:id="${section.key()}">
         <h2 th:text="${section.title()}">섹션 제목</h2>
 
-        <div class="section-body" th:utext="${section.contentHtml()}">본문 내용</div>
-
-        <!-- 핵심 포인트 -->
-        <div th:if="${!section.highlights().isEmpty()}" class="highlights">
-            <h3>핵심 포인트</h3>
-            <ul>
-                <li th:each="point : ${section.highlights()}" th:text="${point}"></li>
-            </ul>
-        </div>
-
-        <!-- 표 -->
-        <div th:each="tbl : ${section.tables()}" class="data-table">
-            <table>
-                <caption th:text="${tbl.caption()}"></caption>
-                <thead>
-                    <tr>
-                        <th th:each="header : ${tbl.headers()}" th:text="${header}"></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr th:each="row : ${tbl.rows()}">
-                        <td th:each="cell : ${row}" th:text="${cell}"></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <div th:if="${section.layoutType() == 'TEXT_FULL'}" th:replace="~{generation/layouts :: TEXT_FULL(${section})}"></div>
+        <div th:if="${section.layoutType() == 'TEXT_TABLE'}" th:replace="~{generation/layouts :: TEXT_TABLE(${section})}"></div>
+        <div th:if="${section.layoutType() == 'COMPARE_2COL'}" th:replace="~{generation/layouts :: COMPARE_2COL(${section})}"></div>
+        <div th:if="${section.layoutType() == 'PROCESS_HORIZONTAL'}" th:replace="~{generation/layouts :: PROCESS_HORIZONTAL(${section})}"></div>
+        <div th:if="${section.layoutType() == 'KPI_CARDS'}" th:replace="~{generation/layouts :: KPI_CARDS(${section})}"></div>
+        <div th:if="${section.layoutType() == 'TABLE_FULL'}" th:replace="~{generation/layouts :: TABLE_FULL(${section})}"></div>
+        <div th:if="${section.layoutType() == 'TEXT_IMAGE'}" th:replace="~{generation/layouts :: TEXT_IMAGE(${section})}"></div>
+        <div th:if="${section.layoutType() == 'IMAGE_FULL'}" th:replace="~{generation/layouts :: IMAGE_FULL(${section})}"></div>
     </div>
 
     <!-- 참고 출처 -->

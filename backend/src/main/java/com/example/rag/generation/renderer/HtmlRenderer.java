@@ -41,7 +41,9 @@ public class HtmlRenderer implements Renderer {
                         markdownConverter.toHtml(s.content()),
                         s.highlights(),
                         s.tables(),
-                        s.references()))
+                        s.references(),
+                        s.layoutType() != null ? s.layoutType() : "TEXT_FULL",
+                        s.layoutData() != null ? s.layoutData() : java.util.Map.of()))
                 .toList();
 
         List<String> allReferences = sections.stream()

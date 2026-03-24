@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- ═══ TEXT_FULL: 전체 너비 본문 ═══ -->
+<div th:fragment="TEXT_FULL(section)" class="layout-text-full">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div th:if="${!section.highlights().isEmpty()}" class="highlights">
+        <h3>핵심 포인트</h3>
+        <ul><li th:each="p : ${section.highlights()}" th:text="${p}"></li></ul>
+    </div>
+</div>
+
+<!-- ═══ TEXT_TABLE: 상단 본문 + 하단 표 ═══ -->
+<div th:fragment="TEXT_TABLE(section)" class="layout-text-table">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div th:each="tbl : ${section.tables()}" class="data-table">
+        <table>
+            <caption th:text="${tbl.caption()}"></caption>
+            <thead><tr><th th:each="h : ${tbl.headers()}" th:text="${h}"></th></tr></thead>
+            <tbody><tr th:each="row : ${tbl.rows()}"><td th:each="cell : ${row}" th:text="${cell}"></td></tr></tbody>
+        </table>
+    </div>
+    <div th:if="${!section.highlights().isEmpty()}" class="highlights">
+        <h3>핵심 포인트</h3>
+        <ul><li th:each="p : ${section.highlights()}" th:text="${p}"></li></ul>
+    </div>
+</div>
+
+<!-- ═══ COMPARE_2COL: 2단 비교 ═══ -->
+<div th:fragment="COMPARE_2COL(section)" class="layout-compare">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div class="compare-grid" th:if="${section.layoutData() != null}">
+        <div class="compare-col compare-left">
+            <h4 th:text="${section.layoutData()['leftLabel'] ?: 'AS-IS'}" class="compare-label compare-label-left"></h4>
+            <div th:utext="${section.layoutData()['leftBody'] ?: ''}"></div>
+        </div>
+        <div class="compare-col compare-right">
+            <h4 th:text="${section.layoutData()['rightLabel'] ?: 'TO-BE'}" class="compare-label compare-label-right"></h4>
+            <div th:utext="${section.layoutData()['rightBody'] ?: ''}"></div>
+        </div>
+    </div>
+    <div th:if="${!section.highlights().isEmpty()}" class="highlights">
+        <h3>핵심 포인트</h3>
+        <ul><li th:each="p : ${section.highlights()}" th:text="${p}"></li></ul>
+    </div>
+</div>
+
+<!-- ═══ PROCESS_HORIZONTAL: 수평 프로세스 ═══ -->
+<div th:fragment="PROCESS_HORIZONTAL(section)" class="layout-process">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div class="process-flow" th:if="${section.layoutData() != null and section.layoutData()['steps'] != null}">
+        <div th:each="step,iter : ${section.layoutData()['steps']}" class="process-step">
+            <div class="step-number" th:text="${iter.index + 1}"></div>
+            <div class="step-label" th:text="${step['label'] ?: ''}"></div>
+            <div class="step-desc" th:text="${step['description'] ?: ''}"></div>
+            <div th:if="${!iter.last}" class="step-arrow">→</div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ KPI_CARDS: 수치 카드 ═══ -->
+<div th:fragment="KPI_CARDS(section)" class="layout-kpi">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div class="kpi-grid" th:if="${section.layoutData() != null and section.layoutData()['cards'] != null}">
+        <div th:each="card : ${section.layoutData()['cards']}" class="kpi-card">
+            <div class="kpi-value" th:text="${card['value'] ?: ''}"></div>
+            <div class="kpi-label" th:text="${card['label'] ?: ''}"></div>
+            <div class="kpi-desc" th:text="${card['description'] ?: ''}"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ TABLE_FULL: 전체 표 ═══ -->
+<div th:fragment="TABLE_FULL(section)" class="layout-table-full">
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+    <div th:each="tbl : ${section.tables()}" class="data-table">
+        <table>
+            <caption th:text="${tbl.caption()}"></caption>
+            <thead><tr><th th:each="h : ${tbl.headers()}" th:text="${h}"></th></tr></thead>
+            <tbody><tr th:each="row : ${tbl.rows()}"><td th:each="cell : ${row}" th:text="${cell}"></td></tr></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══ TEXT_IMAGE: 텍스트 + 이미지 ═══ -->
+<div th:fragment="TEXT_IMAGE(section)" class="layout-text-image">
+    <div class="text-image-grid">
+        <div class="text-image-body">
+            <div class="section-body" th:utext="${section.contentHtml()}"></div>
+        </div>
+        <div class="text-image-visual" th:if="${section.layoutData() != null}">
+            <div class="image-placeholder">
+                <div class="placeholder-icon">📊</div>
+                <p class="placeholder-text" th:text="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
+            </div>
+            <p class="image-caption" th:text="${section.layoutData()['imageCaption'] ?: ''}"></p>
+        </div>
+    </div>
+    <div th:if="${!section.highlights().isEmpty()}" class="highlights">
+        <h3>핵심 포인트</h3>
+        <ul><li th:each="p : ${section.highlights()}" th:text="${p}"></li></ul>
+    </div>
+</div>
+
+<!-- ═══ IMAGE_FULL: 전체 이미지 ═══ -->
+<div th:fragment="IMAGE_FULL(section)" class="layout-image-full">
+    <div class="image-full-container" th:if="${section.layoutData() != null}">
+        <div class="image-placeholder image-placeholder-full">
+            <div class="placeholder-icon">📊</div>
+            <p class="placeholder-text" th:text="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
+        </div>
+        <p class="image-caption" th:text="${section.layoutData()['imageCaption'] ?: ''}"></p>
+    </div>
+    <div class="section-body" th:utext="${section.contentHtml()}"></div>
+</div>
+
+</body>
+</html>

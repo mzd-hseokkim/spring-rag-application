@@ -49,7 +49,9 @@ public class AiResponseParser {
         List<String> highlights = toStringList(node != null ? node.get("highlights") : null);
         List<String> references = toStringList(node != null ? node.get("references") : null);
         List<ContentTable> tables = parseTables(node != null ? node.get("tables") : null);
-        return new SectionContent(key, title, content, highlights, tables, references);
+        String layoutType = textOrDefault(node, "layoutType", "TEXT_FULL");
+        java.util.Map<String, Object> layoutData = parseLayoutData(node != null ? node.get("layoutData") : null);
+        return new SectionContent(key, title, content, highlights, tables, references, layoutType, layoutData);
     }
 
     private List<SectionPlan> parseSectionPlans(JsonNode node) {
@@ -199,5 +201,15 @@ public class AiResponseParser {
     private String textOrDefault(JsonNode node, String field, String defaultValue) {
         if (node == null || !node.has(field)) return defaultValue;
         return node.get(field).asText(defaultValue);
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, Object> parseLayoutData(JsonNode node) {
+        if (node == null || !node.isObject()) return java.util.Map.of();
+        try {
+            return objectMapper.convertValue(node, java.util.Map.class);
+        } catch (Exception e) {
+            return java.util.Map.of();
+        }
     }
 }
