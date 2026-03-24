@@ -2,9 +2,10 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
+import { SectionEditor } from '@/components/generation/SectionEditor';
 import { GenerationProgress } from '@/components/generation/GenerationProgress';
 import { GenerationResult } from '@/components/generation/GenerationResult';
 import { Button } from '@/components/ui/button';
@@ -142,6 +143,15 @@ export function GeneratePage() {
   const [mapping, setMapping] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
 
+  // Step 4 state
+  type SectionData = { key: string; title: string; content: string; highlights: string[]; tables: Array<{ caption: string; headers: string[]; rows: string[][] }>; references: string[]; layoutHint?: string };
+  const [sections, setSections] = useState<SectionData[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [generatingIndex, setGeneratingIndex] = useState(-1);
+  const [totalSectionsCount, setTotalSectionsCount] = useState(0);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [includeWebSearch, setIncludeWebSearch] = useState(false);
+
   useEffect(() => {
     gen.loadTemplates();
     gen.loadJobs();
@@ -270,11 +280,77 @@ export function GeneratePage() {
     }
   };
 
-  // Step 3: 매핑 저장 후 Step 4로
+  // Step 3 → Step 4: 매핑 저장 + 섹션 생성 시작
   const handleSaveMapping = async () => {
     if (!jobId) return;
     await saveRequirementMapping(jobId, { requirements, mapping: reqMapping });
+    handleStartSectionGeneration();
+  };
+
+  // Step 4: 섹션 생성
+  const handleStartSectionGeneration = async () => {
+    if (!jobId) return;
+    setGenerating(true);
+    setGenerateError(null);
+    setSections([]);
+    setGeneratingIndex(0);
     setWizardStep(4);
+    try {
+      const refIds = refDocs.length > 0 ? refDocs.map(d => d.id) : undefined;
+      await startSectionGeneration(jobId, refIds, includeWebSearch);
+
+      const token = localStorage.getItem('accessToken');
+      const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
+      const es = new EventSource(url);
+
+      es.addEventListener('progress', (e) => {
+        const data: GenerationProgressEvent = JSON.parse(e.data);
+        if (data.currentSection != null && data.totalSections != null) {
+          setGeneratingIndex(data.currentSection - 1);
+          setTotalSectionsCount(data.totalSections);
+        }
+      });
+
+      es.addEventListener('complete', () => {
+        es.close();
+        fetchJob(jobId).then(updated => {
+          if (updated.generatedSections) {
+            try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+          }
+          setTotalSectionsCount(updated.totalSections);
+          setGenerating(false);
+          setGeneratingIndex(-1);
+        });
+      });
+
+      es.addEventListener('error', (e) => {
+        try {
+          const data: GenerationProgressEvent = JSON.parse((e as MessageEvent).data);
+          setGenerateError(data.message || '섹션 생성 중 오류가 발생했습니다.');
+        } catch {
+          setGenerateError('섹션 생성 중 오류가 발생했습니다.');
+        }
+        es.close();
+        setGenerating(false);
+        setGeneratingIndex(-1);
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) return;
+        setGenerateError('서버와의 연결이 끊어졌습니다.');
+        es.close();
+        setGenerating(false);
+        setGeneratingIndex(-1);
+      };
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : '생성 실패');
+      setGenerating(false);
+      setGeneratingIndex(-1);
+    }
+  };
+
+  const handleSectionChange = (index: number, updated: SectionData) => {
+    setSections(prev => prev.map((s, i) => i === index ? updated : s));
   };
 
   const handleReset = () => {
@@ -291,6 +367,12 @@ export function GeneratePage() {
     setReqMapping({});
     setMapping(false);
     setMappingError(null);
+    setSections([]);
+    setGenerating(false);
+    setGeneratingIndex(-1);
+    setTotalSectionsCount(0);
+    setGenerateError(null);
+    setIncludeWebSearch(false);
   };
 
   return (
@@ -457,19 +539,56 @@ export function GeneratePage() {
             </Card>
           )}
 
-          {/* ── Step 4~5: 향후 구현 (Phase C~D) ── */}
-          {wizardStep >= 4 && (
+          {/* ── Step 4: 내용 생성 ── */}
+          {wizardStep === 4 && (
             <Card>
               <CardHeader>
-                <CardTitle>다음 단계</CardTitle>
-                <CardDescription>내용 생성과 미리보기는 다음 업데이트에서 제공됩니다.</CardDescription>
+                <CardTitle>내용 생성</CardTitle>
+                <CardDescription>
+                  {generating ? '섹션별로 내용을 생성하고 있습니다...' :
+                    sections.length > 0 ? '생성된 내용을 확인하고 수정할 수 있습니다. 좌측 목록에서 섹션을 선택하세요.' :
+                    '섹션 생성을 시작합니다.'}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <SectionEditor
+                  sections={sections}
+                  generatingIndex={generating ? generatingIndex : -1}
+                  totalSections={totalSectionsCount || sections.length}
+                  onSectionChange={handleSectionChange}
+                />
+
+                {generateError && (
+                  <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 rounded-md p-3">
+                    <AlertCircle className="h-4 w-4 shrink-0" />{generateError}
+                  </div>
+                )}
+
+                <div className="flex justify-between">
+                  <Button variant="outline" onClick={() => setWizardStep(3)} disabled={generating}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (요구사항)
+                  </Button>
+                  <Button onClick={() => setWizardStep(5)} disabled={generating || sections.length === 0}>
+                    <ArrowRight className="h-4 w-4 mr-1.5" />미리보기
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Step 5: 미리보기 (Phase D에서 구현) ── */}
+          {wizardStep === 5 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>미리보기 & 출력</CardTitle>
+                <CardDescription>HTML 미리보기와 PDF 다운로드는 다음 업데이트에서 제공됩니다.</CardDescription>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-4">
-                  요구사항 배치가 저장되었습니다. 내용 생성 → 미리보기 단계는 곧 구현됩니다.
+                  {sections.length}개 섹션 내용이 생성되었습니다. 렌더링 및 PDF 출력 기능은 곧 구현됩니다.
                 </p>
-                <Button variant="outline" onClick={() => setWizardStep(3)}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />요구사항 배치로 돌아가기
+                <Button variant="outline" onClick={() => setWizardStep(4)}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />내용 수정으로 돌아가기
                 </Button>
               </CardContent>
             </Card>

@@ -16,6 +16,7 @@ public record GenerationResponse(
         String stepStatus,
         String outline,
         String requirementMapping,
+        String generatedSections,
         String outputFilePath,
         String errorMessage,
         LocalDateTime createdAt,

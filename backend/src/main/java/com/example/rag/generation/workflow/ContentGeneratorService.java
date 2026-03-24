@@ -22,6 +22,9 @@ public class ContentGeneratorService {
     private static final String SECTION_FORMAT =
             "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[]}";
 
+    private static final String SECTION_V2_FORMAT =
+            "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[],\"layoutHint\":\"시각적 배치 권장사항\"}";
+
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;
     private final AiResponseParser parser;
@@ -79,6 +82,48 @@ public class ContentGeneratorService {
 
         if (log.isDebugEnabled()) {
             log.debug("Section '{}' raw response length: {}", plan.heading(), content != null ? content.length() : 0);
+        }
+        return parser.parseSection(content);
+    }
+
+    /**
+     * 요구사항 기반 섹션 생성 (위자드 Step 4용)
+     */
+    public SectionContent generateSectionWithRequirements(String key, String heading, String description,
+                                                           String requirementsText, String systemPrompt,
+                                                           List<String> ragContext, List<String> webContext,
+                                                           List<SectionContent> previousSections) {
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        String userPrompt = promptLoader.load("generation-section-v2.txt");
+
+        String joined = previousSections.stream()
+                .map(s -> "## " + s.title() + "\n" + s.content())
+                .collect(Collectors.joining("\n\n"));
+        String prevCtx = joined.isBlank() ? "없음 (첫 번째 섹션)" : joined;
+        if (prevCtx.length() > 5000) {
+            prevCtx = prevCtx.substring(prevCtx.length() - 5000);
+        }
+        final String previousContext = prevCtx;
+        String contextText = ragContext.isEmpty() ? "없음" : String.join("\n---\n", ragContext);
+        String webText = webContext.isEmpty() ? "없음" : String.join("\n---\n", webContext);
+        String reqText = requirementsText.isBlank() ? "없음" : requirementsText;
+        String desc = description != null ? description : "";
+
+        String content = client.prompt()
+                .system(systemPrompt)
+                .user(u -> u.text(userPrompt)
+                        .param("format", SECTION_V2_FORMAT)
+                        .param("heading", heading)
+                        .param("description", desc)
+                        .param("requirements", reqText)
+                        .param("previous", previousContext)
+                        .param("context", contextText)
+                        .param("webContext", webText))
+                .call()
+                .content();
+
+        if (log.isDebugEnabled()) {
+            log.debug("Section v2 '{}' raw response length: {}", heading, content != null ? content.length() : 0);
         }
         return parser.parseSection(content);
     }

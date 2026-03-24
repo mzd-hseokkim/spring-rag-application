@@ -11,6 +11,8 @@ import com.example.rag.generation.renderer.DocumentRendererService;
 import com.example.rag.questionnaire.workflow.Requirement;
 import com.example.rag.questionnaire.workflow.RequirementExtractor;
 import com.example.rag.questionnaire.workflow.QuestionnaireGeneratorService;
+import com.example.rag.questionnaire.workflow.TavilySearchService;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -24,6 +26,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -36,6 +39,7 @@ public class GenerationWorkflowService {
     private final OutlineExtractor outlineExtractor;
     private final RequirementExtractor requirementExtractor;
     private final RequirementMapper requirementMapper;
+    private final TavilySearchService tavilySearchService;
     private final DocumentRendererService rendererService;
     private final SearchService searchService;
     private final GenerationJobRepository jobRepository;
@@ -46,6 +50,7 @@ public class GenerationWorkflowService {
                                      OutlineExtractor outlineExtractor,
                                      RequirementExtractor requirementExtractor,
                                      RequirementMapper requirementMapper,
+                                     TavilySearchService tavilySearchService,
                                      DocumentRendererService rendererService,
                                      SearchService searchService,
                                      GenerationJobRepository jobRepository,
@@ -55,6 +60,7 @@ public class GenerationWorkflowService {
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
         this.requirementMapper = requirementMapper;
+        this.tavilySearchService = tavilySearchService;
         this.rendererService = rendererService;
         this.searchService = searchService;
         this.jobRepository = jobRepository;
@@ -239,6 +245,135 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 위자드 Step 4: 요구사항 기반 섹션별 내용 생성 (async)
+     */
+    @Async("ingestionExecutor")
+    public void generateWizardSections(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch) {
+        GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
+                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+        try {
+            job.setStatus(GenerationStatus.GENERATING);
+            job.setCurrentStep(4);
+            job.setStepStatus("PROCESSING");
+            jobRepository.save(job);
+
+            // 목차 파싱
+            List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
+
+            // 요구사항 매핑 파싱
+            Map<String, List<String>> mapping = Map.of();
+            List<Requirement> requirements = List.of();
+            if (job.getRequirementMapping() != null) {
+                try {
+                    var parsed = objectMapper.readTree(job.getRequirementMapping());
+                    requirements = objectMapper.readValue(
+                            parsed.get("requirements").toString(),
+                            new TypeReference<List<Requirement>>() {});
+                    mapping = objectMapper.readValue(
+                            parsed.get("mapping").toString(),
+                            new TypeReference<Map<String, List<String>>>() {});
+                } catch (Exception e) {
+                    log.warn("Failed to parse requirement mapping: {}", e.getMessage());
+                }
+            }
+
+            Map<String, Requirement> reqMap = new java.util.HashMap<>();
+            for (Requirement r : requirements) reqMap.put(r.id(), r);
+
+            // 리프 노드(최하위 목차) 수집
+            List<LeafSection> leafSections = new ArrayList<>();
+            collectLeafSections(outline, mapping, leafSections);
+
+            job.setTotalSections(leafSections.size());
+            jobRepository.save(job);
+
+            String systemPrompt = job.getTemplate().getSystemPrompt();
+            if (systemPrompt == null || systemPrompt.isBlank()) {
+                systemPrompt = "당신은 전문 제안서 작성자입니다. 고객 요구사항을 정확히 반영하고, 구체적이며 설득력 있는 문서를 작성하세요.";
+            }
+
+            List<SectionContent> sections = new ArrayList<>();
+
+            for (int i = 0; i < leafSections.size(); i++) {
+                LeafSection leaf = leafSections.get(i);
+                job.setCurrentSection(i + 1);
+                jobRepository.save(job);
+
+                emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title));
+
+                // 해당 섹션의 요구사항 텍스트
+                String reqText = leaf.requirementIds.stream()
+                        .map(reqMap::get)
+                        .filter(java.util.Objects::nonNull)
+                        .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
+                        .collect(java.util.stream.Collectors.joining("\n"));
+
+                // 참조문서 RAG 검색
+                List<String> ragContext = List.of();
+                if (!refDocIds.isEmpty()) {
+                    String query = leaf.title + " " + reqText;
+                    if (query.length() > 500) query = query.substring(0, 500);
+                    ragContext = searchService.searchDirect(query, refDocIds).stream()
+                            .map(ChunkSearchResult::contextContent)
+                            .toList();
+                }
+
+                // 웹 검색
+                List<String> webContext = List.of();
+                if (includeWebSearch) {
+                    String webQuery = leaf.title + " 제안서";
+                    webContext = tavilySearchService.search(webQuery, 3);
+                }
+
+                // 섹션 생성 (재시도 포함)
+                SectionContent content = null;
+                for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                    try {
+                        content = contentGenerator.generateSectionWithRequirements(
+                                leaf.key, leaf.title, leaf.description, reqText,
+                                systemPrompt, ragContext, webContext, sections);
+                        break;
+                    } catch (Exception e) {
+                        if (attempt == MAX_RETRIES) throw e;
+                        log.warn("Section generation retry {}/{} for '{}': {}", attempt + 1, MAX_RETRIES, leaf.title, e.getMessage());
+                    }
+                }
+                sections.add(content);
+                log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title);
+            }
+
+            job.setGeneratedSections(toJson(sections));
+            job.setCurrentStep(4);
+            job.setStepStatus("COMPLETE");
+            job.setStatus(GenerationStatus.READY);
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.complete("sections"));
+            log.info("Generation job {} - all {} wizard sections complete", jobId, sections.size());
+
+        } catch (Exception e) {
+            log.error("Generation job {} wizard section generation failed", jobId, e);
+            job.setErrorMessage(e.getMessage());
+            job.setStepStatus("FAILED");
+            job.setStatus(GenerationStatus.FAILED);
+            jobRepository.save(job);
+            emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    private record LeafSection(String key, String title, String description, List<String> requirementIds) {}
+
+    private void collectLeafSections(List<OutlineNode> nodes, Map<String, List<String>> mapping, List<LeafSection> result) {
+        for (OutlineNode node : nodes) {
+            if (node.children().isEmpty()) {
+                result.add(new LeafSection(node.key(), node.title(), node.description(), mapping.getOrDefault(node.key(), List.of())));
+            } else {
+                collectLeafSections(node.children(), mapping, result);
+            }
         }
     }
 

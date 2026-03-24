@@ -27,6 +27,7 @@ export interface GenerationJob {
   stepStatus: string;
   outline: string | null;
   requirementMapping: string | null;
+  generatedSections: string | null;
   outputFilePath: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -155,6 +156,25 @@ export async function saveRequirementMapping(jobId: string, mapping: unknown): P
     body: JSON.stringify(mapping),
   });
   if (!res.ok) throw new Error('Failed to save requirement mapping');
+  return res.json();
+}
+
+export async function startSectionGeneration(jobId: string, referenceDocumentIds?: string[], includeWebSearch?: boolean): Promise<void> {
+  const res = await fetch(`/api/generations/${jobId}/generate-sections`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ referenceDocumentIds: referenceDocumentIds || [], includeWebSearch: includeWebSearch || false }),
+  });
+  if (!res.ok) throw new Error('Failed to start section generation');
+}
+
+export async function saveSection(jobId: string, sectionKey: string, section: unknown): Promise<GenerationJob> {
+  const res = await fetch(`/api/generations/${jobId}/sections/${sectionKey}`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(section),
+  });
+  if (!res.ok) throw new Error('Failed to save section');
   return res.json();
 }
 

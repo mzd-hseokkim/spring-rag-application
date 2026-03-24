@@ -134,6 +134,58 @@ public class GenerationService {
     }
 
     /**
+     * Step 4: 섹션 생성 시작 (async)
+     */
+    @Transactional
+    public void startSectionGeneration(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setStatus(GenerationStatus.GENERATING);
+        job.setCurrentStep(4);
+        job.setStepStatus("PROCESSING");
+        job.setErrorMessage(null);
+        jobRepository.save(job);
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workflowService.generateWizardSections(jobId, refDocIds, includeWebSearch);
+            }
+        });
+    }
+
+    /**
+     * Step 4: 개별 섹션 수정 저장
+     */
+    @Transactional
+    public GenerationResponse saveSection(UUID jobId, String sectionKey, String updatedSectionJson) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        // generatedSections JSON 내에서 해당 key의 섹션을 교체
+        if (job.getGeneratedSections() != null) {
+            try {
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var sections = mapper.readTree(job.getGeneratedSections());
+                var updated = mapper.readTree(updatedSectionJson);
+                if (sections.isArray()) {
+                    var arr = (com.fasterxml.jackson.databind.node.ArrayNode) sections;
+                    for (int i = 0; i < arr.size(); i++) {
+                        if (sectionKey.equals(arr.get(i).path("key").asText())) {
+                            arr.set(i, updated);
+                            break;
+                        }
+                    }
+                    job.setGeneratedSections(mapper.writeValueAsString(arr));
+                }
+            } catch (Exception e) {
+                throw new RagException("Failed to update section", e);
+            }
+        }
+        jobRepository.save(job);
+        return toResponse(job);
+    }
+
+    /**
      * 기존 단일 플로우 (하위호환)
      */
     @Transactional
@@ -217,6 +269,7 @@ public class GenerationService {
                 job.getStepStatus(),
                 job.getOutline(),
                 job.getRequirementMapping(),
+                job.getGeneratedSections(),
                 job.getOutputFilePath(),
                 job.getErrorMessage(),
                 job.getCreatedAt(),

@@ -69,7 +69,25 @@ public class GenerationController {
         return generationService.saveRequirementMapping(id, mappingJson);
     }
 
+    /**
+     * 위자드 Step 4: 섹션 생성 시작
+     */
+    @PostMapping("/{id}/generate-sections")
+    public void generateSections(@PathVariable UUID id, @RequestBody GenerateSectionsRequest request) {
+        List<UUID> refDocIds = request.referenceDocumentIds() != null ? request.referenceDocumentIds() : List.of();
+        generationService.startSectionGeneration(id, refDocIds, request.includeWebSearch());
+    }
+
+    /**
+     * 위자드 Step 4: 개별 섹션 수정 저장
+     */
+    @PutMapping("/{id}/sections/{key}")
+    public GenerationResponse saveSection(@PathVariable UUID id, @PathVariable String key, @RequestBody String sectionJson) {
+        return generationService.saveSection(id, key, sectionJson);
+    }
+
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
+    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch) {}
 
     @GetMapping("/{id}")
     public GenerationResponse get(@PathVariable UUID id) {
