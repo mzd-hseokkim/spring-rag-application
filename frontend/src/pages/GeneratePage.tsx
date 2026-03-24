@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '@/hooks/useGeneration';
-import { useDocuments } from '@/hooks/useDocuments';
+import { searchDocuments } from '@/api/client';
 import { GenerationProgress } from '@/components/generation/GenerationProgress';
 import { GenerationResult } from '@/components/generation/GenerationResult';
 import { Button } from '@/components/ui/button';
@@ -10,20 +10,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ArrowLeft, FileText, Loader2, AlertCircle, Clock, Paperclip, X } from 'lucide-react';
+import { ArrowLeft, FileText, Loader2, AlertCircle, Clock, Paperclip, X, Trash2, Plus, Search, Download } from 'lucide-react';
 import type { GenerationJob } from '@/api/generation';
-import type { Document } from '@/types';
 import { getDownloadUrl, getPreviewUrl } from '@/api/generation';
+
+type DocItem = { id: string; filename: string; chunkCount: number };
 
 export function GeneratePage() {
   const navigate = useNavigate();
   const gen = useGeneration();
-  const { documents } = useDocuments();
 
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [userInput, setUserInput] = useState('');
-  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [selectedDocs, setSelectedDocs] = useState<DocItem[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
+  const [docSearch, setDocSearch] = useState('');
+  const [docResults, setDocResults] = useState<DocItem[]>([]);
+  const [docSearching, setDocSearching] = useState(false);
+  const docTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     gen.loadTemplates();
@@ -32,25 +36,38 @@ export function GeneratePage() {
 
   const selectedTemplate = gen.templates.find(t => t.id === selectedTemplateId);
   const templateDisplayText = selectedTemplate ? selectedTemplate.name : '템플릿을 선택하세요';
-  const completedDocs = documents.filter(d => d.status === 'COMPLETED');
-  const selectedDocs = completedDocs.filter(d => selectedDocIds.includes(d.id));
 
-  const handleToggleDoc = (docId: string) => {
-    setSelectedDocIds(prev =>
-      prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
+  const doDocSearch = useCallback(async (keyword: string) => {
+    if (!keyword.trim()) { setDocResults([]); setDocSearching(false); return; }
+    setDocSearching(true);
+    try {
+      const docs = await searchDocuments(keyword.trim());
+      setDocResults(docs.map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount })));
+    } catch { setDocResults([]); }
+    finally { setDocSearching(false); }
+  }, []);
+
+  const handleDocSearchChange = (value: string) => {
+    setDocSearch(value);
+    if (docTimerRef.current) clearTimeout(docTimerRef.current);
+    docTimerRef.current = setTimeout(() => doDocSearch(value), 400);
+  };
+
+  const handleToggleDoc = (doc: DocItem) => {
+    setSelectedDocs(prev =>
+      prev.some(d => d.id === doc.id) ? prev.filter(d => d.id !== doc.id) : [...prev, doc]
     );
   };
 
   const handleRemoveDoc = (docId: string) => {
-    setSelectedDocIds(prev => prev.filter(id => id !== docId));
+    setSelectedDocs(prev => prev.filter(d => d.id !== docId));
   };
 
-  const canStart = selectedTemplateId && (userInput.trim() || selectedDocIds.length > 0);
+  const canStart = selectedTemplateId && (userInput.trim() || selectedDocs.length > 0);
 
   const handleStart = () => {
     if (!canStart) return;
 
-    // 첨부 문서 정보를 입력에 포함
     let finalInput = userInput.trim();
     if (selectedDocs.length > 0) {
       const docList = selectedDocs.map(d => d.filename).join(', ');
@@ -62,7 +79,7 @@ export function GeneratePage() {
       templateId: selectedTemplateId,
       userInput: finalInput,
       options: {
-        documentIds: selectedDocIds.length > 0 ? selectedDocIds : undefined,
+        documentIds: selectedDocs.length > 0 ? selectedDocs.map(d => d.id) : undefined,
       },
     });
   };
@@ -87,7 +104,11 @@ export function GeneratePage() {
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate('/')} title="채팅으로 돌아가기">
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h2 className="text-sm font-medium">문서 생성</h2>
+          <h2 className="text-sm font-medium flex-1">문서 생성</h2>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleReset}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            새로 만들기
+          </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
@@ -96,14 +117,14 @@ export function GeneratePage() {
             <p className="text-xs text-sidebar-foreground/40 px-2">아직 생성된 문서가 없습니다.</p>
           )}
           {gen.jobs.map((job) => (
-            <JobHistoryItem key={job.id} job={job} />
+            <JobHistoryItem key={job.id} job={job} onDelete={gen.removeJob} />
           ))}
         </div>
       </aside>
 
       {/* 메인 영역 */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto py-8 px-6">
+        <div className="max-w-5xl mx-auto py-8 px-6">
           {step === 'input' && (
             <Card>
               <CardHeader>
@@ -169,27 +190,43 @@ export function GeneratePage() {
 
                   {/* 문서 선택 패널 */}
                   {showDocPicker && (
-                    <div className="border rounded-lg p-3 space-y-1 max-h-48 overflow-y-auto bg-muted/30">
-                      {completedDocs.length === 0 ? (
-                        <p className="text-xs text-muted-foreground py-2 text-center">업로드된 문서가 없습니다.</p>
-                      ) : (
-                        completedDocs.map((doc) => (
-                          <label
-                            key={doc.id}
-                            className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-accent/50 cursor-pointer text-sm"
-                          >
-                            <Checkbox
-                              checked={selectedDocIds.includes(doc.id)}
-                              onCheckedChange={() => handleToggleDoc(doc.id)}
-                            />
-                            <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="truncate">{doc.filename}</span>
-                            <span className="ml-auto text-xs text-muted-foreground shrink-0">
-                              {doc.chunkCount}청크
-                            </span>
-                          </label>
-                        ))
-                      )}
+                    <div className="border rounded-lg bg-muted/30">
+                      <div className="relative px-3 pt-3 pb-2">
+                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground mt-0.5" />
+                        <input
+                          value={docSearch}
+                          onChange={(e) => handleDocSearchChange(e.target.value)}
+                          placeholder="문서명을 입력하여 검색..."
+                          className="h-8 w-full text-sm pl-8 pr-3 rounded-md border bg-background"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="px-3 pb-3 space-y-1 max-h-48 overflow-y-auto">
+                        {!docSearch.trim() ? (
+                          <p className="text-xs text-muted-foreground py-2 text-center">문서명을 입력하세요.</p>
+                        ) : docSearching ? (
+                          <p className="text-xs text-muted-foreground py-2 text-center">검색 중...</p>
+                        ) : docResults.length === 0 ? (
+                          <p className="text-xs text-muted-foreground py-2 text-center">검색 결과가 없습니다.</p>
+                        ) : (
+                          docResults.map((doc) => (
+                            <label
+                              key={doc.id}
+                              className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-accent/50 cursor-pointer text-sm"
+                            >
+                              <Checkbox
+                                checked={selectedDocs.some(d => d.id === doc.id)}
+                                onCheckedChange={() => handleToggleDoc(doc)}
+                              />
+                              <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="truncate">{doc.filename}</span>
+                              <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                                {doc.chunkCount}청크
+                              </span>
+                            </label>
+                          ))
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -267,7 +304,7 @@ export function GeneratePage() {
   );
 }
 
-function JobHistoryItem({ job }: { job: GenerationJob }) {
+function JobHistoryItem({ job, onDelete }: { job: GenerationJob; onDelete: (id: string) => void }) {
   const statusIcon = {
     COMPLETE: <FileText className="h-3.5 w-3.5 text-green-500" />,
     FAILED: <AlertCircle className="h-3.5 w-3.5 text-destructive" />,
@@ -284,19 +321,48 @@ function JobHistoryItem({ job }: { job: GenerationJob }) {
     }
   };
 
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const token = localStorage.getItem('accessToken') || '';
+    const res = await fetch(getDownloadUrl(job.id), { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `document-${new Date(job.createdAt).toISOString().slice(0, 10)}.html`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   return (
-    <button
-      onClick={handleClick}
-      className="flex items-center gap-2 w-full px-2 py-2 text-left rounded-md hover:bg-sidebar-accent/50 transition-colors cursor-pointer"
-    >
-      {statusIcon[job.status]}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm truncate">{job.templateName}</p>
-        <div className="flex items-center gap-1 text-xs text-sidebar-foreground/40">
-          <Clock className="h-3 w-3" />
-          {new Date(job.createdAt).toLocaleDateString('ko-KR')}
+    <div className="group flex items-center gap-2 w-full px-2 py-2 rounded-md hover:bg-sidebar-accent/50 transition-colors">
+      <button onClick={handleClick} className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
+        {statusIcon[job.status]}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm truncate">{job.templateName}</p>
+          <div className="flex items-center gap-1 text-xs text-sidebar-foreground/40">
+            <Clock className="h-3 w-3" />
+            {new Date(job.createdAt).toLocaleDateString('ko-KR')}
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      {job.status === 'COMPLETE' && (
+        <button
+          onClick={handleDownload}
+          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all cursor-pointer shrink-0"
+          title="다운로드"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(job.id); }}
+        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all cursor-pointer shrink-0"
+        title="삭제"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
   );
 }

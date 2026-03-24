@@ -76,6 +76,14 @@ public class DocumentController {
                 .toList();
     }
 
+    @GetMapping("/search")
+    public List<DocumentResponse> search(@RequestParam String q, Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        return documentService.searchByFilename(q, userId).stream()
+                .map(DocumentResponse::from)
+                .toList();
+    }
+
     @GetMapping("/{id}")
     public DocumentResponse findById(@PathVariable UUID id) {
         return DocumentResponse.from(documentService.findById(id));

@@ -30,4 +30,10 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     @Query("SELECT d FROM Document d LEFT JOIN FETCH d.tags LEFT JOIN FETCH d.collections WHERE d.id = :id")
     Optional<Document> findByIdWithTags(UUID id);
+
+    @Query("SELECT DISTINCT d FROM Document d LEFT JOIN FETCH d.tags LEFT JOIN FETCH d.collections " +
+           "WHERE d.status = :status AND (d.user.id = :userId OR d.isPublic = true) " +
+           "AND LOWER(d.filename) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "ORDER BY d.createdAt DESC")
+    List<Document> searchByFilename(DocumentStatus status, UUID userId, String keyword);
 }

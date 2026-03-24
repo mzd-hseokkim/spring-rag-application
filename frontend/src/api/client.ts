@@ -26,6 +26,12 @@ export async function fetchDocuments(): Promise<Document[]> {
   return res.json();
 }
 
+export async function searchDocuments(keyword: string): Promise<Document[]> {
+  const res = await fetch(`/api/documents/search?q=${encodeURIComponent(keyword)}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to search documents');
+  return res.json();
+}
+
 export async function fetchConversations(): Promise<Conversation[]> {
   const res = await fetch('/api/conversations', { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch conversations');

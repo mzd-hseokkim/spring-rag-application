@@ -78,6 +78,11 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
+    public List<Document> searchByFilename(String keyword, UUID userId) {
+        return documentRepository.searchByFilename(DocumentStatus.COMPLETED, userId, keyword);
+    }
+
+    @Transactional(readOnly = true)
     public Document findById(UUID id) {
         return documentRepository.findByIdWithTags(id)
                 .orElseThrow(() -> new DocumentNotFoundException(id));

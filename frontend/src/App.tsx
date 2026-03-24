@@ -18,6 +18,7 @@ import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 import { GeneratePage } from '@/pages/GeneratePage';
+import { QuestionnairePage } from '@/pages/QuestionnairePage';
 
 function App() {
   return (
@@ -41,6 +42,11 @@ function App() {
             <Route path="/generate" element={
               <ProtectedRoute>
                 <GeneratePage />
+              </ProtectedRoute>
+            } />
+            <Route path="/questionnaire" element={
+              <ProtectedRoute>
+                <QuestionnairePage />
               </ProtectedRoute>
             } />
             <Route path="/admin" element={
