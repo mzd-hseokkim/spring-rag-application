@@ -56,4 +56,18 @@ public class SearchService {
         List<ChunkSearchResult> fused = rrfFusionService.fuse(allVectorResults, allKeywordResults, FUSION_TOP);
         return rerankService.rerank(query, fused, TOP_K);
     }
+
+    /**
+     * 쿼리 확장 없이 직접 벡터+키워드 검색만 수행한다.
+     * 이미 잘 설계된 검색 키워드(ANALYSIS_QUERIES 등)에 적합.
+     */
+    public List<ChunkSearchResult> searchDirect(String query, List<UUID> documentIds) {
+        CompletableFuture<List<ChunkSearchResult>> vectorFuture =
+                CompletableFuture.supplyAsync(() -> vectorSearchService.search(query, SEARCH_LIMIT, documentIds));
+        CompletableFuture<List<ChunkSearchResult>> keywordFuture =
+                CompletableFuture.supplyAsync(() -> keywordSearchService.search(query, SEARCH_LIMIT, documentIds));
+
+        List<ChunkSearchResult> fused = rrfFusionService.fuse(vectorFuture.join(), keywordFuture.join(), FUSION_TOP);
+        return fused.stream().limit(TOP_K).toList();
+    }
 }

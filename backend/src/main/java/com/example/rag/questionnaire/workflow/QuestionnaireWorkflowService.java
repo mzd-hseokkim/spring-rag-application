@@ -1,5 +1,6 @@
 package com.example.rag.questionnaire.workflow;
 
+import com.example.rag.common.RagException;
 import com.example.rag.questionnaire.QuestionnaireEmitterManager;
 import com.example.rag.questionnaire.QuestionnaireJob;
 import com.example.rag.questionnaire.QuestionnaireJobRepository;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class QuestionnaireWorkflowService {
@@ -71,12 +73,12 @@ public class QuestionnaireWorkflowService {
     }
 
     @Async("ingestionExecutor")
-    public void execute(QuestionnaireJob detachedJob, List<UUID> targetDocIds, List<UUID> refDocIds,
-                        List<UUID> personaIds, int questionCount, boolean includeWebSearch) {
+    public void execute(QuestionnaireJob detachedJob, List<UUID> customerDocIds, List<UUID> proposalDocIds,
+                        List<UUID> refDocIds, List<UUID> personaIds, int questionCount, boolean includeWebSearch) {
         QuestionnaireJob job = jobRepository.findByIdWithUser(detachedJob.getId())
                 .orElseThrow(() -> new IllegalStateException("Job not found: " + detachedJob.getId()));
         try {
-            // ── Phase 1: ANALYZING — 문서 전체 분석 ──
+            // ── Phase 1: ANALYZING — 고객문서 + 제안문서 분석 ──
             updateStatus(job, QuestionnaireStatus.ANALYZING);
             emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "문서를 분석하고 있습니다..."));
 
@@ -84,11 +86,11 @@ public class QuestionnaireWorkflowService {
             job.setTotalPersonas(personas.size());
             jobRepository.save(job);
 
-            log.info("Questionnaire job {} - {} personas, {} target docs, {} ref docs, questionCount={}, webSearch={}",
-                    job.getId(), personas.size(), targetDocIds.size(), refDocIds.size(), questionCount, includeWebSearch);
+            log.info("Questionnaire job {} - {} personas, {} customer docs, {} proposal docs, {} ref docs, questionCount={}, webSearch={}",
+                    job.getId(), personas.size(), customerDocIds.size(), proposalDocIds.size(), refDocIds.size(), questionCount, includeWebSearch);
 
             // 캐시에서 기존 분석 결과 조회
-            String documentAnalysis = analysisCache.get(targetDocIds, job.getUserInput());
+            String documentAnalysis = analysisCache.get(customerDocIds, proposalDocIds, job.getUserInput());
 
             if (documentAnalysis != null) {
                 // 캐시 히트 — 분석 단계 스킵
@@ -96,19 +98,23 @@ public class QuestionnaireWorkflowService {
                         "이전 분석 결과를 재사용합니다. 질문 생성을 준비합니다..."));
                 log.info("Questionnaire job {} - using cached document analysis ({} chars)", job.getId(), documentAnalysis.length());
             } else {
-                // 캐시 미스 — 문서 수집 + 분석 수행
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "과제 문서에서 관련 내용을 수집하고 있습니다..."));
-                List<String> allDocChunks = collectDocumentContent(targetDocIds, job.getUserInput());
-                log.info("Questionnaire job {} - collected {} unique chunks for analysis", job.getId(), allDocChunks.size());
+                // 캐시 미스 — 고객문서 + 제안문서 별도 수집 후 분석
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "고객 문서에서 관련 내용을 수집하고 있습니다..."));
+                List<String> customerChunks = collectDocumentContent(customerDocIds, job.getUserInput());
+                log.info("Questionnaire job {} - collected {} customer chunks", job.getId(), customerChunks.size());
+
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "제안 문서에서 관련 내용을 수집하고 있습니다..."));
+                List<String> proposalChunks = collectDocumentContent(proposalDocIds, job.getUserInput());
+                log.info("Questionnaire job {} - collected {} proposal chunks", job.getId(), proposalChunks.size());
 
                 emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
-                        "문서 구조와 강점/약점/누락사항을 분석하고 있습니다... (" + allDocChunks.size() + "개 청크)"));
-                documentAnalysis = generator.analyzeDocuments(allDocChunks, job.getUserInput(),
+                        "고객 요구사항 대비 제안서 갭을 분석하고 있습니다... (고객 " + customerChunks.size() + "청크, 제안 " + proposalChunks.size() + "청크)"));
+                documentAnalysis = generator.analyzeDocuments(customerChunks, proposalChunks, job.getUserInput(),
                         msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
                 log.info("Questionnaire job {} - document analysis complete ({} chars)", job.getId(), documentAnalysis.length());
 
                 // 캐시에 저장
-                analysisCache.put(targetDocIds, job.getUserInput(), documentAnalysis);
+                analysisCache.put(customerDocIds, proposalDocIds, job.getUserInput(), documentAnalysis);
                 emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "문서 분석 완료. 질문 생성을 준비합니다..."));
             }
 
@@ -184,19 +190,28 @@ public class QuestionnaireWorkflowService {
      * 총 컨텍스트 크기를 MAX_ANALYSIS_CHARS 이내로 제한하여 토큰 초과를 방지한다.
      */
     private List<String> collectDocumentContent(List<UUID> documentIds, String userInput) {
-        LinkedHashSet<String> uniqueChunks = new LinkedHashSet<>();
+        if (documentIds.isEmpty()) {
+            return List.of();
+        }
+
+        // 모든 검색을 병렬로 실행 (쿼리 확장 없이 직접 검색)
+        List<CompletableFuture<List<ChunkSearchResult>>> futures = new ArrayList<>();
 
         // 사용자 입력 기반 검색
         if (userInput != null && !userInput.isBlank()) {
             String query = userInput.substring(0, Math.min(userInput.length(), 500));
-            searchService.search(query, documentIds).stream()
-                    .map(ChunkSearchResult::contextContent)
-                    .forEach(uniqueChunks::add);
+            futures.add(CompletableFuture.supplyAsync(() -> searchService.searchDirect(query, documentIds)));
         }
 
         // 평가 영역별 다양한 관점으로 검색
         for (String query : ANALYSIS_QUERIES) {
-            searchService.search(query, documentIds).stream()
+            futures.add(CompletableFuture.supplyAsync(() -> searchService.searchDirect(query, documentIds)));
+        }
+
+        // 모든 검색 완료 대기 후 중복 제거
+        LinkedHashSet<String> uniqueChunks = new LinkedHashSet<>();
+        for (CompletableFuture<List<ChunkSearchResult>> future : futures) {
+            future.join().stream()
                     .map(ChunkSearchResult::contextContent)
                     .forEach(uniqueChunks::add);
         }
@@ -277,7 +292,7 @@ public class QuestionnaireWorkflowService {
         try {
             return objectMapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize to JSON", e);
+            throw new RagException("Failed to serialize to JSON", e);
         }
     }
 }

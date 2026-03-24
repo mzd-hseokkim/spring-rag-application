@@ -6,6 +6,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.example.rag.common.RagException;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,8 +20,9 @@ import java.util.UUID;
 public class AuthService {
 
     private static final String USER_NOT_FOUND = "사용자를 찾을 수 없습니다.";
+    private static final String AVATAR_URL_PREFIX = "/uploads/avatars/";
     private static final Set<String> ALLOWED_IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/gif", "image/webp");
-    private static final long MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
+    private static final long MAX_AVATAR_SIZE = 5L * 1024 * 1024; // 5MB
 
     private final AppUserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -138,10 +141,10 @@ public class AuthService {
             Files.createDirectories(avatarDir);
             Files.write(avatarDir.resolve(filename), file.getBytes());
         } catch (IOException e) {
-            throw new RuntimeException("아바타 저장에 실패했습니다.", e);
+            throw new RagException("아바타 저장에 실패했습니다.", e);
         }
 
-        user.setAvatarUrl("/uploads/avatars/" + filename);
+        user.setAvatarUrl(AVATAR_URL_PREFIX + filename);
         userRepository.save(user);
         return toDto(user);
     }
@@ -157,8 +160,8 @@ public class AuthService {
     }
 
     private void deleteAvatarFile(String avatarUrl) {
-        if (avatarUrl != null && avatarUrl.startsWith("/uploads/avatars/")) {
-            String filename = avatarUrl.substring("/uploads/avatars/".length());
+        if (avatarUrl != null && avatarUrl.startsWith(AVATAR_URL_PREFIX)) {
+            String filename = avatarUrl.substring(AVATAR_URL_PREFIX.length());
             try {
                 Files.deleteIfExists(avatarDir.resolve(filename));
             } catch (IOException ignored) {

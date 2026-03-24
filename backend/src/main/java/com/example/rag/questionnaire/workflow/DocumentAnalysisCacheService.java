@@ -28,8 +28,8 @@ public class DocumentAnalysisCacheService {
         this.ttl = Duration.ofHours(ttlHours);
     }
 
-    public String get(List<UUID> targetDocIds, String userInput) {
-        String key = buildKey(targetDocIds, userInput);
+    public String get(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput) {
+        String key = buildKey(customerDocIds, proposalDocIds, userInput);
         String cached = redisTemplate.opsForValue().get(key);
         if (cached != null) {
             log.info("Document analysis cache HIT: {}", key);
@@ -37,18 +37,24 @@ public class DocumentAnalysisCacheService {
         return cached;
     }
 
-    public void put(List<UUID> targetDocIds, String userInput, String analysis) {
-        String key = buildKey(targetDocIds, userInput);
+    public void put(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput, String analysis) {
+        String key = buildKey(customerDocIds, proposalDocIds, userInput);
         redisTemplate.opsForValue().set(key, analysis, ttl);
         log.info("Document analysis cached: {} ({} chars, TTL {}h)", key, analysis.length(), ttl.toHours());
     }
 
-    private String buildKey(List<UUID> targetDocIds, String userInput) {
-        List<String> sortedIds = targetDocIds.stream()
+    private String buildKey(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput) {
+        List<String> sortedCustomerIds = customerDocIds.stream()
                 .map(UUID::toString)
                 .sorted()
                 .toList();
-        String raw = String.join(",", sortedIds) + "|" + (userInput != null ? userInput : "");
+        List<String> sortedProposalIds = proposalDocIds.stream()
+                .map(UUID::toString)
+                .sorted()
+                .toList();
+        String raw = "C:" + String.join(",", sortedCustomerIds)
+                + "|P:" + String.join(",", sortedProposalIds)
+                + "|" + (userInput != null ? userInput : "");
         return KEY_PREFIX + sha256(raw);
     }
 

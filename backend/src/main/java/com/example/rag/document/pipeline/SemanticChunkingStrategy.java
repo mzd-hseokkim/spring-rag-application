@@ -5,6 +5,7 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 public class SemanticChunkingStrategy implements ChunkingStrategy {
@@ -12,19 +13,19 @@ public class SemanticChunkingStrategy implements ChunkingStrategy {
     private static final Pattern SENTENCE_SPLIT =
             Pattern.compile("(?<=[.!?。])(\\s+)(?=[A-Z가-힣\"'(\\[])|(?<=\\n\\n)");
 
-    private final EmbeddingModel embeddingModel;
+    private final Supplier<EmbeddingModel> embeddingModelSupplier;
     private final int bufferSize;
     private final double breakpointPercentile;
     private final int minChunkSize;
     private final int maxChunkSize;
     private final FixedSizeChunkingStrategy fallbackStrategy;
 
-    public SemanticChunkingStrategy(EmbeddingModel embeddingModel,
+    public SemanticChunkingStrategy(Supplier<EmbeddingModel> embeddingModelSupplier,
                                     int bufferSize,
                                     double breakpointPercentile,
                                     int minChunkSize,
                                     int maxChunkSize) {
-        this.embeddingModel = embeddingModel;
+        this.embeddingModelSupplier = embeddingModelSupplier;
         this.bufferSize = bufferSize;
         this.breakpointPercentile = breakpointPercentile;
         this.minChunkSize = minChunkSize;
@@ -86,6 +87,7 @@ public class SemanticChunkingStrategy implements ChunkingStrategy {
     }
 
     private float[][] embedBatch(List<String> texts) {
+        EmbeddingModel embeddingModel = embeddingModelSupplier.get();
         float[][] result = new float[texts.size()][];
         // 배치 크기 제한 (512개씩)
         int batchSize = 512;

@@ -1,5 +1,6 @@
 package com.example.rag.generation.renderer;
 
+import com.example.rag.common.RagException;
 import com.example.rag.generation.template.DocumentTemplate;
 import com.example.rag.generation.workflow.DocumentOutline;
 import com.example.rag.generation.workflow.SectionContent;
@@ -67,7 +68,7 @@ public class HtmlRenderer implements Renderer {
             Files.writeString(outputFile, html);
             return outputFile.toString();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write generated HTML file", e);
+            throw new RagException("Failed to write generated HTML file", e);
         }
     }
 }

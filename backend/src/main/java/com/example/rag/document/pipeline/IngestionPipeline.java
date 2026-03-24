@@ -198,7 +198,7 @@ public class IngestionPipeline {
     private ChunkingStrategy buildChunkingStrategy(ChunkingSettings s) {
         if ("semantic".equalsIgnoreCase(s.mode())) {
             return new SemanticChunkingStrategy(
-                    modelProvider.getEmbeddingModel(),
+                    modelProvider::getEmbeddingModel,
                     s.semanticBufferSize(),
                     s.semanticBreakpointPercentile(),
                     s.semanticMinChunkSize(),

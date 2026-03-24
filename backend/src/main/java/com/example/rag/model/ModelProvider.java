@@ -2,5 +2,6 @@ package com.example.rag.model;
 
 public enum ModelProvider {
     OLLAMA,
-    ANTHROPIC
+    ANTHROPIC,
+    AZURE_OPENAI
 }

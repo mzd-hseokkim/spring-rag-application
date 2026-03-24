@@ -1,5 +1,6 @@
 package com.example.rag.questionnaire.workflow;
 
+import com.example.rag.common.RagException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -15,7 +16,8 @@ import java.util.regex.Pattern;
 public class QuestionnaireResponseParser {
 
     private static final Logger log = LoggerFactory.getLogger(QuestionnaireResponseParser.class);
-    private static final Pattern CODE_BLOCK = Pattern.compile("```(?:json[n]?)?\\s*\\n?(.*?)\\n?```", Pattern.DOTALL);
+    private static final String QUESTIONS_FIELD = "questions";
+    private static final Pattern CODE_BLOCK = Pattern.compile("```(?:json)?\\s*\\n?(.*?)\\n?```", Pattern.DOTALL);
 
     private final ObjectMapper objectMapper;
 
@@ -34,9 +36,9 @@ public class QuestionnaireResponseParser {
                 questions.add(parseQuestion(item));
             }
         }
-        // 객체 형태: {questions: [...]}
-        else if (node.has("questions") && node.get("questions").isArray()) {
-            for (JsonNode item : node.get("questions")) {
+        // Object wrapping a questions array
+        else if (node.has(QUESTIONS_FIELD) && node.get(QUESTIONS_FIELD).isArray()) {
+            for (JsonNode item : node.get(QUESTIONS_FIELD)) {
                 questions.add(parseQuestion(item));
             }
         }
@@ -44,12 +46,13 @@ public class QuestionnaireResponseParser {
     }
 
     private QuestionAnswer parseQuestion(JsonNode node) {
+        JsonNode sourcesNode = node != null ? node.get("sources") : null;
         return new QuestionAnswer(
                 textOrDefault(node, "question", ""),
                 textOrDefault(node, "answer", ""),
                 textOrDefault(node, "difficulty", "중"),
                 textOrDefault(node, "category", "일반"),
-                toStringList(node.get("sources"))
+                toStringList(sourcesNode)
         );
     }
 
@@ -65,7 +68,7 @@ public class QuestionnaireResponseParser {
         } catch (Exception e) {
             log.error("JSON parse failed even after repair. Extracted JSON:\n{}",
                     json.substring(0, Math.min(json.length(), 500)));
-            throw new RuntimeException("Failed to parse AI response as JSON", e);
+            throw new RagException("Failed to parse AI response as JSON", e);
         }
     }
 
@@ -88,21 +91,10 @@ public class QuestionnaireResponseParser {
     }
 
     private String repairTruncatedJson(String json) {
-        int braces = 0, brackets = 0;
-        boolean inString = false;
-        boolean escaped = false;
-
-        for (int i = 0; i < json.length(); i++) {
-            char c = json.charAt(i);
-            if (escaped) { escaped = false; continue; }
-            if (c == '\\' && inString) { escaped = true; continue; }
-            if (c == '"') { inString = !inString; continue; }
-            if (inString) continue;
-            if (c == '{') braces++;
-            else if (c == '}') braces--;
-            else if (c == '[') brackets++;
-            else if (c == ']') brackets--;
-        }
+        int[] counts = countUnclosedBrackets(json);
+        int braces = counts[0];
+        int brackets = counts[1];
+        boolean inString = counts[2] != 0;
 
         if (braces == 0 && brackets == 0 && !inString) return json;
 
@@ -111,6 +103,34 @@ public class QuestionnaireResponseParser {
         for (int i = 0; i < brackets; i++) sb.append(']');
         for (int i = 0; i < braces; i++) sb.append('}');
         return sb.toString();
+    }
+
+    /** Returns [braces, brackets, inString(0 or 1)] */
+    private int[] countUnclosedBrackets(String json) {
+        int braces = 0;
+        int brackets = 0;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\' && inString) {
+                escaped = true;
+            } else if (c == '"') {
+                inString = !inString;
+            } else if (!inString) {
+                switch (c) {
+                    case '{' -> braces++;
+                    case '}' -> braces--;
+                    case '[' -> brackets++;
+                    case ']' -> brackets--;
+                    default -> { /* ignore */ }
+                }
+            }
+        }
+        return new int[]{braces, brackets, inString ? 1 : 0};
     }
 
     private List<String> toStringList(JsonNode node) {

@@ -1,5 +1,6 @@
 package com.example.rag.generation.workflow;
 
+import com.example.rag.common.RagException;
 import com.example.rag.generation.GenerationEmitterManager;
 import com.example.rag.generation.GenerationJob;
 import com.example.rag.generation.GenerationJobRepository;
@@ -88,8 +89,10 @@ public class GenerationWorkflowService {
                 SectionContent content = generateWithRetry(plan, systemPrompt, sectionContext, sections);
                 sections.add(content);
 
-                log.info("Generation job {} - section {}/{} complete: {}",
-                        job.getId(), i + 1, outline.sections().size(), plan.heading());
+                if (log.isInfoEnabled()) {
+                    log.info("Generation job {} - section {}/{} complete: {}",
+                            job.getId(), i + 1, outline.sections().size(), plan.heading());
+                }
             }
 
             job.setGeneratedSections(toJson(sections));
@@ -176,7 +179,7 @@ public class GenerationWorkflowService {
         try {
             return objectMapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize to JSON", e);
+            throw new RagException("Failed to serialize to JSON", e);
         }
     }
 }

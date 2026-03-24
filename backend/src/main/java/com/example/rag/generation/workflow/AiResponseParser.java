@@ -1,5 +1,6 @@
 package com.example.rag.generation.workflow;
 
+import com.example.rag.common.RagException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -21,7 +22,10 @@ import java.util.regex.Pattern;
 public class AiResponseParser {
 
     private static final Logger log = LoggerFactory.getLogger(AiResponseParser.class);
-    private static final Pattern CODE_BLOCK = Pattern.compile("```(?:json[n]?)?\\s*\\n?(.*?)\\n?```", Pattern.DOTALL);
+    private static final String TITLE_FIELD = "title";
+    private static final String SECTIONS_FIELD = "sections";
+    private static final String CELLS_FIELD = "cells";
+    private static final Pattern CODE_BLOCK = Pattern.compile("```(?:json)?\\s*\\n?(.*?)\\n?```", Pattern.DOTALL);
 
     private final ObjectMapper objectMapper;
 
@@ -31,32 +35,39 @@ public class AiResponseParser {
 
     public DocumentOutline parseOutline(String raw) {
         JsonNode node = parseToNode(raw);
-        String title = textOrDefault(node, "title", "Untitled");
+        String title = textOrDefault(node, TITLE_FIELD, "Untitled");
         String summary = textOrDefault(node, "summary", "");
-        List<SectionPlan> sections = new ArrayList<>();
-        if (node.has("sections") && node.get("sections").isArray()) {
-            for (JsonNode s : node.get("sections")) {
-                sections.add(new SectionPlan(
-                        textOrDefault(s, "key", "section_" + sections.size()),
-                        textOrDefault(s, "heading", "섹션 " + (sections.size() + 1)),
-                        textOrDefault(s, "purpose", ""),
-                        toStringList(s.get("keyPoints")),
-                        s.has("estimatedLength") ? s.get("estimatedLength").asInt(500) : 500
-                ));
-            }
-        }
+        List<SectionPlan> sections = parseSectionPlans(node);
         return new DocumentOutline(title, summary, sections);
     }
 
     public SectionContent parseSection(String raw) {
         JsonNode node = parseToNode(raw);
         String key = textOrDefault(node, "key", "unknown");
-        String title = textOrDefault(node, "title", "");
+        String title = textOrDefault(node, TITLE_FIELD, "");
         String content = textOrDefault(node, "content", "");
-        List<String> highlights = toStringList(node.get("highlights"));
-        List<String> references = toStringList(node.get("references"));
-        List<ContentTable> tables = parseTables(node.get("tables"));
+        List<String> highlights = toStringList(node != null ? node.get("highlights") : null);
+        List<String> references = toStringList(node != null ? node.get("references") : null);
+        List<ContentTable> tables = parseTables(node != null ? node.get("tables") : null);
         return new SectionContent(key, title, content, highlights, tables, references);
+    }
+
+    private List<SectionPlan> parseSectionPlans(JsonNode node) {
+        List<SectionPlan> sections = new ArrayList<>();
+        if (node == null || !node.has(SECTIONS_FIELD)) return sections;
+        JsonNode sectionsNode = node.get(SECTIONS_FIELD);
+        if (sectionsNode == null || !sectionsNode.isArray()) return sections;
+        for (JsonNode s : sectionsNode) {
+            if (s == null) continue;
+            sections.add(new SectionPlan(
+                    textOrDefault(s, "key", "section_" + sections.size()),
+                    textOrDefault(s, "heading", "섹션 " + (sections.size() + 1)),
+                    textOrDefault(s, "purpose", ""),
+                    toStringList(s.get("keyPoints")),
+                    s.has("estimatedLength") ? s.get("estimatedLength").asInt(500) : 500
+            ));
+        }
+        return sections;
     }
 
     private JsonNode parseToNode(String raw) {
@@ -73,7 +84,7 @@ public class AiResponseParser {
             return objectMapper.readTree(repaired);
         } catch (Exception e) {
             log.error("JSON parse failed even after repair. Extracted JSON:\n{}", json.substring(0, Math.min(json.length(), 500)));
-            throw new RuntimeException("Failed to parse AI response as JSON", e);
+            throw new RagException("Failed to parse AI response as JSON", e);
         }
     }
 
@@ -94,53 +105,53 @@ public class AiResponseParser {
     }
 
     private String repairTruncatedJson(String json) {
-        // 열린 괄호/따옴표를 추적해서 닫아주기
-        int braces = 0, brackets = 0;
+        int[] counts = countUnclosedBrackets(json);
+        int braces = counts[0];
+        int brackets = counts[1];
+        boolean inString = counts[2] != 0;
+
+        if (braces == 0 && brackets == 0 && !inString) return json;
+
+        StringBuilder sb = new StringBuilder(json);
+        if (inString) sb.append('"');
+        for (int i = 0; i < brackets; i++) sb.append(']');
+        for (int i = 0; i < braces; i++) sb.append('}');
+        return sb.toString();
+    }
+
+    /** Returns [braces, brackets, inString(0 or 1)] */
+    private int[] countUnclosedBrackets(String json) {
+        int braces = 0;
+        int brackets = 0;
         boolean inString = false;
         boolean escaped = false;
-        int lastValidPos = 0;
 
         for (int i = 0; i < json.length(); i++) {
             char c = json.charAt(i);
             if (escaped) {
                 escaped = false;
-                continue;
-            }
-            if (c == '\\' && inString) {
+            } else if (c == '\\' && inString) {
                 escaped = true;
-                continue;
-            }
-            if (c == '"') {
+            } else if (c == '"') {
                 inString = !inString;
-                continue;
+            } else if (!inString) {
+                switch (c) {
+                    case '{' -> braces++;
+                    case '}' -> braces--;
+                    case '[' -> brackets++;
+                    case ']' -> brackets--;
+                    default -> { /* ignore */ }
+                }
             }
-            if (inString) continue;
-            if (c == '{') braces++;
-            else if (c == '}') { braces--; if (braces == 0) lastValidPos = i + 1; }
-            else if (c == '[') brackets++;
-            else if (c == ']') brackets--;
         }
-
-        // 이미 유효하면 그대로 반환
-        if (braces == 0 && brackets == 0 && !inString) return json;
-
-        // 마지막으로 완전한 객체 위치까지 자르거나, 괄호를 닫아주기
-        StringBuilder sb = new StringBuilder(json);
-        if (inString) sb.append('"');
-        // 열린 brackets/braces 닫기
-        for (int i = 0; i < brackets; i++) sb.append(']');
-        for (int i = 0; i < braces; i++) sb.append('}');
-
-        return sb.toString();
+        return new int[]{braces, brackets, inString ? 1 : 0};
     }
 
     private List<ContentTable> parseTables(JsonNode tablesNode) {
         List<ContentTable> tables = new ArrayList<>();
         if (tablesNode == null || !tablesNode.isArray()) return tables;
         for (JsonNode t : tablesNode) {
-            // caption 또는 title
-            String caption = t.has("caption") ? t.get("caption").asText("")
-                    : t.has("title") ? t.get("title").asText("") : "";
+            String caption = extractCaption(t);
             List<String> headers = toStringList(t.get("headers"));
             List<List<String>> rows = parseRows(t.get("rows"));
             tables.add(new ContentTable(caption, headers, rows));
@@ -148,26 +159,32 @@ public class AiResponseParser {
         return tables;
     }
 
+    private String extractCaption(JsonNode node) {
+        if (node.has("caption")) return node.get("caption").asText("");
+        if (node.has(TITLE_FIELD)) return node.get(TITLE_FIELD).asText("");
+        return "";
+    }
+
     private List<List<String>> parseRows(JsonNode rowsNode) {
         List<List<String>> rows = new ArrayList<>();
         if (rowsNode == null || !rowsNode.isArray()) return rows;
         for (JsonNode row : rowsNode) {
             if (row.isArray()) {
-                // 정상: [["a","b"],["c","d"]]
                 rows.add(toStringList(row));
             } else if (row.isObject()) {
-                // 비정상: [{"cells":["a","b"]},...]
-                if (row.has("cells") && row.get("cells").isArray()) {
-                    rows.add(toStringList(row.get("cells")));
-                } else {
-                    // 다른 형식의 object — 값들을 그냥 모음
-                    List<String> values = new ArrayList<>();
-                    row.fields().forEachRemaining(e -> values.add(e.getValue().asText("")));
-                    rows.add(values);
-                }
+                rows.add(parseObjectRow(row));
             }
         }
         return rows;
+    }
+
+    private List<String> parseObjectRow(JsonNode row) {
+        if (row.has(CELLS_FIELD) && row.get(CELLS_FIELD).isArray()) {
+            return toStringList(row.get(CELLS_FIELD));
+        }
+        List<String> values = new ArrayList<>();
+        row.fields().forEachRemaining(e -> values.add(e.getValue().asText("")));
+        return values;
     }
 
     private List<String> toStringList(JsonNode node) {

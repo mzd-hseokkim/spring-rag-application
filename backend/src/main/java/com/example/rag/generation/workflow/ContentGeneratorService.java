@@ -77,7 +77,9 @@ public class ContentGeneratorService {
                 .call()
                 .content();
 
-        log.debug("Section '{}' raw response length: {}", plan.heading(), content != null ? content.length() : 0);
+        if (log.isDebugEnabled()) {
+            log.debug("Section '{}' raw response length: {}", plan.heading(), content != null ? content.length() : 0);
+        }
         return parser.parseSection(content);
     }
 }

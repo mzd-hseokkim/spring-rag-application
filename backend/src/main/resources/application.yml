@@ -80,6 +80,8 @@ app:
     secret: ${JWT_SECRET:spring-rag-app-dev-secret-key-minimum-32-chars}
     access-token-expiry: 1800000
     refresh-token-expiry: 604800000
+  tavily:
+    api-key: ${TAVILY_API_KEY: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}
   model:
     ollama:
       default-base-url: http://localhost:11434

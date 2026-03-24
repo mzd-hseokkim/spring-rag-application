@@ -17,11 +17,13 @@ public class QuestionnaireGeneratorService {
 
     private static final Logger log = LoggerFactory.getLogger(QuestionnaireGeneratorService.class);
 
-    /** 배치당 최대 문자 수 (약 5,000토큰) */
-    private static final int BATCH_CHAR_LIMIT = 10_000;
+    /** 배치당 최대 문자 수 (약 25,000토큰) */
+    private static final int BATCH_CHAR_LIMIT = 50_000;
+    private static final String CHUNK_SEPARATOR = "\n---\n";
+    private static final String USER_INPUT_PARAM = "userInput";
 
     private static final String QNA_FORMAT =
-            "[{\"question\":\"질문 내용\",\"answer\":\"- 핵심 포인트 1\\n- 핵심 포인트 2\",\"difficulty\":\"상|중|하\",\"category\":\"카테고리명\",\"sources\":[\"과제문서: 섹션명\",\"참조문서: 문서명\",\"웹: 출처\"]}]";
+            "[{\"question\":\"질문 내용\",\"answer\":\"- 핵심 포인트 1\\n- 핵심 포인트 2\",\"difficulty\":\"상|중|하\",\"category\":\"카테고리명\",\"sources\":[\"고객문서: 요구항목\",\"제안문서: 섹션명\",\"참조문서: 문서명\",\"웹: 출처\"]}]";
 
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;
@@ -48,19 +50,34 @@ public class QuestionnaireGeneratorService {
         void onProgress(String message);
     }
 
-    public String analyzeDocuments(List<String> allDocChunks, String userInput, ProgressCallback callback) {
-        List<List<String>> batches = splitIntoBatches(allDocChunks);
-
-        if (batches.size() == 1) {
-            return analyzeFullDocument(batches.get(0), userInput);
+    public String analyzeDocuments(List<String> customerChunks, List<String> proposalChunks,
+                                    String userInput, ProgressCallback callback) {
+        // 유형 태그를 붙여서 하나의 청크 리스트로 합침
+        List<String> taggedChunks = new ArrayList<>();
+        for (String chunk : customerChunks) {
+            taggedChunks.add("[고객문서]\n" + chunk);
+        }
+        for (String chunk : proposalChunks) {
+            taggedChunks.add("[제안문서]\n" + chunk);
         }
 
-        log.info("Document analysis: {} chunks split into {} batches", allDocChunks.size(), batches.size());
-        List<String> partialAnalyses = new ArrayList<>();
+        String customerContent = String.join(CHUNK_SEPARATOR, customerChunks);
+        String proposalContent = String.join(CHUNK_SEPARATOR, proposalChunks);
+        int totalLength = customerContent.length() + proposalContent.length();
 
+        // 단일 배치로 처리 가능한 경우
+        if (totalLength <= BATCH_CHAR_LIMIT) {
+            return analyzeFullDocument(customerContent, proposalContent, userInput);
+        }
+
+        // 배치 분할: 태그된 청크를 배치로 나눠서 Map-Reduce
+        List<List<String>> batches = splitIntoBatches(taggedChunks);
+        log.info("Document analysis: {} tagged chunks split into {} batches", taggedChunks.size(), batches.size());
+
+        List<String> partialAnalyses = new ArrayList<>();
         for (int i = 0; i < batches.size(); i++) {
             callback.onProgress("문서 분석 중... (" + (i + 1) + "/" + batches.size() + " 배치)");
-            String partial = analyzePartialDocument(batches.get(i), i + 1, batches.size());
+            String partial = analyzePartialDocument(batches.get(i), "고객문서+제안문서", i + 1, batches.size());
             partialAnalyses.add(partial);
             log.info("Batch {}/{} analysis complete ({} chars)", i + 1, batches.size(), partial.length());
         }
@@ -87,8 +104,8 @@ public class QuestionnaireGeneratorService {
         }
 
         String userPrompt = promptLoader.load("questionnaire-generate.txt");
-        String refText = refContext.isEmpty() ? "없음" : String.join("\n---\n", refContext);
-        String webContextText = webContext.isEmpty() ? "없음" : String.join("\n---\n", webContext);
+        String refText = refContext.isEmpty() ? "없음" : String.join(CHUNK_SEPARATOR, refContext);
+        String webContextText = webContext.isEmpty() ? "없음" : String.join(CHUNK_SEPARATOR, webContext);
         String focusAreas = persona.getFocusAreas() != null ? persona.getFocusAreas() : "";
         String input = userInput != null ? userInput : "";
 
@@ -101,13 +118,15 @@ public class QuestionnaireGeneratorService {
                         .param("documentAnalysis", documentAnalysis)
                         .param("referenceContext", refText)
                         .param("webContext", webContextText)
-                        .param("userInput", input)
+                        .param(USER_INPUT_PARAM, input)
                         .param("questionCount", String.valueOf(questionCount))
                         .param("format", QNA_FORMAT))
                 .call()
                 .content();
 
-        log.debug("Persona '{}' raw response length: {}", persona.getName(), content != null ? content.length() : 0);
+        if (log.isDebugEnabled()) {
+            log.debug("Persona '{}' raw response length: {}", persona.getName(), content != null ? content.length() : 0);
+        }
 
         List<QuestionAnswer> questions = parser.parseQuestions(content);
         return new PersonaQna(persona.getName(), persona.getRole(), questions);
@@ -115,14 +134,15 @@ public class QuestionnaireGeneratorService {
 
     // ── Map: 배치별 부분 분석 ──
 
-    private String analyzePartialDocument(List<String> batch, int batchIndex, int totalBatches) {
+    private String analyzePartialDocument(List<String> batch, String documentType, int batchIndex, int totalBatches) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
         String userPrompt = promptLoader.load("questionnaire-analyze-partial.txt");
-        String documentContent = String.join("\n---\n", batch);
+        String documentContent = String.join(CHUNK_SEPARATOR, batch);
 
         String content = client.prompt()
                 .user(u -> u.text(userPrompt)
                         .param("documentContent", documentContent)
+                        .param("documentType", documentType)
                         .param("batchIndex", String.valueOf(batchIndex))
                         .param("totalBatches", String.valueOf(totalBatches)))
                 .call()
@@ -142,7 +162,7 @@ public class QuestionnaireGeneratorService {
         String content = client.prompt()
                 .user(u -> u.text(userPrompt)
                         .param("partialAnalyses", joined)
-                        .param("userInput", input))
+                        .param(USER_INPUT_PARAM, input))
                 .call()
                 .content();
 
@@ -151,16 +171,16 @@ public class QuestionnaireGeneratorService {
 
     // ── 배치 1개 (소량 문서)일 때 직접 분석 ──
 
-    private String analyzeFullDocument(List<String> chunks, String userInput) {
+    private String analyzeFullDocument(String customerContent, String proposalContent, String userInput) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
         String userPrompt = promptLoader.load("questionnaire-analyze.txt");
-        String documentContent = String.join("\n---\n", chunks);
         String input = userInput != null ? userInput : "";
 
         String content = client.prompt()
                 .user(u -> u.text(userPrompt)
-                        .param("documentContent", documentContent)
-                        .param("userInput", input))
+                        .param("customerContent", customerContent)
+                        .param("proposalContent", proposalContent)
+                        .param(USER_INPUT_PARAM, input))
                 .call()
                 .content();
 

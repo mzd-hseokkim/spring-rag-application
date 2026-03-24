@@ -4,7 +4,8 @@ import java.util.List;
 import java.util.UUID;
 
 public record QuestionnaireRequest(
-        List<UUID> targetDocumentIds,
+        List<UUID> customerDocumentIds,
+        List<UUID> proposalDocumentIds,
         List<UUID> referenceDocumentIds,
         List<UUID> personaIds,
         String userInput,

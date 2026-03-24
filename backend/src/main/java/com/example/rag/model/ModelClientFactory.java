@@ -1,6 +1,11 @@
 package com.example.rag.model;
 
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.core.credential.AzureKeyCredential;
+import org.springframework.ai.azure.openai.AzureOpenAiEmbeddingModel;
+import org.springframework.ai.azure.openai.AzureOpenAiEmbeddingOptions;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.ollama.OllamaChatModel;
@@ -11,8 +16,12 @@ import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.anthropic.api.AnthropicApi;
+import org.springframework.http.client.ReactorClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,14 +54,22 @@ public class ModelClientFactory {
         ChatModel chatModel = switch (model.getProvider()) {
             case OLLAMA -> createOllamaChatModel(model);
             case ANTHROPIC -> createAnthropicChatModel(model);
+            case AZURE_OPENAI -> throw new com.example.rag.common.RagException(
+                    "Chat is not supported for AZURE_OPENAI provider");
         };
         return ChatClient.builder(chatModel).build();
     }
 
     private EmbeddingModel createEmbeddingModel(LlmModel model) {
-        if (model.getProvider() != ModelProvider.OLLAMA) {
-            throw new com.example.rag.common.RagException("Embedding is only supported for OLLAMA provider");
-        }
+        return switch (model.getProvider()) {
+            case OLLAMA -> createOllamaEmbeddingModel(model);
+            case AZURE_OPENAI -> createAzureOpenAiEmbeddingModel(model);
+            default -> throw new com.example.rag.common.RagException(
+                    "Embedding is not supported for " + model.getProvider() + " provider");
+        };
+    }
+
+    private EmbeddingModel createOllamaEmbeddingModel(LlmModel model) {
         OllamaApi api = OllamaApi.builder().baseUrl(model.getBaseUrl()).build();
         return OllamaEmbeddingModel.builder()
                 .ollamaApi(api)
@@ -60,6 +77,18 @@ public class ModelClientFactory {
                         .model(model.getModelId())
                         .build())
                 .build();
+    }
+
+    private EmbeddingModel createAzureOpenAiEmbeddingModel(LlmModel model) {
+        String apiKey = resolveApiKey(model.getApiKeyRef());
+        var openAIClient = new OpenAIClientBuilder()
+                .endpoint(model.getBaseUrl())
+                .credential(new AzureKeyCredential(apiKey))
+                .buildClient();
+        var options = AzureOpenAiEmbeddingOptions.builder()
+                .deploymentName(model.getModelId())
+                .build();
+        return new AzureOpenAiEmbeddingModel(openAIClient, MetadataMode.EMBED, options);
     }
 
     private ChatModel createOllamaChatModel(LlmModel model) {
@@ -77,7 +106,14 @@ public class ModelClientFactory {
 
     private ChatModel createAnthropicChatModel(LlmModel model) {
         String apiKey = resolveApiKey(model.getApiKeyRef());
-        AnthropicApi api = AnthropicApi.builder().apiKey(apiKey).build();
+        HttpClient httpClient = HttpClient.create()
+                .responseTimeout(Duration.ofMinutes(5));
+        RestClient.Builder restClientBuilder = RestClient.builder()
+                .requestFactory(new ReactorClientHttpRequestFactory(httpClient));
+        AnthropicApi api = AnthropicApi.builder()
+                .apiKey(apiKey)
+                .restClientBuilder(restClientBuilder)
+                .build();
         int maxTokens = model.getMaxTokens() != null ? model.getMaxTokens() : 10240;
         AnthropicChatOptions.Builder options = AnthropicChatOptions.builder()
                 .model(model.getModelId())
@@ -95,15 +131,15 @@ public class ModelClientFactory {
         if (apiKeyRef == null || apiKeyRef.isBlank()) {
             throw new com.example.rag.common.RagException("API key is not set");
         }
-        // API 키 값이 직접 입력된 경우 (sk-로 시작) 그대로 사용
-        if (apiKeyRef.startsWith("sk-")) {
-            return apiKeyRef;
+        // 환경변수명 패턴인 경우 (대문자, 숫자, 밑줄) 환경변수에서 조회
+        if (apiKeyRef.matches("^[A-Z][A-Z0-9_]*$")) {
+            String key = System.getenv(apiKeyRef);
+            if (key == null || key.isBlank()) {
+                throw new com.example.rag.common.RagException("Environment variable not found: " + apiKeyRef);
+            }
+            return key;
         }
-        // 환경변수명인 경우 환경변수에서 조회
-        String key = System.getenv(apiKeyRef);
-        if (key == null || key.isBlank()) {
-            throw new com.example.rag.common.RagException("Environment variable not found: " + apiKeyRef);
-        }
-        return key;
+        // 그 외에는 API 키 값이 직접 입력된 경우로 간주
+        return apiKeyRef;
     }
 }

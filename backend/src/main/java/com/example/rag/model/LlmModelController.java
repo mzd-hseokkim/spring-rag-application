@@ -79,6 +79,8 @@ public class LlmModelController {
         return switch (model.getProvider()) {
             case OLLAMA -> ollamaAdapter.test(model.getBaseUrl(), model.getModelId());
             case ANTHROPIC -> anthropicAdapter.test(model.getApiKeyRef(), model.getModelId());
+            case AZURE_OPENAI -> new OllamaAdapter.TestResult(false, 0,
+                    "Azure OpenAI 모델 테스트는 아직 지원되지 않습니다.");
         };
     }
 

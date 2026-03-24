@@ -165,11 +165,25 @@ export function useQuestionnaire() {
         fetchQuestionnaireJobs().then(jobs => dispatch({ type: 'SET_JOBS', payload: jobs })).catch(() => {});
       });
 
-      eventSource.addEventListener('error', () => {
-        dispatch({ type: 'GENERATION_ERROR', payload: '연결이 끊어졌습니다.' });
+      eventSource.addEventListener('error', (e) => {
+        try {
+          const data: QuestionnaireProgressEvent = JSON.parse((e as MessageEvent).data);
+          dispatch({ type: 'GENERATION_ERROR', payload: data.message || '생성 중 오류가 발생했습니다.' });
+        } catch {
+          dispatch({ type: 'GENERATION_ERROR', payload: '생성 중 오류가 발생했습니다.' });
+        }
         eventSource.close();
         eventSourceRef.current = null;
       });
+
+      eventSource.onerror = () => {
+        if (eventSource.readyState === EventSource.CLOSED) {
+          return;
+        }
+        dispatch({ type: 'GENERATION_ERROR', payload: '서버와의 연결이 끊어졌습니다.' });
+        eventSource.close();
+        eventSourceRef.current = null;
+      };
     } catch (e) {
       dispatch({ type: 'GENERATION_ERROR', payload: e instanceof Error ? e.message : '생성 실패' });
     }

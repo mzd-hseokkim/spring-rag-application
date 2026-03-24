@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import com.example.rag.common.RagException;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +30,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional(readOnly = true)
 public class QuestionnaireService {
+
+    private static final String JOB_NOT_FOUND = "Questionnaire job not found: ";
 
     private final QuestionnaireJobRepository jobRepository;
     private final PersonaRepository personaRepository;
@@ -57,10 +61,11 @@ public class QuestionnaireService {
             throw new IllegalArgumentException("선택된 페르소나가 없습니다.");
         }
 
-        List<UUID> targetDocIds = request.targetDocumentIds() != null ? request.targetDocumentIds() : List.of();
+        List<UUID> customerDocIds = request.customerDocumentIds() != null ? request.customerDocumentIds() : List.of();
+        List<UUID> proposalDocIds = request.proposalDocumentIds() != null ? request.proposalDocumentIds() : List.of();
 
-        // 제목 자동 생성: "문서명 — 예상질의 (날짜)"
-        String title = buildTitle(targetDocIds);
+        // 제목 자동 생성: 고객문서(RFP) 기준 "문서명 — 예상질의 (날짜)"
+        String title = buildTitle(customerDocIds);
 
         QuestionnaireJob job = new QuestionnaireJob(request.userInput(), user);
         job.setTitle(title);
@@ -75,7 +80,7 @@ public class QuestionnaireService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                workflowService.execute(savedJob, targetDocIds, refDocIds, personaIds, questionCount, webSearch);
+                workflowService.execute(savedJob, customerDocIds, proposalDocIds, refDocIds, personaIds, questionCount, webSearch);
             }
         });
 
@@ -84,7 +89,7 @@ public class QuestionnaireService {
 
     public QuestionnaireResponse getJob(UUID id) {
         QuestionnaireJob job = jobRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Questionnaire job not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + id));
         return toResponse(job);
     }
 
@@ -96,7 +101,7 @@ public class QuestionnaireService {
 
     public Resource getOutputFile(UUID jobId) {
         QuestionnaireJob job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("Questionnaire job not found: " + jobId));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         if (job.getOutputFilePath() == null) {
             throw new IllegalStateException("Output file not yet generated for job: " + jobId);
         }
@@ -105,7 +110,7 @@ public class QuestionnaireService {
 
     public String getPreviewHtml(UUID jobId) {
         QuestionnaireJob job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("Questionnaire job not found: " + jobId));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         if (job.getOutputFilePath() == null) {
             throw new IllegalStateException("Output file not yet generated for job: " + jobId);
         }
@@ -114,7 +119,7 @@ public class QuestionnaireService {
         try {
             return Files.readString(Path.of(htmlPath));
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read questionnaire preview HTML file", e);
+            throw new RagException("Failed to read questionnaire preview HTML file", e);
         }
     }
 
@@ -123,12 +128,12 @@ public class QuestionnaireService {
         jobRepository.deleteById(id);
     }
 
-    private String buildTitle(List<UUID> targetDocIds) {
+    private String buildTitle(List<UUID> customerDocIds) {
         String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-        if (targetDocIds.isEmpty()) {
+        if (customerDocIds.isEmpty()) {
             return "예상질의 " + date;
         }
-        String docNames = documentRepository.findAllById(targetDocIds).stream()
+        String docNames = documentRepository.findAllById(customerDocIds).stream()
                 .map(Document::getFilename)
                 .map(name -> name.contains(".") ? name.substring(0, name.lastIndexOf('.')) : name)
                 .collect(Collectors.joining(", "));

@@ -1,5 +1,6 @@
 package com.example.rag.generation;
 
+import com.example.rag.common.RagException;
 import com.example.rag.auth.AppUser;
 import com.example.rag.auth.AppUserRepository;
 import com.example.rag.generation.dto.GenerationRequest;
@@ -24,22 +25,21 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class GenerationService {
 
+    private static final String JOB_NOT_FOUND = "Generation job not found: ";
+
     private final GenerationJobRepository jobRepository;
     private final DocumentTemplateRepository templateRepository;
     private final AppUserRepository userRepository;
     private final GenerationWorkflowService workflowService;
-    private final GenerationEmitterManager emitterManager;
 
     public GenerationService(GenerationJobRepository jobRepository,
                              DocumentTemplateRepository templateRepository,
                              AppUserRepository userRepository,
-                             GenerationWorkflowService workflowService,
-                             GenerationEmitterManager emitterManager) {
+                             GenerationWorkflowService workflowService) {
         this.jobRepository = jobRepository;
         this.templateRepository = templateRepository;
         this.userRepository = userRepository;
         this.workflowService = workflowService;
-        this.emitterManager = emitterManager;
     }
 
     @Transactional
@@ -74,7 +74,7 @@ public class GenerationService {
 
     public GenerationResponse getJob(UUID id) {
         GenerationJob job = jobRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Generation job not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + id));
         return toResponse(job);
     }
 
@@ -86,7 +86,7 @@ public class GenerationService {
 
     public Resource getOutputFile(UUID jobId) {
         GenerationJob job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("Generation job not found: " + jobId));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         if (job.getOutputFilePath() == null) {
             throw new IllegalStateException("Output file not yet generated for job: " + jobId);
         }
@@ -95,14 +95,14 @@ public class GenerationService {
 
     public String getPreviewHtml(UUID jobId) {
         GenerationJob job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("Generation job not found: " + jobId));
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         if (job.getOutputFilePath() == null) {
             throw new IllegalStateException("Output file not yet generated for job: " + jobId);
         }
         try {
             return Files.readString(Path.of(job.getOutputFilePath()));
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read generated HTML file", e);
+            throw new RagException("Failed to read generated HTML file", e);
         }
     }
 

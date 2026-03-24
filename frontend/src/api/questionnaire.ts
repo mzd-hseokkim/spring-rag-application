@@ -16,7 +16,8 @@ export interface QuestionnaireJob {
 }
 
 export interface QuestionnaireRequest {
-  targetDocumentIds: string[];
+  customerDocumentIds: string[];
+  proposalDocumentIds?: string[];
   referenceDocumentIds?: string[];
   personaIds: string[];
   userInput?: string;

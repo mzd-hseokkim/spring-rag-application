@@ -125,7 +125,8 @@ export function QuestionnairePage() {
   const { personas, loadPersonas, createPersona, updatePersona, regeneratePrompt, deletePersona } = usePersonas();
 
   const [userInput, setUserInput] = useState('');
-  const [targetDocs, setTargetDocs] = useState<DocItem[]>([]);
+  const [customerDocs, setCustomerDocs] = useState<DocItem[]>([]);
+  const [proposalDocs, setProposalDocs] = useState<DocItem[]>([]);
   const [refDocs, setRefDocs] = useState<DocItem[]>([]);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [questionCount, setQuestionCount] = useState(7);
@@ -150,12 +151,13 @@ export function QuestionnairePage() {
     setSelectedPersonaIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  const canStart = targetDocs.length > 0 && selectedPersonaIds.length > 0;
+  const canStart = customerDocs.length > 0 && selectedPersonaIds.length > 0;
 
   const handleStart = () => {
     if (!canStart) return;
     qna.startGeneration({
-      targetDocumentIds: targetDocs.map(d => d.id),
+      customerDocumentIds: customerDocs.map(d => d.id),
+      proposalDocumentIds: proposalDocs.length > 0 ? proposalDocs.map(d => d.id) : undefined,
       referenceDocumentIds: refDocs.length > 0 ? refDocs.map(d => d.id) : undefined,
       personaIds: selectedPersonaIds,
       userInput: userInput.trim() || undefined,
@@ -167,6 +169,12 @@ export function QuestionnairePage() {
   const handleReset = () => {
     qna.reset();
     setUserInput('');
+    setCustomerDocs([]);
+    setProposalDocs([]);
+    setRefDocs([]);
+    setSelectedPersonaIds(personas.filter(p => p.isDefault).map(p => p.id));
+    setQuestionCount(7);
+    setIncludeWebSearch(false);
   };
 
   const step = qna.currentJob?.status === 'COMPLETE'
@@ -209,17 +217,27 @@ export function QuestionnairePage() {
                   <ClipboardList className="h-5 w-5" />
                   예상 질의서 생성
                 </CardTitle>
-                <CardDescription>과제 문서를 선택하고 페르소나를 지정하면 각 관점에서 예상 질문과 답변을 생성합니다.</CardDescription>
+                <CardDescription>고객 문서(RFP)와 제안 문서를 선택하고 페르소나를 지정하면 고객 요구사항 대비 예상 질문과 답변을 생성합니다.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
-                {/* 과제 문서 (필수) */}
+                {/* 고객 문서 (필수) */}
                 <DocPicker
-                  label="과제 문서 (질문 대상) *"
-                  description="제안요청서, 제안서 등 질문을 생성할 대상 문서를 선택합니다."
+                  label="고객 문서 (RFP/요구사항) *"
+                  description="제안요청서, 요구사항 명세서, 평가기준표 등 고객이 전달한 문서를 선택합니다."
+                  icon={<FileText className="h-4 w-4" />}
+                  selectedItems={customerDocs}
+                  onToggle={(doc) => toggleDoc(customerDocs, setCustomerDocs, doc)}
+                  onRemove={(id) => setCustomerDocs(prev => prev.filter(x => x.id !== id))}
+                />
+
+                {/* 제안 문서 (필수) */}
+                <DocPicker
+                  label="제안 문서 (우리 제안서)"
+                  description="우리가 작성한 제안서, 기술제안서, 사업수행계획서 등을 선택합니다."
                   icon={<Target className="h-4 w-4" />}
-                  selectedItems={targetDocs}
-                  onToggle={(doc) => toggleDoc(targetDocs, setTargetDocs, doc)}
-                  onRemove={(id) => setTargetDocs(prev => prev.filter(x => x.id !== id))}
+                  selectedItems={proposalDocs}
+                  onToggle={(doc) => toggleDoc(proposalDocs, setProposalDocs, doc)}
+                  onRemove={(id) => setProposalDocs(prev => prev.filter(x => x.id !== id))}
                 />
 
                 {/* 참조 문서 (선택) */}

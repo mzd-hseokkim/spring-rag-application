@@ -14,6 +14,8 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class PersonaService {
 
+    private static final String PERSONA_NOT_FOUND = "Persona not found: ";
+
     private final PersonaRepository personaRepository;
     private final AppUserRepository userRepository;
     private final PersonaPromptGenerator promptGenerator;
@@ -47,7 +49,7 @@ public class PersonaService {
     @Transactional
     public PersonaResponse updatePersona(UUID id, PersonaRequest request, UUID userId) {
         Persona persona = personaRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Persona not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(PERSONA_NOT_FOUND + id));
         // 사용자 생성 페르소나는 본인만 수정 가능
         if (!persona.isDefault() && (persona.getUser() == null || !persona.getUser().getId().equals(userId))) {
             throw new IllegalStateException("본인이 생성한 페르소나만 수정할 수 있습니다.");
@@ -71,7 +73,7 @@ public class PersonaService {
     @Transactional
     public PersonaResponse regeneratePrompt(UUID id) {
         Persona persona = personaRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Persona not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(PERSONA_NOT_FOUND + id));
         String generated = promptGenerator.generate(persona.getName(), persona.getRole(), persona.getFocusAreas());
         persona.setPrompt(generated);
         return toResponse(persona);
@@ -80,7 +82,7 @@ public class PersonaService {
     @Transactional
     public void deletePersona(UUID id, UUID userId) {
         Persona persona = personaRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Persona not found: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(PERSONA_NOT_FOUND + id));
         if (persona.isDefault()) {
             throw new IllegalStateException("기본 페르소나는 삭제할 수 없습니다.");
         }

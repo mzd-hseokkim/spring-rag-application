@@ -1,5 +1,6 @@
 package com.example.rag.questionnaire.renderer;
 
+import com.example.rag.common.RagException;
 import com.example.rag.questionnaire.workflow.PersonaQna;
 import com.example.rag.questionnaire.workflow.QuestionAnswer;
 import org.apache.poi.ss.usermodel.*;
@@ -39,7 +40,7 @@ public class QuestionnaireHtmlRenderer {
         try {
             Files.createDirectories(outputDir);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to create output directory", e);
+            throw new RagException("Failed to create output directory", e);
         }
 
         // Excel 생성
@@ -105,7 +106,7 @@ public class QuestionnaireHtmlRenderer {
                     QuestionAnswer qa = questions.get(i);
                     Row dataRow = sheet.createRow(rowIdx++);
 
-                    dataRow.createCell(0).setCellValue(i + 1);
+                    dataRow.createCell(0).setCellValue(i + 1.0);
 
                     Cell qCell = dataRow.createCell(1);
                     qCell.setCellValue(qa.question());
@@ -141,7 +142,7 @@ public class QuestionnaireHtmlRenderer {
             return outputFile.toString();
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write questionnaire Excel file", e);
+            throw new RagException("Failed to write questionnaire Excel file", e);
         }
     }
 
@@ -162,7 +163,7 @@ public class QuestionnaireHtmlRenderer {
         try {
             Files.writeString(outputFile, html);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write questionnaire HTML file", e);
+            throw new RagException("Failed to write questionnaire HTML file", e);
         }
     }
 

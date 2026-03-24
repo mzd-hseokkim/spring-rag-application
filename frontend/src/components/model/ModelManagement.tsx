@@ -113,7 +113,7 @@ export function ModelManagement({ modelState }: { modelState: ModelState }) {
 }
 
 function AddModelForm({ onSubmit }: { onSubmit: (m: Partial<LlmModel>) => Promise<void> }) {
-  const [provider, setProvider] = useState<'OLLAMA' | 'ANTHROPIC'>('OLLAMA');
+  const [provider, setProvider] = useState<'OLLAMA' | 'ANTHROPIC' | 'AZURE_OPENAI'>('OLLAMA');
   const [modelId, setModelId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [selectedPurposes, setSelectedPurposes] = useState<Set<string>>(new Set(['CHAT']));
@@ -138,8 +138,8 @@ function AddModelForm({ onSubmit }: { onSubmit: (m: Partial<LlmModel>) => Promis
     for (const purpose of selectedPurposes) {
       await onSubmit({
         provider, modelId, displayName, purpose: purpose as LlmModel['purpose'],
-        baseUrl: provider === 'OLLAMA' ? baseUrl : null,
-        apiKeyRef: provider === 'ANTHROPIC' ? apiKeyRef : null,
+        baseUrl: (provider === 'OLLAMA' || provider === 'AZURE_OPENAI') ? baseUrl : null,
+        apiKeyRef: (provider === 'ANTHROPIC' || provider === 'AZURE_OPENAI') ? apiKeyRef : null,
         temperature: 0.3,
       } as Partial<LlmModel>);
     }
@@ -147,16 +147,17 @@ function AddModelForm({ onSubmit }: { onSubmit: (m: Partial<LlmModel>) => Promis
 
   return (
     <form className="flex flex-col gap-2 p-3 border rounded-lg bg-muted/30" onSubmit={handleSubmit}>
-      <Select value={provider} onValueChange={(v) => setProvider((v ?? 'OLLAMA') as 'OLLAMA' | 'ANTHROPIC')}>
+      <Select value={provider} onValueChange={(v) => setProvider((v ?? 'OLLAMA') as 'OLLAMA' | 'ANTHROPIC' | 'AZURE_OPENAI')}>
         <SelectTrigger size="sm">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="OLLAMA">Ollama</SelectItem>
           <SelectItem value="ANTHROPIC">Anthropic</SelectItem>
+          <SelectItem value="AZURE_OPENAI">Azure OpenAI</SelectItem>
         </SelectContent>
       </Select>
-      <Input placeholder="모델 ID (예: gpt-oss:20b)" value={modelId} onChange={e => setModelId(e.target.value)} required className="h-8 text-xs" />
+      <Input placeholder={provider === 'AZURE_OPENAI' ? '배포 이름 (deployment name)' : '모델 ID (예: gpt-oss:20b)'} value={modelId} onChange={e => setModelId(e.target.value)} required className="h-8 text-xs" />
       <Input placeholder="표시 이름" value={displayName} onChange={e => setDisplayName(e.target.value)} required className="h-8 text-xs" />
       <div className="space-y-1.5">
         <span className="text-xs text-muted-foreground">용도 (복수 선택 가능)</span>
@@ -170,7 +171,8 @@ function AddModelForm({ onSubmit }: { onSubmit: (m: Partial<LlmModel>) => Promis
         </div>
       </div>
       {provider === 'OLLAMA' && <Input placeholder="Base URL" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="h-8 text-xs" />}
-      {provider === 'ANTHROPIC' && <Input placeholder="API Key 환경변수명" value={apiKeyRef} onChange={e => setApiKeyRef(e.target.value)} className="h-8 text-xs" />}
+      {provider === 'AZURE_OPENAI' && <Input placeholder="Azure 엔드포인트 (예: https://xxx.openai.azure.com/)" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="h-8 text-xs" />}
+      {(provider === 'ANTHROPIC' || provider === 'AZURE_OPENAI') && <Input placeholder="API Key 또는 환경변수명" value={apiKeyRef} onChange={e => setApiKeyRef(e.target.value)} className="h-8 text-xs" />}
       <Button type="submit" size="sm" disabled={selectedPurposes.size === 0}>등록</Button>
     </form>
   );

@@ -21,6 +21,8 @@ public class TavilySearchService {
 
     private static final Logger log = LoggerFactory.getLogger(TavilySearchService.class);
     private static final String TAVILY_API_URL = "https://api.tavily.com/search";
+    private static final String ANSWER_FIELD = "answer";
+    private static final String RESULTS_FIELD = "results";
 
     private final String apiKey;
     private final ObjectMapper objectMapper;
@@ -69,43 +71,55 @@ public class TavilySearchService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
-                log.warn("Tavily API returned status {}: {}", response.statusCode(), response.body());
+                if (log.isWarnEnabled()) {
+                    log.warn("Tavily API returned status {}: {}", response.statusCode(), response.body());
+                }
                 return List.of();
             }
 
             return parseResults(response.body());
 
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Tavily web search interrupted for query '{}'", query);
+            return List.of();
         } catch (Exception e) {
             log.warn("Tavily web search failed for query '{}': {}", query, e.getMessage());
             return List.of();
         }
     }
 
-    private List<String> parseResults(String responseBody) throws Exception {
+    private List<String> parseResults(String responseBody) throws com.fasterxml.jackson.core.JsonProcessingException {
         JsonNode root = objectMapper.readTree(responseBody);
         List<String> results = new ArrayList<>();
 
-        // Tavily의 AI 요약 답변
-        if (root.has("answer") && !root.get("answer").isNull()) {
-            String answer = root.get("answer").asText("");
+        parseAnswerSummary(root, results);
+        parseSearchResults(root, results);
+
+        return results;
+    }
+
+    private void parseAnswerSummary(JsonNode root, List<String> results) {
+        if (root.has(ANSWER_FIELD) && !root.get(ANSWER_FIELD).isNull()) {
+            String answer = root.get(ANSWER_FIELD).asText("");
             if (!answer.isBlank()) {
                 results.add("[웹 검색 요약] " + answer);
             }
         }
+    }
 
-        // 개별 검색 결과
-        if (root.has("results") && root.get("results").isArray()) {
-            for (JsonNode result : root.get("results")) {
-                String title = result.has("title") ? result.get("title").asText("") : "";
-                String content = result.has("content") ? result.get("content").asText("") : "";
-                String url = result.has("url") ? result.get("url").asText("") : "";
-                if (!content.isBlank()) {
-                    results.add("[" + title + "] " + content + " (출처: " + url + ")");
-                }
+    private void parseSearchResults(JsonNode root, List<String> results) {
+        if (!root.has(RESULTS_FIELD) || !root.get(RESULTS_FIELD).isArray()) {
+            return;
+        }
+        for (JsonNode result : root.get(RESULTS_FIELD)) {
+            String title = result.has("title") ? result.get("title").asText("") : "";
+            String content = result.has("content") ? result.get("content").asText("") : "";
+            String url = result.has("url") ? result.get("url").asText("") : "";
+            if (!content.isBlank()) {
+                results.add("[" + title + "] " + content + " (출처: " + url + ")");
             }
         }
-
-        return results;
     }
 
     private String resolveApiKey() {
