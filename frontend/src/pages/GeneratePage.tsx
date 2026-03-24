@@ -2,8 +2,9 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, getStreamUrl, getDownloadUrl, getPreviewUrl, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
+import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { GenerationProgress } from '@/components/generation/GenerationProgress';
 import { GenerationResult } from '@/components/generation/GenerationResult';
 import { Button } from '@/components/ui/button';
@@ -135,6 +136,12 @@ export function GeneratePage() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
+  // Step 3 state
+  const [requirements, setRequirements] = useState<Array<{ id: string; category: string; item: string; description: string; importance: string }>>([]);
+  const [reqMapping, setReqMapping] = useState<Record<string, string[]>>({});
+  const [mapping, setMapping] = useState(false);
+  const [mappingError, setMappingError] = useState<string | null>(null);
+
   useEffect(() => {
     gen.loadTemplates();
     gen.loadJobs();
@@ -206,11 +213,68 @@ export function GeneratePage() {
     }
   };
 
-  // Step 2: 목차 저장
+  // Step 2 → Step 3: 목차 저장 + 요구사항 매핑 시작
   const handleSaveOutline = async () => {
     if (!jobId) return;
     await saveOutline(jobId, outline);
+    handleStartMapping();
+  };
+
+  // Step 3: 요구사항 매핑
+  const handleStartMapping = async () => {
+    if (!jobId) return;
+    setMapping(true);
+    setMappingError(null);
     setWizardStep(3);
+    try {
+      await startRequirementMapping(jobId, customerDocs.map(d => d.id));
+
+      const token = localStorage.getItem('accessToken');
+      const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
+      const es = new EventSource(url);
+
+      es.addEventListener('complete', () => {
+        es.close();
+        fetchJob(jobId).then(updated => {
+          if (updated.requirementMapping) {
+            try {
+              const parsed = JSON.parse(updated.requirementMapping);
+              setRequirements(parsed.requirements || []);
+              setReqMapping(parsed.mapping || {});
+            } catch { /* ignore */ }
+          }
+          setMapping(false);
+        });
+      });
+
+      es.addEventListener('error', (e) => {
+        try {
+          const data: GenerationProgressEvent = JSON.parse((e as MessageEvent).data);
+          setMappingError(data.message || '요구사항 매핑 중 오류가 발생했습니다.');
+        } catch {
+          setMappingError('요구사항 매핑 중 오류가 발생했습니다.');
+        }
+        es.close();
+        setMapping(false);
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) return;
+        setMappingError('서버와의 연결이 끊어졌습니다.');
+        es.close();
+        setMapping(false);
+      };
+    } catch (e) {
+      setMappingError(e instanceof Error ? e.message : '매핑 실패');
+      setMapping(false);
+    }
+  };
+
+  // Step 3: 매핑 저장 후 Step 4로
+  const handleSaveMapping = async () => {
+    if (!jobId) return;
+    await saveRequirementMapping(jobId, { requirements, mapping: reqMapping });
+    setWizardStep(4);
   };
 
   const handleReset = () => {
@@ -223,6 +287,10 @@ export function GeneratePage() {
     setWizardStep(1);
     setAnalyzing(false);
     setAnalyzeError(null);
+    setRequirements([]);
+    setReqMapping({});
+    setMapping(false);
+    setMappingError(null);
   };
 
   return (
@@ -347,19 +415,61 @@ export function GeneratePage() {
             </Card>
           )}
 
-          {/* ── Step 3~5: 향후 구현 (Phase B~D) ── */}
-          {wizardStep >= 3 && (
+          {/* ── Step 3: 요구사항 배치 ── */}
+          {wizardStep === 3 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>요구사항 배치</CardTitle>
+                <CardDescription>AI가 추출한 요구사항을 목차에 매핑했습니다. 좌측 목차를 클릭하면 배치된 요구사항을 확인할 수 있습니다.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {mapping ? (
+                  <div className="flex items-center gap-3 py-12 justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    <span className="text-sm text-muted-foreground">요구사항을 추출하고 목차에 매핑하고 있습니다...</span>
+                  </div>
+                ) : requirements.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-8 text-center">추출된 요구사항이 없습니다.</p>
+                ) : (
+                  <RequirementMapView
+                    outline={outline}
+                    requirements={requirements}
+                    mapping={reqMapping}
+                    onChange={setReqMapping}
+                  />
+                )}
+
+                {mappingError && (
+                  <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 rounded-md p-3">
+                    <AlertCircle className="h-4 w-4 shrink-0" />{mappingError}
+                  </div>
+                )}
+
+                <div className="flex justify-between">
+                  <Button variant="outline" onClick={() => setWizardStep(2)}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (목차)
+                  </Button>
+                  <Button onClick={handleSaveMapping} disabled={mapping || requirements.length === 0}>
+                    <ArrowRight className="h-4 w-4 mr-1.5" />다음 (내용 생성)
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Step 4~5: 향후 구현 (Phase C~D) ── */}
+          {wizardStep >= 4 && (
             <Card>
               <CardHeader>
                 <CardTitle>다음 단계</CardTitle>
-                <CardDescription>요구사항 배치, 내용 생성, 미리보기는 다음 업데이트에서 제공됩니다.</CardDescription>
+                <CardDescription>내용 생성과 미리보기는 다음 업데이트에서 제공됩니다.</CardDescription>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-4">
-                  목차가 저장되었습니다. 요구사항 배치 → 내용 생성 → 미리보기 단계는 곧 구현됩니다.
+                  요구사항 배치가 저장되었습니다. 내용 생성 → 미리보기 단계는 곧 구현됩니다.
                 </p>
-                <Button variant="outline" onClick={() => setWizardStep(2)}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />목차로 돌아가기
+                <Button variant="outline" onClick={() => setWizardStep(3)}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />요구사항 배치로 돌아가기
                 </Button>
               </CardContent>
             </Card>

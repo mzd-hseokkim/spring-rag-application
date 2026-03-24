@@ -101,6 +101,39 @@ public class GenerationService {
     }
 
     /**
+     * Step 3: 요구사항 매핑 시작 (async)
+     */
+    @Transactional
+    public void startRequirementMapping(UUID jobId, List<UUID> customerDocIds) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setStatus(GenerationStatus.MAPPING);
+        job.setCurrentStep(3);
+        job.setStepStatus("PROCESSING");
+        job.setErrorMessage(null);
+        jobRepository.save(job);
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workflowService.mapRequirements(jobId, customerDocIds);
+            }
+        });
+    }
+
+    /**
+     * Step 3: 사용자가 수정한 요구사항 매핑 저장
+     */
+    @Transactional
+    public GenerationResponse saveRequirementMapping(UUID jobId, String mappingJson) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setRequirementMapping(mappingJson);
+        jobRepository.save(job);
+        return toResponse(job);
+    }
+
+    /**
      * 기존 단일 플로우 (하위호환)
      */
     @Transactional

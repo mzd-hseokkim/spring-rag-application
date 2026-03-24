@@ -8,6 +8,9 @@ import com.example.rag.generation.GenerationStatus;
 import com.example.rag.generation.dto.GenerationProgressEvent;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.generation.renderer.DocumentRendererService;
+import com.example.rag.questionnaire.workflow.Requirement;
+import com.example.rag.questionnaire.workflow.RequirementExtractor;
+import com.example.rag.questionnaire.workflow.QuestionnaireGeneratorService;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -31,6 +34,8 @@ public class GenerationWorkflowService {
 
     private final ContentGeneratorService contentGenerator;
     private final OutlineExtractor outlineExtractor;
+    private final RequirementExtractor requirementExtractor;
+    private final RequirementMapper requirementMapper;
     private final DocumentRendererService rendererService;
     private final SearchService searchService;
     private final GenerationJobRepository jobRepository;
@@ -39,6 +44,8 @@ public class GenerationWorkflowService {
 
     public GenerationWorkflowService(ContentGeneratorService contentGenerator,
                                      OutlineExtractor outlineExtractor,
+                                     RequirementExtractor requirementExtractor,
+                                     RequirementMapper requirementMapper,
                                      DocumentRendererService rendererService,
                                      SearchService searchService,
                                      GenerationJobRepository jobRepository,
@@ -46,6 +53,8 @@ public class GenerationWorkflowService {
                                      ObjectMapper objectMapper) {
         this.contentGenerator = contentGenerator;
         this.outlineExtractor = outlineExtractor;
+        this.requirementExtractor = requirementExtractor;
+        this.requirementMapper = requirementMapper;
         this.rendererService = rendererService;
         this.searchService = searchService;
         this.jobRepository = jobRepository;
@@ -165,6 +174,66 @@ public class GenerationWorkflowService {
 
         } catch (Exception e) {
             log.error("Generation job {} outline extraction failed", jobId, e);
+            job.setErrorMessage(e.getMessage());
+            job.setStepStatus("FAILED");
+            job.setStatus(GenerationStatus.FAILED);
+            jobRepository.save(job);
+            emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 위자드 Step 3: 요구사항 추출 + 목차 매핑 (async)
+     */
+    @Async("ingestionExecutor")
+    public void mapRequirements(UUID jobId, List<UUID> customerDocIds) {
+        GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
+                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+        try {
+            job.setStatus(GenerationStatus.MAPPING);
+            job.setCurrentStep(3);
+            job.setStepStatus("PROCESSING");
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, "고객 문서에서 요구사항을 추출하고 있습니다..."));
+
+            // 고객문서 청크 수집
+            List<String> customerChunks = searchService.searchDirect(
+                    job.getUserInput() != null ? job.getUserInput().substring(0, Math.min(job.getUserInput().length(), 500)) : "사업 요구사항 평가기준",
+                    customerDocIds).stream()
+                    .map(ChunkSearchResult::contextContent)
+                    .toList();
+
+            // 요구사항 추출 (질의서 모듈 재사용)
+            List<Requirement> requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
+                    msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, msg)));
+
+            emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING,
+                    requirements.size() + "개 요구사항 추출 완료. 목차에 매핑하고 있습니다..."));
+            log.info("Generation job {} - extracted {} requirements", jobId, requirements.size());
+
+            // 목차 파싱
+            List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
+
+            // 요구사항 → 목차 매핑
+            java.util.Map<String, List<String>> mapping = requirementMapper.map(outline, requirements);
+
+            // 매핑 결과 저장 (requirements 목록도 함께 저장)
+            var result = new java.util.LinkedHashMap<String, Object>();
+            result.put("requirements", requirements);
+            result.put("mapping", mapping);
+
+            job.setRequirementMapping(toJson(result));
+            job.setCurrentStep(3);
+            job.setStepStatus("COMPLETE");
+            job.setStatus(GenerationStatus.DRAFT);
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.complete("requirements"));
+            log.info("Generation job {} - requirement mapping complete: {} keys", jobId, mapping.size());
+
+        } catch (Exception e) {
+            log.error("Generation job {} requirement mapping failed", jobId, e);
             job.setErrorMessage(e.getMessage());
             job.setStepStatus("FAILED");
             job.setStatus(GenerationStatus.FAILED);

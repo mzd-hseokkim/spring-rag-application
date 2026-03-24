@@ -53,6 +53,22 @@ public class GenerationController {
         return generationService.saveOutline(id, outlineJson);
     }
 
+    /**
+     * 위자드 Step 3: 요구사항 매핑 시작
+     */
+    @PostMapping("/{id}/map-requirements")
+    public void mapRequirements(@PathVariable UUID id, @RequestBody AnalyzeRequest request) {
+        generationService.startRequirementMapping(id, request.customerDocumentIds());
+    }
+
+    /**
+     * 위자드 Step 3: 요구사항 매핑 수정 저장
+     */
+    @PutMapping("/{id}/requirements")
+    public GenerationResponse saveRequirements(@PathVariable UUID id, @RequestBody String mappingJson) {
+        return generationService.saveRequirementMapping(id, mappingJson);
+    }
+
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
 
     @GetMapping("/{id}")

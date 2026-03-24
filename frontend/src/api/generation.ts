@@ -139,6 +139,25 @@ export async function saveOutline(jobId: string, outline: OutlineNode[]): Promis
   return res.json();
 }
 
+export async function startRequirementMapping(jobId: string, customerDocumentIds: string[]): Promise<void> {
+  const res = await fetch(`/api/generations/${jobId}/map-requirements`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ customerDocumentIds }),
+  });
+  if (!res.ok) throw new Error('Failed to start requirement mapping');
+}
+
+export async function saveRequirementMapping(jobId: string, mapping: unknown): Promise<GenerationJob> {
+  const res = await fetch(`/api/generations/${jobId}/requirements`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(mapping),
+  });
+  if (!res.ok) throw new Error('Failed to save requirement mapping');
+  return res.json();
+}
+
 export function getStreamUrl(jobId: string): string {
   return `/api/generations/${jobId}/stream`;
 }
