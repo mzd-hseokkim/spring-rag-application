@@ -6,6 +6,7 @@ import com.example.rag.generation.GenerationJob;
 import com.example.rag.generation.GenerationJobRepository;
 import com.example.rag.generation.GenerationStatus;
 import com.example.rag.generation.dto.GenerationProgressEvent;
+import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.generation.renderer.DocumentRendererService;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
@@ -29,6 +30,7 @@ public class GenerationWorkflowService {
     private static final int MAX_RETRIES = 2;
 
     private final ContentGeneratorService contentGenerator;
+    private final OutlineExtractor outlineExtractor;
     private final DocumentRendererService rendererService;
     private final SearchService searchService;
     private final GenerationJobRepository jobRepository;
@@ -36,12 +38,14 @@ public class GenerationWorkflowService {
     private final ObjectMapper objectMapper;
 
     public GenerationWorkflowService(ContentGeneratorService contentGenerator,
+                                     OutlineExtractor outlineExtractor,
                                      DocumentRendererService rendererService,
                                      SearchService searchService,
                                      GenerationJobRepository jobRepository,
                                      GenerationEmitterManager emitterManager,
                                      ObjectMapper objectMapper) {
         this.contentGenerator = contentGenerator;
+        this.outlineExtractor = outlineExtractor;
         this.rendererService = rendererService;
         this.searchService = searchService;
         this.jobRepository = jobRepository;
@@ -115,6 +119,56 @@ public class GenerationWorkflowService {
             log.error("Generation job {} failed", job.getId(), e);
             job.setErrorMessage(e.getMessage());
             updateStatus(job, GenerationStatus.FAILED);
+            emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 위자드 Step 2: 고객문서에서 목차 추출 (async)
+     */
+    @Async("ingestionExecutor")
+    public void extractOutline(UUID jobId, List<UUID> customerDocIds) {
+        GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
+                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+        try {
+            emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "고객 문서에서 목차를 추출하고 있습니다..."));
+
+            // 고객문서 청크 수집
+            List<String> customerChunks = searchService.searchDirect(
+                    job.getUserInput() != null ? job.getUserInput().substring(0, Math.min(job.getUserInput().length(), 500)) : "사업 개요 목차 목적 범위",
+                    customerDocIds).stream()
+                    .map(ChunkSearchResult::contextContent)
+                    .toList();
+
+            if (customerChunks.isEmpty()) {
+                // 고정 쿼리로 재시도
+                for (String query : List.of("사업 개요 목적 배경", "기술 요구사항 평가기준", "수행 방안 일정 산출물")) {
+                    customerChunks = searchService.searchDirect(query, customerDocIds).stream()
+                            .map(ChunkSearchResult::contextContent)
+                            .toList();
+                    if (!customerChunks.isEmpty()) break;
+                }
+            }
+
+            log.info("Generation job {} - collected {} customer chunks for outline extraction", jobId, customerChunks.size());
+
+            // 목차 추출
+            List<OutlineNode> outline = outlineExtractor.extract(customerChunks, job.getUserInput());
+            job.setOutline(outlineExtractor.toJson(outline));
+            job.setCurrentStep(2);
+            job.setStepStatus("COMPLETE");
+            job.setStatus(GenerationStatus.DRAFT);
+            jobRepository.save(job);
+
+            emitEvent(job, GenerationProgressEvent.complete("outline"));
+            log.info("Generation job {} - outline extracted: {} top-level sections", jobId, outline.size());
+
+        } catch (Exception e) {
+            log.error("Generation job {} outline extraction failed", jobId, e);
+            job.setErrorMessage(e.getMessage());
+            job.setStepStatus("FAILED");
+            job.setStatus(GenerationStatus.FAILED);
+            jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
         }
     }

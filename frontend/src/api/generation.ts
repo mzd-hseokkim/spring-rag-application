@@ -1,6 +1,6 @@
 // --- Types ---
 
-export type GenerationStatus = 'PLANNING' | 'GENERATING' | 'REVIEWING' | 'RENDERING' | 'COMPLETE' | 'FAILED';
+export type GenerationStatus = 'PLANNING' | 'GENERATING' | 'REVIEWING' | 'RENDERING' | 'COMPLETE' | 'FAILED' | 'DRAFT' | 'ANALYZING' | 'MAPPING' | 'READY';
 export type OutputFormat = 'PDF' | 'PPTX' | 'HTML';
 
 export interface DocumentTemplate {
@@ -23,16 +23,30 @@ export interface GenerationJob {
   templateName: string;
   currentSection: number;
   totalSections: number;
+  currentStep: number;
+  stepStatus: string;
+  outline: string | null;
+  requirementMapping: string | null;
   outputFilePath: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface OutlineNode {
+  key: string;
+  title: string;
+  description: string;
+  children: OutlineNode[];
+}
+
 export interface GenerationRequest {
   templateId: string;
   userInput: string;
   conversationId?: string;
+  customerDocumentIds?: string[];
+  referenceDocumentIds?: string[];
+  includeWebSearch?: boolean;
   options?: {
     includeReview?: boolean;
     tagIds?: string[];
@@ -104,6 +118,25 @@ export async function deleteJob(id: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete generation job');
+}
+
+export async function startOutlineExtraction(jobId: string, customerDocumentIds: string[]): Promise<void> {
+  const res = await fetch(`/api/generations/${jobId}/analyze`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ customerDocumentIds }),
+  });
+  if (!res.ok) throw new Error('Failed to start outline extraction');
+}
+
+export async function saveOutline(jobId: string, outline: OutlineNode[]): Promise<GenerationJob> {
+  const res = await fetch(`/api/generations/${jobId}/outline`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(outline),
+  });
+  if (!res.ok) throw new Error('Failed to save outline');
+  return res.json();
 }
 
 export function getStreamUrl(jobId: string): string {

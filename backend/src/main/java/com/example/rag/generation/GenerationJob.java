@@ -48,6 +48,16 @@ public class GenerationJob {
     @Column(name = "error_message", length = 1000)
     private String errorMessage;
 
+    @Column(name = "current_step", nullable = false)
+    private int currentStep;
+
+    @Column(name = "step_status", length = 20, nullable = false)
+    private String stepStatus;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "requirement_mapping", columnDefinition = "jsonb")
+    private String requirementMapping;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private AppUser user;
@@ -67,9 +77,11 @@ public class GenerationJob {
         this.template = template;
         this.userInput = userInput;
         this.user = user;
-        this.status = GenerationStatus.PLANNING;
+        this.status = GenerationStatus.DRAFT;
         this.currentSection = 0;
         this.totalSections = 0;
+        this.currentStep = 1;
+        this.stepStatus = "IDLE";
     }
 
     @PrePersist
@@ -107,4 +119,11 @@ public class GenerationJob {
     public void setTotalSections(int totalSections) { this.totalSections = totalSections; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public void setConversationId(UUID conversationId) { this.conversationId = conversationId; }
+
+    public int getCurrentStep() { return currentStep; }
+    public void setCurrentStep(int currentStep) { this.currentStep = currentStep; }
+    public String getStepStatus() { return stepStatus; }
+    public void setStepStatus(String stepStatus) { this.stepStatus = stepStatus; }
+    public String getRequirementMapping() { return requirementMapping; }
+    public void setRequirementMapping(String requirementMapping) { this.requirementMapping = requirementMapping; }
 }

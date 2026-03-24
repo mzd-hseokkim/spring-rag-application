@@ -7,6 +7,10 @@ public record GenerationRequest(
         UUID templateId,
         String userInput,
         UUID conversationId,
+        List<UUID> customerDocumentIds,
+        List<UUID> referenceDocumentIds,
+        boolean includeWebSearch,
+        // 하위호환용 기존 필드
         GenerationOptions options
 ) {
     public record GenerationOptions(

@@ -27,12 +27,33 @@ public class GenerationController {
         this.emitterManager = emitterManager;
     }
 
+    /**
+     * 위자드 Step 1: 작업 생성 (DRAFT)
+     */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public GenerationResponse create(@RequestBody GenerationRequest request, Authentication auth) {
         UUID userId = UUID.fromString(auth.getName());
-        return generationService.startGeneration(request, userId);
+        return generationService.createWizardJob(request, userId);
     }
+
+    /**
+     * 위자드 Step 2: 목차 추출 시작
+     */
+    @PostMapping("/{id}/analyze")
+    public void analyze(@PathVariable UUID id, @RequestBody AnalyzeRequest request) {
+        generationService.startOutlineExtraction(id, request.customerDocumentIds());
+    }
+
+    /**
+     * 위자드 Step 2: 목차 사용자 수정 저장
+     */
+    @PutMapping("/{id}/outline")
+    public GenerationResponse saveOutline(@PathVariable UUID id, @RequestBody String outlineJson) {
+        return generationService.saveOutline(id, outlineJson);
+    }
+
+    record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
 
     @GetMapping("/{id}")
     public GenerationResponse get(@PathVariable UUID id) {
