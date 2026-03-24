@@ -43,6 +43,8 @@ public class QuestionnaireWorkflowService {
     );
 
     private final QuestionnaireGeneratorService generator;
+    private final RequirementExtractor requirementExtractor;
+    private final RequirementMatcher requirementMatcher;
     private final QuestionnaireHtmlRenderer renderer;
     private final SearchService searchService;
     private final TavilySearchService tavilySearchService;
@@ -53,6 +55,8 @@ public class QuestionnaireWorkflowService {
     private final ObjectMapper objectMapper;
 
     public QuestionnaireWorkflowService(QuestionnaireGeneratorService generator,
+                                        RequirementExtractor requirementExtractor,
+                                        RequirementMatcher requirementMatcher,
                                         QuestionnaireHtmlRenderer renderer,
                                         SearchService searchService,
                                         TavilySearchService tavilySearchService,
@@ -62,6 +66,8 @@ public class QuestionnaireWorkflowService {
                                         QuestionnaireEmitterManager emitterManager,
                                         ObjectMapper objectMapper) {
         this.generator = generator;
+        this.requirementExtractor = requirementExtractor;
+        this.requirementMatcher = requirementMatcher;
         this.renderer = renderer;
         this.searchService = searchService;
         this.tavilySearchService = tavilySearchService;
@@ -74,11 +80,12 @@ public class QuestionnaireWorkflowService {
 
     @Async("ingestionExecutor")
     public void execute(QuestionnaireJob detachedJob, List<UUID> customerDocIds, List<UUID> proposalDocIds,
-                        List<UUID> refDocIds, List<UUID> personaIds, int questionCount, boolean includeWebSearch) {
+                        List<UUID> refDocIds, List<UUID> personaIds, int questionCount,
+                        boolean includeWebSearch, String analysisMode) {
         QuestionnaireJob job = jobRepository.findByIdWithUser(detachedJob.getId())
                 .orElseThrow(() -> new IllegalStateException("Job not found: " + detachedJob.getId()));
         try {
-            // ── Phase 1: ANALYZING — 고객문서 + 제안문서 분석 ──
+            // ── Phase 1: ANALYZING — 요구사항 추출 + 갭 매트릭스 ──
             updateStatus(job, QuestionnaireStatus.ANALYZING);
             emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "문서를 분석하고 있습니다..."));
 
@@ -86,36 +93,52 @@ public class QuestionnaireWorkflowService {
             job.setTotalPersonas(personas.size());
             jobRepository.save(job);
 
-            log.info("Questionnaire job {} - {} personas, {} customer docs, {} proposal docs, {} ref docs, questionCount={}, webSearch={}",
-                    job.getId(), personas.size(), customerDocIds.size(), proposalDocIds.size(), refDocIds.size(), questionCount, includeWebSearch);
+            log.info("Questionnaire job {} - {} personas, {} customer docs, {} proposal docs, {} ref docs, mode={}, questionCount={}, webSearch={}",
+                    job.getId(), personas.size(), customerDocIds.size(), proposalDocIds.size(), refDocIds.size(), analysisMode, questionCount, includeWebSearch);
 
             // 캐시에서 기존 분석 결과 조회
-            String documentAnalysis = analysisCache.get(customerDocIds, proposalDocIds, job.getUserInput());
+            String documentAnalysis = analysisCache.get(customerDocIds, proposalDocIds, analysisMode, job.getUserInput());
 
             if (documentAnalysis != null) {
-                // 캐시 히트 — 분석 단계 스킵
                 emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
                         "이전 분석 결과를 재사용합니다. 질문 생성을 준비합니다..."));
-                log.info("Questionnaire job {} - using cached document analysis ({} chars)", job.getId(), documentAnalysis.length());
+                log.info("Questionnaire job {} - using cached analysis ({} chars)", job.getId(), documentAnalysis.length());
             } else {
-                // 캐시 미스 — 고객문서 + 제안문서 별도 수집 후 분석
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "고객 문서에서 관련 내용을 수집하고 있습니다..."));
+                // Phase 1a: 고객문서에서 요구사항 추출
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "고객 문서에서 요구사항을 추출하고 있습니다..."));
                 List<String> customerChunks = collectDocumentContent(customerDocIds, job.getUserInput());
                 log.info("Questionnaire job {} - collected {} customer chunks", job.getId(), customerChunks.size());
 
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "제안 문서에서 관련 내용을 수집하고 있습니다..."));
-                List<String> proposalChunks = collectDocumentContent(proposalDocIds, job.getUserInput());
-                log.info("Questionnaire job {} - collected {} proposal chunks", job.getId(), proposalChunks.size());
-
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
-                        "고객 요구사항 대비 제안서 갭을 분석하고 있습니다... (고객 " + customerChunks.size() + "청크, 제안 " + proposalChunks.size() + "청크)"));
-                documentAnalysis = generator.analyzeDocuments(customerChunks, proposalChunks, job.getUserInput(),
+                List<Requirement> requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
                         msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
-                log.info("Questionnaire job {} - document analysis complete ({} chars)", job.getId(), documentAnalysis.length());
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
+                        requirements.size() + "개 요구사항을 추출했습니다."));
+                log.info("Questionnaire job {} - extracted {} requirements", job.getId(), requirements.size());
+
+                // Phase 1b: 제안서 대응 확인 → 갭 매트릭스 생성
+                GapMatrix gapMatrix;
+                if (!proposalDocIds.isEmpty()) {
+                    if ("LLM".equals(analysisMode)) {
+                        emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "제안서 대응을 정밀 분석하고 있습니다 (LLM)..."));
+                        List<String> proposalChunks = collectDocumentContent(proposalDocIds, job.getUserInput());
+                        gapMatrix = requirementMatcher.matchWithLlm(requirements, proposalChunks,
+                                msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
+                    } else {
+                        emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "제안서 대응을 확인하고 있습니다 (RAG)..."));
+                        gapMatrix = requirementMatcher.matchWithRag(requirements, proposalDocIds,
+                                msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
+                    }
+                } else {
+                    gapMatrix = requirementMatcher.buildWithoutProposal(requirements);
+                }
+
+                documentAnalysis = gapMatrix.toMarkdown();
+                log.info("Questionnaire job {} - gap matrix: {}", job.getId(), gapMatrix.summary());
 
                 // 캐시에 저장
-                analysisCache.put(customerDocIds, proposalDocIds, job.getUserInput(), documentAnalysis);
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "문서 분석 완료. 질문 생성을 준비합니다..."));
+                analysisCache.put(customerDocIds, proposalDocIds, analysisMode, job.getUserInput(), documentAnalysis);
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
+                        "갭 분석 완료. " + gapMatrix.summary() + " 질문 생성을 준비합니다..."));
             }
 
             // DB에도 저장 (참조/디버깅용)
@@ -123,6 +146,9 @@ public class QuestionnaireWorkflowService {
             jobRepository.save(job);
 
             // ── Phase 2: GENERATING — 페르소나별 질문 생성 ──
+            // 갭 매트릭스 파싱 (캐시 히트 시에도 페르소나별 정렬을 위해)
+            GapMatrix gapMatrixForPersona = GapMatrix.fromMarkdown(documentAnalysis);
+
             updateStatus(job, QuestionnaireStatus.GENERATING);
             List<PersonaQna> allQna = new ArrayList<>();
 
@@ -132,6 +158,11 @@ public class QuestionnaireWorkflowService {
                 jobRepository.save(job);
 
                 emitEvent(job, QuestionnaireProgressEvent.progress(i + 1, personas.size(), persona.getName()));
+
+                // 페르소나 관심 분야 기준으로 갭 매트릭스 재정렬
+                String personaAnalysis = gapMatrixForPersona != null
+                        ? gapMatrixForPersona.toMarkdownForPersona(persona.getFocusAreas())
+                        : documentAnalysis;
 
                 // 참조 문서 검색 (페르소나 관점)
                 List<String> refContext = List.of();
@@ -154,7 +185,7 @@ public class QuestionnaireWorkflowService {
                 // 문서 분석 결과 + 참조 + 웹으로 질문 생성
                 emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
                         persona.getName() + " — 질문/답변 생성 중..."));
-                PersonaQna qna = generateWithRetry(persona, documentAnalysis, refContext, webContext,
+                PersonaQna qna = generateWithRetry(persona, personaAnalysis, refContext, webContext,
                         job.getUserInput(), questionCount);
                 allQna.add(qna);
 

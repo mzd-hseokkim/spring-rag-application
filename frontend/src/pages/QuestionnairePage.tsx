@@ -131,6 +131,7 @@ export function QuestionnairePage() {
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [questionCount, setQuestionCount] = useState(7);
   const [includeWebSearch, setIncludeWebSearch] = useState(false);
+  const [analysisMode, setAnalysisMode] = useState<'RAG' | 'LLM'>('RAG');
 
   useEffect(() => {
     loadPersonas();
@@ -163,6 +164,7 @@ export function QuestionnairePage() {
       userInput: userInput.trim() || undefined,
       questionCount,
       includeWebSearch,
+      analysisMode: proposalDocs.length > 0 ? analysisMode : undefined,
     });
   };
 
@@ -175,6 +177,7 @@ export function QuestionnairePage() {
     setSelectedPersonaIds(personas.filter(p => p.isDefault).map(p => p.id));
     setQuestionCount(7);
     setIncludeWebSearch(false);
+    setAnalysisMode('RAG');
   };
 
   const step = qna.currentJob?.status === 'COMPLETE'
@@ -307,6 +310,29 @@ export function QuestionnairePage() {
                     </p>
                   </div>
                 </div>
+
+                {/* 분석 모드 선택 (제안문서 선택 시에만 표시) */}
+                {proposalDocs.length > 0 && (
+                  <div className="p-3 rounded-lg border bg-muted/20 space-y-2">
+                    <label className="text-sm font-medium">분석 모드</label>
+                    <div className="flex gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="analysisMode" value="RAG" checked={analysisMode === 'RAG'} onChange={() => setAnalysisMode('RAG')} className="accent-primary" />
+                        <div>
+                          <span className="text-sm font-medium">빠른 분석 (RAG)</span>
+                          <p className="text-xs text-muted-foreground">요구사항별로 제안서를 검색하여 대응 여부 확인. 빠르지만 판정이 덜 정밀할 수 있음.</p>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="analysisMode" value="LLM" checked={analysisMode === 'LLM'} onChange={() => setAnalysisMode('LLM')} className="accent-primary" />
+                        <div>
+                          <span className="text-sm font-medium">정밀 분석 (LLM)</span>
+                          <p className="text-xs text-muted-foreground">AI가 요구사항별 충족도를 직접 판정. 더 정확하지만 시간과 비용이 더 소요됨.</p>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 {/* 생성 버튼 */}
                 <div className="flex justify-end">

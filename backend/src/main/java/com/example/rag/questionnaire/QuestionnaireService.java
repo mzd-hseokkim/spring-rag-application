@@ -77,10 +77,11 @@ public class QuestionnaireService {
 
         QuestionnaireJob savedJob = job;
         boolean webSearch = request.includeWebSearch();
+        String analysisMode = request.analysisMode();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                workflowService.execute(savedJob, customerDocIds, proposalDocIds, refDocIds, personaIds, questionCount, webSearch);
+                workflowService.execute(savedJob, customerDocIds, proposalDocIds, refDocIds, personaIds, questionCount, webSearch, analysisMode);
             }
         });
 

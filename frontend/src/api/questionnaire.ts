@@ -23,6 +23,7 @@ export interface QuestionnaireRequest {
   userInput?: string;
   questionCount?: number;
   includeWebSearch?: boolean;
+  analysisMode?: 'RAG' | 'LLM';
 }
 
 export interface QuestionnaireProgressEvent {

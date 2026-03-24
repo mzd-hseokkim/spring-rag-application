@@ -10,10 +10,12 @@ public record QuestionnaireRequest(
         List<UUID> personaIds,
         String userInput,
         int questionCount,
-        boolean includeWebSearch
+        boolean includeWebSearch,
+        String analysisMode
 ) {
     public QuestionnaireRequest {
         if (questionCount <= 0) questionCount = 7;
         if (questionCount > 20) questionCount = 20;
+        if (analysisMode == null || analysisMode.isBlank()) analysisMode = "RAG";
     }
 }

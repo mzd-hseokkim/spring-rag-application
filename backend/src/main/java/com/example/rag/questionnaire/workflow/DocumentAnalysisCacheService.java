@@ -28,8 +28,8 @@ public class DocumentAnalysisCacheService {
         this.ttl = Duration.ofHours(ttlHours);
     }
 
-    public String get(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput) {
-        String key = buildKey(customerDocIds, proposalDocIds, userInput);
+    public String get(List<UUID> customerDocIds, List<UUID> proposalDocIds, String analysisMode, String userInput) {
+        String key = buildKey(customerDocIds, proposalDocIds, analysisMode, userInput);
         String cached = redisTemplate.opsForValue().get(key);
         if (cached != null) {
             log.info("Document analysis cache HIT: {}", key);
@@ -37,13 +37,13 @@ public class DocumentAnalysisCacheService {
         return cached;
     }
 
-    public void put(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput, String analysis) {
-        String key = buildKey(customerDocIds, proposalDocIds, userInput);
+    public void put(List<UUID> customerDocIds, List<UUID> proposalDocIds, String analysisMode, String userInput, String analysis) {
+        String key = buildKey(customerDocIds, proposalDocIds, analysisMode, userInput);
         redisTemplate.opsForValue().set(key, analysis, ttl);
         log.info("Document analysis cached: {} ({} chars, TTL {}h)", key, analysis.length(), ttl.toHours());
     }
 
-    private String buildKey(List<UUID> customerDocIds, List<UUID> proposalDocIds, String userInput) {
+    private String buildKey(List<UUID> customerDocIds, List<UUID> proposalDocIds, String analysisMode, String userInput) {
         List<String> sortedCustomerIds = customerDocIds.stream()
                 .map(UUID::toString)
                 .sorted()
@@ -54,6 +54,7 @@ public class DocumentAnalysisCacheService {
                 .toList();
         String raw = "C:" + String.join(",", sortedCustomerIds)
                 + "|P:" + String.join(",", sortedProposalIds)
+                + "|M:" + (analysisMode != null ? analysisMode : "RAG")
                 + "|" + (userInput != null ? userInput : "");
         return KEY_PREFIX + sha256(raw);
     }
