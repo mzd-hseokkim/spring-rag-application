@@ -25,6 +25,7 @@ public class SearchAgent {
 
     private final String decidePrompt;
     private final String analyzePrompt;
+    private final String analyzeWithWebSearchPrompt;
     private final ModelClientProvider modelProvider;
     private final DocumentRepository documentRepository;
     private final ConversationService conversationService;
@@ -38,6 +39,7 @@ public class SearchAgent {
         this.modelProvider = modelProvider;
         this.decidePrompt = promptLoader.load("agent-decide.txt");
         this.analyzePrompt = promptLoader.load("analyze.txt");
+        this.analyzeWithWebSearchPrompt = promptLoader.load("analyze-web-search.txt");
         this.documentRepository = documentRepository;
         this.conversationService = conversationService;
         this.maxSubQueries = maxSubQueries;
@@ -51,10 +53,11 @@ public class SearchAgent {
      * 통합 분석 — compress + decide + decompose를 단일 LLM 호출로 수행.
      */
     public AnalysisResult analyze(String sessionId, String message, UUID userId,
-                                   boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds) {
+                                   boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds,
+                                   boolean enableWebSearch) {
         List<Document> documents = getFilteredDocuments(userId, includePublicDocs, tagIds, collectionIds);
-        log.info("[SearchAgent] userId={}, includePublicDocs={}, tagIds={}, collectionIds={}, documents.size={}",
-                userId, includePublicDocs, tagIds, collectionIds, documents.size());
+        log.info("[SearchAgent] userId={}, includePublicDocs={}, tagIds={}, collectionIds={}, documents.size={}, enableWebSearch={}",
+                userId, includePublicDocs, tagIds, collectionIds, documents.size(), enableWebSearch);
 
         String docList = documents.isEmpty() ? "(없음)" : documents.stream()
                 .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
@@ -62,7 +65,8 @@ public class SearchAgent {
         log.info("[SearchAgent] docList={}", docList);
 
         String historyText = buildHistoryText(sessionId);
-        String prompt = analyzePrompt.formatted(historyText, docList, message);
+        String promptTemplate = enableWebSearch ? analyzeWithWebSearchPrompt : analyzePrompt;
+        String prompt = promptTemplate.formatted(historyText, docList, message);
 
         String response = chatClient().prompt()
                 .user(prompt)
@@ -115,7 +119,9 @@ public class SearchAgent {
 
         // Action
         AgentAction action = AgentAction.SEARCH;
-        if (actionStr.contains("DIRECT_ANSWER") || actionStr.contains("DIRECT")) {
+        if (actionStr.contains("WEB_SEARCH")) {
+            action = AgentAction.WEB_SEARCH;
+        } else if (actionStr.contains("DIRECT_ANSWER") || actionStr.contains("DIRECT")) {
             action = AgentAction.DIRECT_ANSWER;
         } else if (actionStr.contains("CLARIFY")) {
             action = AgentAction.CLARIFY;

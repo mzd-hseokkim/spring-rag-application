@@ -89,9 +89,10 @@ public class ChatController {
             List<java.util.UUID> collectionIds = request.collectionIds() != null
                     ? request.collectionIds().stream().map(java.util.UUID::fromString).toList()
                     : List.of();
+            boolean enableWebSearch = request.enableWebSearch() != null && request.enableWebSearch();
             ChatService.ChatResponse response = chatService.chat(
                     request.sessionId(), request.message(), request.modelId(),
-                    userId, includePublic, tagIds, collectionIds, step -> {
+                    userId, includePublic, tagIds, collectionIds, enableWebSearch, step -> {
                         try {
                             emitter.send(SseEmitter.event()
                                     .name("agent_step")
@@ -107,7 +108,7 @@ public class ChatController {
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
-                        .data(Map.of(KEY_MESSAGE, e.getMessage())));
+                        .data(Map.of(KEY_MESSAGE, ChatErrorMessages.toUserMessage(e))));
             } catch (IOException ex) {
                 // SSE send failure during error handling
             }
@@ -131,7 +132,7 @@ public class ChatController {
                     try {
                         emitter.send(SseEmitter.event()
                                 .name("error")
-                                .data(Map.of(KEY_MESSAGE, error.getMessage())));
+                                .data(Map.of(KEY_MESSAGE, ChatErrorMessages.toUserMessage(error))));
                     } catch (IOException e) {
                         // SSE send failure during error reporting
                     }
@@ -191,6 +192,7 @@ public class ChatController {
     }
 
     record ChatRequest(String sessionId, String message, String modelId, Boolean includePublicDocs,
-                       java.util.List<String> tagIds, java.util.List<String> collectionIds) {}
+                       java.util.List<String> tagIds, java.util.List<String> collectionIds,
+                       Boolean enableWebSearch) {}
     record FeedbackRequest(String sessionId, int messageIndex, String rating) {}
 }

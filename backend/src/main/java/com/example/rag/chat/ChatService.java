@@ -2,6 +2,8 @@ package com.example.rag.chat;
 
 import com.example.rag.agent.*;
 import com.example.rag.common.PromptLoader;
+import com.example.rag.questionnaire.workflow.TavilySearchService;
+import com.example.rag.questionnaire.workflow.WebSearchException;
 import com.example.rag.conversation.ConversationManagementService;
 import com.example.rag.conversation.ConversationMessage;
 import com.example.rag.conversation.ConversationService;
@@ -34,6 +36,7 @@ public class ChatService {
     private final String ragSystemPrompt;
     private final String generalSystemPrompt;
     private final String clarifyPrompt;
+    private final String webSearchSystemPrompt;
 
     private final ModelClientProvider modelProvider;
     private final SearchService searchService;
@@ -45,6 +48,7 @@ public class ChatService {
     private final PipelineTracer pipelineTracer;
     private final EvaluationService evaluationService;
     private final com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository;
+    private final TavilySearchService tavilySearchService;
     private final boolean mergeAnalysis;
 
     public ChatService(ModelClientProvider modelProvider,
@@ -57,6 +61,7 @@ public class ChatService {
                        PipelineTracer pipelineTracer,
                        EvaluationService evaluationService,
                        com.example.rag.dashboard.TokenUsageRepository tokenUsageRepository,
+                       TavilySearchService tavilySearchService,
                        PromptLoader promptLoader,
                        @Value("${app.rag.merge-analysis:true}") boolean mergeAnalysis) {
         this.modelProvider = modelProvider;
@@ -69,9 +74,11 @@ public class ChatService {
         this.pipelineTracer = pipelineTracer;
         this.evaluationService = evaluationService;
         this.tokenUsageRepository = tokenUsageRepository;
+        this.tavilySearchService = tavilySearchService;
         this.ragSystemPrompt = promptLoader.load("rag-system.txt");
         this.generalSystemPrompt = promptLoader.load("general-system.txt");
         this.clarifyPrompt = promptLoader.load("clarify.txt");
+        this.webSearchSystemPrompt = promptLoader.load("web-search-system.txt");
         this.mergeAnalysis = mergeAnalysis;
     }
 
@@ -92,7 +99,7 @@ public class ChatService {
     @SuppressWarnings("java:S107")
     public ChatResponse chat(String sessionId, String message, String modelId, UUID userId,
                              boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds,
-                             Consumer<AgentStepEvent> stepCallback) {
+                             boolean enableWebSearch, Consumer<AgentStepEvent> stepCallback) {
         TraceContext trace = new TraceContext(sessionId, message);
         List<AgentStepEvent> agentSteps = new ArrayList<>();
         Consumer<AgentStepEvent> callback = event -> {
@@ -108,7 +115,7 @@ public class ChatService {
 
         if (mergeAnalysis) {
             result = chatMergedPipeline(sessionId, message, modelId, userId,
-                    includePublicDocs, tagIds, collectionIds, trace, callback);
+                    includePublicDocs, tagIds, collectionIds, enableWebSearch, trace, callback);
         } else {
             result = chatLegacyPipeline(sessionId, message, modelId, userId,
                     includePublicDocs, tagIds, collectionIds, trace, callback);
@@ -143,12 +150,13 @@ public class ChatService {
     private ChatResponse chatMergedPipeline(String sessionId, String message, String modelId,
                                              UUID userId, boolean includePublicDocs,
                                              List<UUID> tagIds, List<UUID> collectionIds,
+                                             boolean enableWebSearch,
                                              TraceContext trace, Consumer<AgentStepEvent> callback) {
         // Stage 1: 분석 (compress + decide + decompose 통합)
         trace.startStep("analyze");
         callback.accept(new AgentStepEvent("analyze", "질문 분석 중..."));
         AnalysisResult analysis = searchAgent.analyze(
-                sessionId, message, userId, includePublicDocs, tagIds, collectionIds);
+                sessionId, message, userId, includePublicDocs, tagIds, collectionIds, enableWebSearch);
         trace.endStep(Map.of("action", analysis.action().name(),
                 "searchQuery", analysis.searchQuery(),
                 "isMultiStep", analysis.isMultiStep()));
@@ -164,6 +172,12 @@ public class ChatService {
                 pipelineTracer.logTrace(trace, userId, "CLARIFY");
                 yield chatClarify(sessionId, message, modelId);
             }
+            case WEB_SEARCH -> {
+                callback.accept(new AgentStepEvent("web_search", "웹 검색 중..."));
+                String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
+                pipelineTracer.logTrace(trace, userId, "WEB_SEARCH");
+                yield chatWithWebSearch(sessionId, message, searchQuery, modelId, userId, callback);
+            }
             case SEARCH -> {
                 String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
                 if (analysis.isMultiStep()) {
@@ -172,7 +186,8 @@ public class ChatService {
                 } else {
                     callback.accept(new AgentStepEvent(STEP_SEARCH, "문서 검색 중..."));
                     yield chatWithRag(sessionId, message, searchQuery,
-                            analysis.targetDocumentIds(), modelId, userId, trace, callback);
+                            analysis.targetDocumentIds(), modelId, userId,
+                            enableWebSearch, trace, callback);
                 }
             }
         };
@@ -209,6 +224,12 @@ public class ChatService {
                 pipelineTracer.logTrace(trace, userId, "CLARIFY");
                 yield chatClarify(sessionId, message, modelId);
             }
+            case WEB_SEARCH -> {
+                // 레거시 파이프라인에서는 WEB_SEARCH가 발생하지 않지만 exhaustive switch를 위해 처리
+                callback.accept(new AgentStepEvent(STEP_GENERATE, "직접 답변 생성 중..."));
+                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
+                yield chatGeneral(sessionId, message, modelId);
+            }
             case SEARCH -> {
                 callback.accept(new AgentStepEvent("decompose", "질문 복잡도 분석 중..."));
                 trace.startStep("decompose");
@@ -221,7 +242,8 @@ public class ChatService {
                 } else {
                     callback.accept(new AgentStepEvent(STEP_SEARCH, "문서 검색 중..."));
                     yield chatWithRag(sessionId, message, searchQuery,
-                            decision.targetDocumentIds(), modelId, userId, trace, callback);
+                            decision.targetDocumentIds(), modelId, userId,
+                            false, trace, callback);
                 }
             }
         };
@@ -232,10 +254,17 @@ public class ChatService {
     @SuppressWarnings("java:S107")
     private ChatResponse chatWithRag(String sessionId, String message, String searchQuery,
                                       List<UUID> documentIds, String modelId, UUID userId,
+                                      boolean enableWebSearch,
                                       TraceContext trace, Consumer<AgentStepEvent> callback) {
         trace.startStep(STEP_SEARCH);
         List<ChunkSearchResult> searchResults = searchService.search(searchQuery, documentIds);
         trace.endStep(Map.of("resultCount", searchResults.size()));
+
+        // 문서 검색 결과가 빈약하고 웹검색이 활성화된 경우 웹검색 폴백
+        if (enableWebSearch && searchResults.isEmpty() && tavilySearchService.isAvailable()) {
+            callback.accept(new AgentStepEvent("web_search", "문서에서 정보를 찾지 못해 웹 검색 중..."));
+            return chatWithWebSearch(sessionId, message, searchQuery, modelId, userId, callback);
+        }
 
         callback.accept(new AgentStepEvent(STEP_GENERATE, "답변 생성 중..."));
 
@@ -302,6 +331,64 @@ public class ChatService {
                     conversationService.addMessage(sessionId,
                             ConversationMessage.assistant(fullResponse.toString(), sourceRefs));
                 });
+
+        return new ChatResponse(tokenStream, sources, sourceRefs);
+    }
+
+    private ChatResponse chatWithWebSearch(String sessionId, String message, String searchQuery,
+                                              String modelId, UUID userId,
+                                              Consumer<AgentStepEvent> callback) {
+        List<String> webResults;
+        try {
+            webResults = tavilySearchService.searchStrict(searchQuery, 5);
+        } catch (WebSearchException e) {
+            String errorMsg = e.getMessage();
+            conversationService.addMessage(sessionId,
+                    ConversationMessage.assistant(errorMsg, List.of()));
+            return new ChatResponse(Flux.just(errorMsg), List.of(), List.of());
+        }
+
+        callback.accept(new AgentStepEvent(STEP_GENERATE, "웹 검색 결과로 답변 생성 중..."));
+
+        String webContext = webResults.isEmpty()
+                ? "(웹 검색 결과 없음)"
+                : String.join("\n\n", webResults);
+        String history = buildHistory(sessionId);
+        String userPrompt = """
+                ---
+                [이전 대화]
+                %s
+                ---
+                [웹 검색 결과]
+                %s
+                ---
+
+                질문: %s
+                """.formatted(history, webContext, message);
+
+        List<SourceInfo> sources = webResults.stream()
+                .filter(r -> r.contains("(출처: "))
+                .map(r -> {
+                    int urlStart = r.lastIndexOf("(출처: ") + 5;
+                    int urlEnd = r.lastIndexOf(")");
+                    String url = (urlStart > 5 && urlEnd > urlStart) ? r.substring(urlStart, urlEnd) : "";
+                    int titleEnd = r.indexOf("]");
+                    String title = (titleEnd > 1) ? r.substring(1, titleEnd) : "웹 검색";
+                    return new SourceInfo(url, title, 0, truncate(r, 100));
+                })
+                .toList();
+        List<ConversationMessage.SourceRef> sourceRefs = toSourceRefs(sources);
+
+        StringBuilder fullResponse = new StringBuilder();
+
+        Flux<String> tokenStream = chatClient(modelId).prompt()
+                .system(webSearchSystemPrompt)
+                .user(userPrompt)
+                .stream()
+                .content()
+                .doOnNext(fullResponse::append)
+                .doOnComplete(() -> conversationService.addMessage(sessionId,
+                        ConversationMessage.assistant(fullResponse.toString(), sourceRefs)));
 
         return new ChatResponse(tokenStream, sources, sourceRefs);
     }

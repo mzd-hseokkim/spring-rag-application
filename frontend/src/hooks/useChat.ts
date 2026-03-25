@@ -166,7 +166,8 @@ export function useChat(onTitleGenerated?: (sessionId: string, title: string) =>
   }, []);
 
   const sendMessage = useCallback(async (content: string, modelId?: string | null,
-      includePublicDocs?: boolean, tagIds?: string[], collectionIds?: string[]) => {
+      includePublicDocs?: boolean, tagIds?: string[], collectionIds?: string[],
+      enableWebSearch?: boolean) => {
     dispatch({ type: 'SEND_MESSAGE', content });
     dispatch({ type: 'STREAM_START' });
 
@@ -178,6 +179,7 @@ export function useChat(onTitleGenerated?: (sessionId: string, title: string) =>
     if (modelId) payload.modelId = modelId;
     if (tagIds && tagIds.length > 0) payload.tagIds = tagIds;
     if (collectionIds && collectionIds.length > 0) payload.collectionIds = collectionIds;
+    if (enableWebSearch) payload.enableWebSearch = true;
 
     if (clientRef.current?.connected) {
       // WebSocket으로 전송

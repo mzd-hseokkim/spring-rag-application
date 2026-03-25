@@ -40,6 +40,10 @@ public class ChatWebSocketHandler {
 
     @MessageMapping("/chat/send")
     public void handleChat(ChatWsRequest request, Principal principal) {
+        if (principal == null) {
+            log.warn("Unauthenticated WebSocket message received, ignoring");
+            return;
+        }
         String userId = principal.getName();
         String sessionId = request.sessionId();
 
@@ -65,9 +69,10 @@ public class ChatWebSocketHandler {
                         : List.of();
                 boolean includePublic = request.includePublicDocs() == null || request.includePublicDocs();
 
+                boolean enableWebSearch = request.enableWebSearch() != null && request.enableWebSearch();
                 ChatService.ChatResponse response = chatService.chat(
                         sessionId, request.message(), request.modelId(),
-                        UUID.fromString(userId), includePublic, tagIds, collectionIds,
+                        UUID.fromString(userId), includePublic, tagIds, collectionIds, enableWebSearch,
                         step -> sendToUser(userId, Map.of(
                                 "type", "agent_step",
                                 "step", step.step(),
@@ -79,7 +84,7 @@ public class ChatWebSocketHandler {
                         token -> sendToUser(userId, Map.of("type", "token", "content", token)),
                         error -> {
                             log.error("Chat stream error for session {}: {}", sessionId, error.getMessage());
-                            sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, error.getMessage()));
+                            sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, ChatErrorMessages.toUserMessage(error)));
                             activeStreams.remove(sessionId);
                         },
                         () -> {
@@ -93,13 +98,14 @@ public class ChatWebSocketHandler {
 
             } catch (Exception e) {
                 log.error("Chat error for session {}: {}", sessionId, e.getMessage());
-                sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, e.getMessage()));
+                sendToUser(userId, Map.of("type", TYPE_ERROR, KEY_MESSAGE, ChatErrorMessages.toUserMessage(e)));
             }
         });
     }
 
     @MessageMapping("/chat/stop")
     public void handleStop(StopRequest request, Principal principal) {
+        if (principal == null) return;
         String sessionId = request.sessionId();
         Disposable sub = activeStreams.remove(sessionId);
         if (sub != null && !sub.isDisposed()) {
@@ -122,7 +128,8 @@ public class ChatWebSocketHandler {
 
     public record ChatWsRequest(String sessionId, String message, String modelId,
                                  Boolean includePublicDocs,
-                                 List<String> tagIds, List<String> collectionIds) {}
+                                 List<String> tagIds, List<String> collectionIds,
+                                 Boolean enableWebSearch) {}
 
     public record StopRequest(String sessionId) {}
 }

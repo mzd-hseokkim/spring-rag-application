@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChatInput } from '@/components/chat/ChatInput';
+import { ChatInput, type AgenticToolState } from '@/components/chat/ChatInput';
 import { MessageList } from '@/components/chat/MessageList';
 import { ModelSelector } from '@/components/chat/ModelSelector';
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,7 @@ interface ChatState {
   streaming: boolean;
   sessionId: string;
   sendMessage: (content: string, modelId?: string | null, includePublicDocs?: boolean,
-                tagIds?: string[], collectionIds?: string[]) => Promise<void>;
+                tagIds?: string[], collectionIds?: string[], enableWebSearch?: boolean) => Promise<void>;
   stopGeneration: () => void;
 }
 
@@ -50,6 +50,9 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
   const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(
     () => new Set(JSON.parse(localStorage.getItem('chat:collectionIds') || '[]'))
   );
+  const [agenticTools, setAgenticTools] = useState<AgenticToolState>(
+    () => ({ enableWebSearch: localStorage.getItem('chat:enableWebSearch') === 'true' })
+  );
   const [tags, setTags] = useState<DocumentTag[]>([]);
   const [collections, setCollections] = useState<DocumentCollection[]>([]);
 
@@ -67,6 +70,9 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
   useEffect(() => {
     localStorage.setItem('chat:collectionIds', JSON.stringify([...selectedCollectionIds]));
   }, [selectedCollectionIds]);
+  useEffect(() => {
+    localStorage.setItem('chat:enableWebSearch', String(agenticTools.enableWebSearch));
+  }, [agenticTools.enableWebSearch]);
 
   useEffect(() => {
     fetchTags().then(setTags).catch(() => {});
@@ -97,8 +103,12 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
   const handleSend = async (content: string) => {
     const tagIds = selectedTagIds.size > 0 ? [...selectedTagIds] : undefined;
     const collectionIds = selectedCollectionIds.size > 0 ? [...selectedCollectionIds] : undefined;
-    await chat.sendMessage(content, selectedModelId, includePublicDocs, tagIds, collectionIds);
+    await chat.sendMessage(content, selectedModelId, includePublicDocs, tagIds, collectionIds, agenticTools.enableWebSearch);
     onSendComplete();
+  };
+
+  const handleAgenticToolChange = (tool: keyof AgenticToolState, enabled: boolean) => {
+    setAgenticTools(prev => ({ ...prev, [tool]: enabled }));
   };
 
   const hasFilters = tags.length > 0 || collections.length > 0;
@@ -231,6 +241,8 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
           disabled={chat.streaming}
           streaming={chat.streaming}
           focusKey={chat.sessionId}
+          agenticTools={agenticTools}
+          onAgenticToolChange={handleAgenticToolChange}
         />
       </div>
     </div>

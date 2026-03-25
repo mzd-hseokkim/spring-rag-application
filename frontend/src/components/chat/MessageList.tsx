@@ -7,7 +7,7 @@ import {
   Search, Brain, ListTree, FileText, PenLine, CheckCircle2,
   Link, MessageSquare, HelpCircle, Loader2, Check,
   ThumbsUp, ThumbsDown, Paperclip, ChevronDown, ChevronUp,
-  Upload, Sparkles,
+  Upload, Sparkles, Globe, ExternalLink,
 } from 'lucide-react';
 import type { Message } from '@/types';
 
@@ -29,6 +29,7 @@ const STEP_ICONS: Record<string, ReactNode> = {
   generate: <MessageSquare className="size-3.5" />,
   direct: <MessageSquare className="size-3.5" />,
   clarify: <HelpCircle className="size-3.5" />,
+  web_search: <Globe className="size-3.5" />,
 };
 
 export function MessageList({ messages, streaming }: Props) {
@@ -171,18 +172,32 @@ export function MessageList({ messages, streaming }: Props) {
                 {expandedSources[i] && msg.sources && msg.sources.length > 0 && (
                   <div className="mt-1.5 space-y-1.5">
                     {msg.sources.map((s, j) => {
+                      const isWebSource = s.documentId.startsWith('http');
                       const isTableExcerpt = s.excerpt.trimStart().startsWith('|');
                       return (
                         <div key={j} className="text-xs text-muted-foreground py-0.5 pl-1">
-                          <div className="flex gap-1.5 items-baseline">
-                            <span className="font-medium text-primary">{s.filename}</span>
-                            <span className="text-[11px]">#{s.chunkIndex}</span>
-                            {!isTableExcerpt && <span className="text-[11px] truncate">{s.excerpt}</span>}
-                          </div>
-                          {isTableExcerpt && (
-                            <div className="mt-1 overflow-x-auto [&_table]:border-collapse [&_table]:text-[11px] [&_table]:w-full [&_th]:border [&_th]:border-border [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:bg-muted [&_th]:font-semibold [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-0.5">
-                              <Markdown remarkPlugins={[remarkGfm]}>{s.excerpt}</Markdown>
+                          {isWebSource ? (
+                            <div className="flex gap-1.5 items-center">
+                              <Globe className="size-3 shrink-0 text-blue-500" />
+                              <a href={s.documentId} target="_blank" rel="noopener noreferrer"
+                                 className="font-medium text-blue-600 dark:text-blue-400 hover:underline truncate">
+                                {s.filename}
+                              </a>
+                              <ExternalLink className="size-2.5 shrink-0 text-muted-foreground" />
                             </div>
+                          ) : (
+                            <>
+                              <div className="flex gap-1.5 items-baseline">
+                                <span className="font-medium text-primary">{s.filename}</span>
+                                <span className="text-[11px]">#{s.chunkIndex}</span>
+                                {!isTableExcerpt && <span className="text-[11px] truncate">{s.excerpt}</span>}
+                              </div>
+                              {isTableExcerpt && (
+                                <div className="mt-1 overflow-x-auto [&_table]:border-collapse [&_table]:text-[11px] [&_table]:w-full [&_th]:border [&_th]:border-border [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:bg-muted [&_th]:font-semibold [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-0.5">
+                                  <Markdown remarkPlugins={[remarkGfm]}>{s.excerpt}</Markdown>
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       );

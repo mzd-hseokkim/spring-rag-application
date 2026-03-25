@@ -42,43 +42,36 @@ public class TavilySearchService {
     }
 
     /**
+     * 웹 검색을 수행하되 API 에러 시 WebSearchException을 던진다.
+     * 채팅 파이프라인처럼 사용자에게 에러를 전달해야 하는 경우 사용한다.
+     */
+    public List<String> searchStrict(String query, int maxResults) {
+        if (!isAvailable()) {
+            throw new WebSearchException(0, "Tavily API key not configured");
+        }
+        try {
+            return doSearch(query, maxResults, true);
+        } catch (WebSearchException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new WebSearchException(0, "웹 검색이 중단되었습니다.");
+        } catch (Exception e) {
+            throw new WebSearchException(500, e.getMessage());
+        }
+    }
+
+    /**
      * Tavily API로 웹 검색을 수행하고 결과를 텍스트 목록으로 반환한다.
+     * 에러 시 빈 리스트를 반환한다.
      */
     public List<String> search(String query, int maxResults) {
         if (!isAvailable()) {
             log.warn("Tavily API key not configured, skipping web search");
             return List.of();
         }
-
         try {
-            Map<String, Object> body = Map.of(
-                    "query", query,
-                    "max_results", maxResults,
-                    "include_answer", true,
-                    "search_depth", "advanced"
-            );
-
-            String requestBody = objectMapper.writeValueAsString(body);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(TAVILY_API_URL))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + resolveApiKey())
-                    .timeout(Duration.ofSeconds(30))
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                if (log.isWarnEnabled()) {
-                    log.warn("Tavily API returned status {}: {}", response.statusCode(), response.body());
-                }
-                return List.of();
-            }
-
-            return parseResults(response.body());
-
+            return doSearch(query, maxResults, false);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("Tavily web search interrupted for query '{}'", query);
@@ -87,6 +80,39 @@ public class TavilySearchService {
             log.warn("Tavily web search failed for query '{}': {}", query, e.getMessage());
             return List.of();
         }
+    }
+
+    private List<String> doSearch(String query, int maxResults, boolean strict) throws Exception {
+        Map<String, Object> body = Map.of(
+                "query", query,
+                "max_results", maxResults,
+                "include_answer", true,
+                "search_depth", "advanced"
+        );
+
+        String requestBody = objectMapper.writeValueAsString(body);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(TAVILY_API_URL))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + resolveApiKey())
+                .timeout(Duration.ofSeconds(30))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            if (log.isWarnEnabled()) {
+                log.warn("Tavily API returned status {}: {}", response.statusCode(), response.body());
+            }
+            if (strict) {
+                throw new WebSearchException(response.statusCode(), response.body());
+            }
+            return List.of();
+        }
+
+        return parseResults(response.body());
     }
 
     private List<String> parseResults(String responseBody) throws com.fasterxml.jackson.core.JsonProcessingException {

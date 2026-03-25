@@ -2,7 +2,10 @@ import { useRef, useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { ArrowUpIcon, Square, Upload, Plus } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Badge } from '@/components/ui/badge';
+import { ArrowUpIcon, Square, Upload, Plus, Wrench, Globe } from 'lucide-react';
 
 const ACCEPT_TYPES = [
   'application/pdf',
@@ -12,6 +15,10 @@ const ACCEPT_TYPES = [
 ];
 const ACCEPT_EXT = ['.pdf', '.txt', '.md'];
 
+export interface AgenticToolState {
+  enableWebSearch: boolean;
+}
+
 interface Props {
   onSend: (message: string) => void;
   onStop?: () => void;
@@ -19,11 +26,14 @@ interface Props {
   disabled: boolean;
   streaming?: boolean;
   focusKey?: string;
+  agenticTools: AgenticToolState;
+  onAgenticToolChange: (tool: keyof AgenticToolState, enabled: boolean) => void;
 }
 
-export function ChatInput({ onSend, onStop, onFileDrop, disabled, streaming, focusKey }: Props) {
+export function ChatInput({ onSend, onStop, onFileDrop, disabled, streaming, focusKey, agenticTools, onAgenticToolChange }: Props) {
   const [input, setInput] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const activeToolCount = Object.values(agenticTools).filter(Boolean).length;
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -120,6 +130,36 @@ export function ChatInput({ onSend, onStop, onFileDrop, disabled, streaming, foc
         onClick={() => fileInputRef.current?.click()} title="파일 업로드">
         <Plus className="size-4" />
       </Button>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="shrink-0 relative" title="Agentic Tools">
+            <Wrench className="size-4" />
+            {activeToolCount > 0 && (
+              <Badge variant="default" className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none flex items-center justify-center">
+                {activeToolCount}
+              </Badge>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-56 p-0" align="start" side="top">
+          <div className="px-3 py-2 border-b">
+            <p className="text-xs font-semibold text-foreground">Agentic Tools</p>
+          </div>
+          <div className="p-2 space-y-1">
+            <label className="flex items-center justify-between gap-3 px-2 py-1.5 rounded-md hover:bg-accent cursor-pointer">
+              <div className="flex items-center gap-2 min-w-0">
+                <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="text-sm truncate">웹 검색</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={agenticTools.enableWebSearch}
+                onCheckedChange={(checked: boolean) => onAgenticToolChange('enableWebSearch', checked)}
+              />
+            </label>
+          </div>
+        </PopoverContent>
+      </Popover>
       <Textarea
         ref={textareaRef}
         value={input}
