@@ -1,0 +1,18 @@
+FROM eclipse-temurin:21-jdk
+
+WORKDIR /app
+
+# Gradle wrapper 복사 및 의존성 캐싱
+COPY gradlew gradlew
+COPY gradle/ gradle/
+COPY build.gradle.kts settings.gradle.kts ./
+COPY backend/build.gradle.kts backend/build.gradle.kts
+RUN chmod +x gradlew && ./gradlew :backend:dependencies --no-daemon || true
+
+# 소스 복사 및 빌드
+COPY backend/ backend/
+RUN ./gradlew :backend:bootJar --no-daemon
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "backend/build/libs/backend-0.0.1-SNAPSHOT.jar"]
