@@ -112,6 +112,29 @@
             border-bottom: 1px solid var(--color-border);
         }
         .section:last-of-type { border-bottom: none; }
+        .visual-guide {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: #fef9c3;
+            border: 1px dashed #eab308;
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            color: #854d0e;
+        }
+        .visual-guide-label {
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        .governing-message {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--color-primary-light);
+            background: var(--color-accent-light);
+            border-left: 4px solid var(--color-accent);
+            padding: 12px 20px;
+            margin-bottom: 20px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+        }
         .section h2 {
             font-size: 1.5rem;
             font-weight: 700;
@@ -123,6 +146,8 @@
         }
 
         /* ── Section Body (Markdown rendered) ── */
+        .section, .section-body, .compare-col, .step-desc, .kpi-desc, .placeholder-text,
+        .governing-message, .visual-guide { white-space: pre-line; }
         .section-body h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 10px; color: var(--color-primary-light); }
         .section-body h4 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 8px; }
         .section-body p { margin-bottom: 14px; }
@@ -389,22 +414,22 @@
     <!-- 본문 섹션들 (레이아웃별 분기) -->
     <div th:each="section : ${sections}" class="section" th:id="${section.key()}">
         <h2 th:text="${section.title()}">섹션 제목</h2>
+        <p th:if="${section.governingMessage() != null and !section.governingMessage().isEmpty()}"
+           class="governing-message" th:text="${section.governingMessage()}"></p>
 
-        <div th:if="${section.layoutType() == 'TEXT_FULL'}" th:replace="~{generation/layouts :: TEXT_FULL(${section})}"></div>
-        <div th:if="${section.layoutType() == 'TEXT_TABLE'}" th:replace="~{generation/layouts :: TEXT_TABLE(${section})}"></div>
-        <div th:if="${section.layoutType() == 'COMPARE_2COL'}" th:replace="~{generation/layouts :: COMPARE_2COL(${section})}"></div>
-        <div th:if="${section.layoutType() == 'PROCESS_HORIZONTAL'}" th:replace="~{generation/layouts :: PROCESS_HORIZONTAL(${section})}"></div>
-        <div th:if="${section.layoutType() == 'KPI_CARDS'}" th:replace="~{generation/layouts :: KPI_CARDS(${section})}"></div>
-        <div th:if="${section.layoutType() == 'TABLE_FULL'}" th:replace="~{generation/layouts :: TABLE_FULL(${section})}"></div>
-        <div th:if="${section.layoutType() == 'TEXT_IMAGE'}" th:replace="~{generation/layouts :: TEXT_IMAGE(${section})}"></div>
-        <div th:if="${section.layoutType() == 'IMAGE_FULL'}" th:replace="~{generation/layouts :: IMAGE_FULL(${section})}"></div>
+        <div th:insert="~{generation/layouts :: ${section.fragmentName()}(${section})}"></div>
+
+        <div th:if="${section.visualGuide() != null and !section.visualGuide().isEmpty()}" class="visual-guide">
+            <span class="visual-guide-label">📌 시각 요소 가이드</span>
+            <span th:text="${section.visualGuide()}"></span>
+        </div>
     </div>
 
     <!-- 참고 출처 -->
     <div th:if="${!allReferences.isEmpty()}" class="references">
         <h2>참고 자료</h2>
         <ul>
-            <li th:each="ref : ${allReferences}" th:text="${ref}"></li>
+            <li th:each="ref : ${allReferences}" th:utext="${ref}"></li>
         </ul>
     </div>
 </body>

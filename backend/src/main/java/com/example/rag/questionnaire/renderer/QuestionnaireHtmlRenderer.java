@@ -146,13 +146,27 @@ public class QuestionnaireHtmlRenderer {
         }
     }
 
+    private String linkifyUrl(String text) {
+        if (text == null) return "";
+        return text.replaceAll("(https?://[^\\s)]+)", "<a href=\"$1\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#2563eb;text-decoration:underline\">$1</a>");
+    }
+
     private void renderHtml(List<PersonaQna> allQna, Path outputDir, UUID jobId) {
         int totalQuestions = allQna.stream()
                 .mapToInt(q -> q.questions().size())
                 .sum();
 
+        // sources 내 URL을 <a> 태그로 변환
+        List<PersonaQna> linkedQna = allQna.stream()
+                .map(pq -> new PersonaQna(pq.personaName(), pq.personaRole(),
+                        pq.questions().stream().map(qa -> new QuestionAnswer(
+                                qa.question(), qa.answer(), qa.difficulty(), qa.category(),
+                                qa.sources() != null ? qa.sources().stream().map(this::linkifyUrl).toList() : List.of()
+                        )).toList()))
+                .toList();
+
         Context ctx = new Context();
-        ctx.setVariable("allQna", allQna);
+        ctx.setVariable("allQna", linkedQna);
         ctx.setVariable("totalQuestions", totalQuestions);
         ctx.setVariable("totalPersonas", allQna.size());
         ctx.setVariable("generatedAt", LocalDateTime.now());

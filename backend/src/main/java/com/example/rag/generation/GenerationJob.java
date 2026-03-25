@@ -25,6 +25,9 @@ public class GenerationJob {
     @JoinColumn(name = "template_id", nullable = false)
     private DocumentTemplate template;
 
+    @Column(length = 300)
+    private String title;
+
     @Column(name = "user_input", columnDefinition = "text", nullable = false)
     private String userInput;
 
@@ -57,6 +60,9 @@ public class GenerationJob {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "requirement_mapping", columnDefinition = "jsonb")
     private String requirementMapping;
+
+    @Column(name = "include_web_search", nullable = false)
+    private boolean includeWebSearch;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
@@ -99,6 +105,8 @@ public class GenerationJob {
     public UUID getId() { return id; }
     public GenerationStatus getStatus() { return status; }
     public DocumentTemplate getTemplate() { return template; }
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
     public String getUserInput() { return userInput; }
     public String getOutline() { return outline; }
     public String getGeneratedSections() { return generatedSections; }
@@ -126,4 +134,7 @@ public class GenerationJob {
     public void setStepStatus(String stepStatus) { this.stepStatus = stepStatus; }
     public String getRequirementMapping() { return requirementMapping; }
     public void setRequirementMapping(String requirementMapping) { this.requirementMapping = requirementMapping; }
+
+    public boolean isIncludeWebSearch() { return includeWebSearch; }
+    public void setIncludeWebSearch(boolean includeWebSearch) { this.includeWebSearch = includeWebSearch; }
 }

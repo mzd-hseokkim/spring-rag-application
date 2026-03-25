@@ -1,8 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { SectionEditor } from '@/components/generation/SectionEditor';
@@ -15,9 +14,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { AppSidebar } from '@/components/layout/AppSidebar';
 import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle, Clock, X, Trash2, Plus,
-  Search, Download, BookOpen, Target, CheckCircle2, Circle
+  Search, Download, BookOpen, Target, CheckCircle2, Circle, RefreshCw
 } from 'lucide-react';
 
 type DocItem = { id: string; filename: string; chunkCount: number };
@@ -100,28 +100,117 @@ const STEPS = [
   { num: 5, label: '미리보기' },
 ];
 
-function StepIndicator({ current }: { current: number }) {
+interface StepIndicatorProps {
+  current: number;
+  maxReached: number;
+  onStepClick: (step: number) => void;
+  title?: string | null;
+  jobSettings?: { customerDocs: DocItem[]; refDocs: DocItem[]; userInput: string; includeWebSearch: boolean; templateName?: string } | null;
+}
+
+function StepIndicator({ current, maxReached, onStepClick, title, jobSettings }: StepIndicatorProps) {
+  const [showSettings, setShowSettings] = useState(false);
+
   return (
-    <div className="flex items-center gap-1 mb-6">
-      {STEPS.map((step, i) => (
-        <div key={step.num} className="flex items-center gap-1">
-          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-            step.num === current ? 'bg-primary text-primary-foreground' :
-            step.num < current ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {step.num < current ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-            {step.label}
-          </div>
-          {i < STEPS.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
+    <div className="flex items-center gap-2 mb-6">
+      {/* 스텝 표시 */}
+      <div className="flex items-center gap-1">
+        {STEPS.map((step, i) => {
+          const isCompleted = step.num < current;
+          const isVisited = step.num <= maxReached;
+          const isCurrent = step.num === current;
+          const canClick = isVisited;
+          return (
+            <div key={step.num} className="flex items-center gap-1">
+              <button
+                disabled={!canClick}
+                onClick={() => canClick && onStepClick(step.num)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  isCurrent ? 'bg-primary text-primary-foreground' :
+                  isVisited ? 'bg-primary/20 text-primary hover:bg-primary/30 cursor-pointer' :
+                  'bg-muted text-muted-foreground'
+                } ${canClick && !isCurrent ? 'cursor-pointer' : ''}`}
+              >
+                {isVisited && !isCurrent ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
+                {step.label}
+              </button>
+              {i < STEPS.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 작업 제목 */}
+      {title && (
+        <div className="flex-1 min-w-0 px-3">
+          <p className="text-sm font-medium truncate text-muted-foreground" title={title}>{title}</p>
         </div>
-      ))}
+      )}
+
+      {/* 작업 설정 확인 버튼 */}
+      {jobSettings && (
+        <>
+          <Button variant="ghost" size="sm" className="shrink-0 text-xs text-muted-foreground h-7" onClick={() => setShowSettings(true)}>
+            <FileText className="h-3.5 w-3.5 mr-1" />설정 확인
+          </Button>
+
+          {/* 설정 모달 */}
+          {showSettings && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowSettings(false)}>
+              <div className="bg-background rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 border-b">
+                  <h3 className="font-semibold">작업 설정 정보</h3>
+                  <button onClick={() => setShowSettings(false)} className="p-1 rounded hover:bg-muted cursor-pointer"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="p-4 space-y-4 text-sm">
+                  {jobSettings.templateName && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-1">템플릿</p>
+                      <p>{jobSettings.templateName}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">고객 문서 (RFP)</p>
+                    {jobSettings.customerDocs.length > 0 ? (
+                      <ul className="space-y-0.5">
+                        {jobSettings.customerDocs.map(d => (
+                          <li key={d.id} className="flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{d.filename}</li>
+                        ))}
+                      </ul>
+                    ) : title ? (
+                      <p>{title.replace(/ — 제안서.*$/, '')}</p>
+                    ) : <p className="text-muted-foreground">없음</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">참조 문서</p>
+                    {jobSettings.refDocs.length > 0 ? (
+                      <ul className="space-y-0.5">
+                        {jobSettings.refDocs.map(d => (
+                          <li key={d.id} className="flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{d.filename}</li>
+                        ))}
+                      </ul>
+                    ) : <p className="text-muted-foreground">없음</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">추가 지시사항</p>
+                    <p className={jobSettings.userInput ? '' : 'text-muted-foreground'}>{jobSettings.userInput || '없음'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">웹 검색</p>
+                    <p>{jobSettings.includeWebSearch ? '포함' : '미포함'}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
 // ─── 메인 페이지 ───
 export function GeneratePage() {
-  const navigate = useNavigate();
   const gen = useGeneration();
 
   // Step 1 state
@@ -131,7 +220,12 @@ export function GeneratePage() {
   const [refDocs, setRefDocs] = useState<DocItem[]>([]);
 
   // Wizard state
-  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardStep, _setWizardStep] = useState(1);
+  const [maxReachedStep, setMaxReachedStep] = useState(1);
+  const setWizardStep = (step: number) => {
+    _setWizardStep(step);
+    setMaxReachedStep(prev => Math.max(prev, step));
+  };
   const [outline, setOutline] = useState<OutlineNode[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
@@ -148,9 +242,12 @@ export function GeneratePage() {
   const [sections, setSections] = useState<SectionData[]>([]);
   const [generating, setGenerating] = useState(false);
   const [generatingIndex, setGeneratingIndex] = useState(-1);
+  const [generatingKey, setGeneratingKey] = useState<string | null>(null);
   const [totalSectionsCount, setTotalSectionsCount] = useState(0);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [includeWebSearch, setIncludeWebSearch] = useState(false);
+  const [regeneratingKey, setRegeneratingKey] = useState<string | null>(null);
+  const [checkedTopKeys, setCheckedTopKeys] = useState<Set<string>>(new Set());
 
   // Step 5 state
   const [rendering, setRendering] = useState(false);
@@ -162,6 +259,181 @@ export function GeneratePage() {
     gen.loadJobs();
   }, []);
 
+  // 페이지 진입 시 진행 중인 Job이 있으면 상태 복원 + 폴링
+  const resumedRef = useRef(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval>>();
+
+  useEffect(() => {
+    if (resumedRef.current || gen.jobs.length === 0 || jobId) return;
+    const activeStatuses = ['ANALYZING', 'MAPPING', 'GENERATING', 'RENDERING'];
+    const activeJob = gen.jobs.find(j => activeStatuses.includes(j.status));
+    if (!activeJob) return;
+    resumedRef.current = true;
+
+    // 상태 복원
+    setJobId(activeJob.id);
+    if (activeJob.outline) {
+      try { setOutline(JSON.parse(activeJob.outline)); } catch { /* ignore */ }
+    }
+    if (activeJob.requirementMapping) {
+      try {
+        const parsed = JSON.parse(activeJob.requirementMapping);
+        setRequirements(parsed.requirements || []);
+        setReqMapping(parsed.mapping || {});
+      } catch { /* ignore */ }
+    }
+    if (activeJob.generatedSections) {
+      try { setSections(JSON.parse(activeJob.generatedSections)); } catch { /* ignore */ }
+    }
+    setTotalSectionsCount(activeJob.totalSections);
+    setIncludeWebSearch(activeJob.includeWebSearch);
+    if (activeJob.currentSection > 0) setGeneratingIndex(activeJob.currentSection - 1);
+
+    // 진행 중 플래그 + 위자드 스텝 설정
+    if (activeJob.status === 'ANALYZING') { setAnalyzing(true); setWizardStep(2); }
+    else if (activeJob.status === 'MAPPING') { setMapping(true); setWizardStep(3); }
+    else if (activeJob.status === 'GENERATING') { setGenerating(true); setWizardStep(4); }
+    else if (activeJob.status === 'RENDERING') { setRendering(true); setWizardStep(5); }
+
+    // SSE 재연결 — 실시간 progress 이벤트 수신 (generatingKey 포함)
+    const token = localStorage.getItem('accessToken');
+    const sseUrl = getStreamUrl(activeJob.id) + (token ? `?token=${token}` : '');
+    const resumeEs = new EventSource(sseUrl);
+
+    resumeEs.addEventListener('progress', (e) => {
+      try {
+        const data: GenerationProgressEvent = JSON.parse(e.data);
+        if (data.currentSection != null) {
+          setGeneratingIndex(data.currentSection - 1);
+          setGeneratingKey(data.sectionKey ?? null);
+          setTotalSectionsCount(data.totalSections ?? 0);
+        }
+        fetchJob(activeJob.id).then(updated => {
+          if (updated.generatedSections) {
+            try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+          }
+        }).catch(() => {});
+      } catch { /* ignore */ }
+    });
+
+    resumeEs.addEventListener('requirements', (e) => {
+      try { setRequirements(JSON.parse((e as MessageEvent).data)); } catch { /* ignore */ }
+    });
+
+    resumeEs.addEventListener('complete', () => {
+      resumeEs.close();
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      fetchJob(activeJob.id).then(updated => {
+        if (updated.generatedSections) {
+          try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+        }
+        if (updated.outline) {
+          try { setOutline(JSON.parse(updated.outline)); } catch { /* ignore */ }
+        }
+        if (updated.requirementMapping) {
+          try {
+            const parsed = JSON.parse(updated.requirementMapping);
+            setRequirements(parsed.requirements || []);
+            setReqMapping(parsed.mapping || {});
+          } catch { /* ignore */ }
+        }
+        setAnalyzing(false); setMapping(false); setGenerating(false); setRendering(false);
+        setGeneratingIndex(-1); setGeneratingKey(null);
+        if (updated.status === 'COMPLETE') {
+          setWizardStep(5);
+          const tk = localStorage.getItem('accessToken') || '';
+          fetch(getPreviewUrl(activeJob.id) + (tk ? `?token=${tk}` : ''), { headers: { 'Authorization': `Bearer ${tk}` } })
+            .then(r => r.ok ? r.text() : null).then(html => { if (html) setPreviewHtml(html); }).catch(() => {});
+        } else if (updated.generatedSections) {
+          setWizardStep(4);
+        } else if (updated.requirementMapping) {
+          setWizardStep(3);
+        } else if (updated.outline) {
+          setWizardStep(2);
+        }
+        gen.loadJobs();
+      });
+    });
+
+    resumeEs.addEventListener('error', (e) => {
+      try {
+        const data: GenerationProgressEvent = JSON.parse((e as MessageEvent).data);
+        setGenerateError(data.message || '생성 중 오류');
+      } catch { /* ignore */ }
+      resumeEs.close();
+      setAnalyzing(false); setMapping(false); setGenerating(false); setRendering(false);
+      setGeneratingIndex(-1); setGeneratingKey(null);
+      gen.loadJobs();
+    });
+
+    resumeEs.onerror = () => {
+      // SSE 연결 실패 시 폴링으로 폴백 (아래에서 계속)
+    };
+
+    // 폴링으로 진행 추적 (5초 간격) — SSE 폴백 + 중간 결과 동기화
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updated = await fetchJob(activeJob.id);
+        // 중간 결과 반영
+        if (updated.generatedSections) {
+          try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+        }
+        if (updated.currentSection > 0) {
+          setGeneratingIndex(updated.currentSection - 1);
+          setTotalSectionsCount(updated.totalSections);
+        }
+
+        // 완료/실패 감지
+        if (updated.status === 'DRAFT' || updated.status === 'READY') {
+          clearInterval(pollingRef.current);
+          resumeEs.close();
+          if (updated.outline) {
+            try { setOutline(JSON.parse(updated.outline)); } catch { /* ignore */ }
+          }
+          if (updated.requirementMapping) {
+            try {
+              const parsed = JSON.parse(updated.requirementMapping);
+              setRequirements(parsed.requirements || []);
+              setReqMapping(parsed.mapping || {});
+            } catch { /* ignore */ }
+          }
+          setAnalyzing(false); setMapping(false); setGenerating(false); setRendering(false);
+          setGeneratingIndex(-1); setGeneratingKey(null);
+          if (updated.generatedSections) setWizardStep(4);
+          else if (updated.requirementMapping) setWizardStep(3);
+          else if (updated.outline) setWizardStep(2);
+          gen.loadJobs();
+        } else if (updated.status === 'COMPLETE') {
+          clearInterval(pollingRef.current);
+          resumeEs.close();
+          setAnalyzing(false); setMapping(false); setGenerating(false); setRendering(false);
+          setGeneratingIndex(-1); setGeneratingKey(null);
+          setWizardStep(5);
+          const tk = localStorage.getItem('accessToken') || '';
+          try {
+            const res = await fetch(getPreviewUrl(activeJob.id) + (tk ? `?token=${tk}` : ''), { headers: { 'Authorization': `Bearer ${tk}` } });
+            if (res.ok) setPreviewHtml(await res.text());
+          } catch { /* ignore */ }
+          gen.loadJobs();
+        } else if (updated.status === 'FAILED') {
+          clearInterval(pollingRef.current);
+          resumeEs.close();
+          setAnalyzing(false); setMapping(false); setGenerating(false); setRendering(false);
+          setGeneratingIndex(-1); setGeneratingKey(null);
+          setGenerateError(updated.errorMessage || '생성 실패');
+          gen.loadJobs();
+        }
+      } catch { /* polling error — ignore, will retry */ }
+    }, 3000);
+
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, [gen.jobs]);
+
+  // 컴포넌트 언마운트 시 폴링 정리
+  useEffect(() => {
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, []);
+
   const selectedTemplate = gen.templates.find(t => t.id === selectedTemplateId);
   const toggleDoc = (list: DocItem[], setList: (v: DocItem[]) => void, doc: DocItem) => {
     setList(list.some(d => d.id === doc.id) ? list.filter(d => d.id !== doc.id) : [...list, doc]);
@@ -169,35 +441,55 @@ export function GeneratePage() {
 
   // Step 1 → Step 2: 작업 생성 + 목차 추출
   const handleAnalyze = async () => {
-    if (!selectedTemplateId || customerDocs.length === 0) return;
+    if (!jobId && (!selectedTemplateId || customerDocs.length === 0)) return;
     setAnalyzing(true);
     setAnalyzeError(null);
     try {
-      // 작업 생성
-      const { startGeneration: apiCreate } = await import('@/api/generation');
-      const job = await apiCreate({
-        templateId: selectedTemplateId,
-        userInput: userInput.trim(),
-        customerDocumentIds: customerDocs.map(d => d.id),
-        referenceDocumentIds: refDocs.length > 0 ? refDocs.map(d => d.id) : undefined,
-      });
-      setJobId(job.id);
+      // 기존 job이 없을 때만 새로 생성
+      let currentJobId = jobId;
+      if (!currentJobId) {
+        const { startGeneration: apiCreate } = await import('@/api/generation');
+        const job = await apiCreate({
+          templateId: selectedTemplateId,
+          userInput: userInput.trim(),
+          customerDocumentIds: customerDocs.map(d => d.id),
+          referenceDocumentIds: refDocs.length > 0 ? refDocs.map(d => d.id) : undefined,
+          includeWebSearch,
+        });
+        currentJobId = job.id;
+        setJobId(currentJobId);
+        gen.loadJobs();
+      }
 
-      // 목차 추출 시작
-      await startOutlineExtraction(job.id, customerDocs.map(d => d.id));
+      // 목차 추출 시작 (customerDocs가 있으면 사용, 없으면 빈 배열 — 백엔드가 기존 쿼리로 처리)
+      await startOutlineExtraction(currentJobId, customerDocs.length > 0 ? customerDocs.map(d => d.id) : []);
 
       // SSE로 완료 대기
       const token = localStorage.getItem('accessToken');
-      const url = getStreamUrl(job.id) + (token ? `?token=${token}` : '');
+      const url = getStreamUrl(currentJobId) + (token ? `?token=${token}` : '');
       const es = new EventSource(url);
+
+      // Step 2에서 요구사항이 실시간으로 추출됨
+      es.addEventListener('requirements', (e) => {
+        try {
+          const partialReqs = JSON.parse((e as MessageEvent).data);
+          setRequirements(partialReqs);
+        } catch { /* ignore */ }
+      });
 
       es.addEventListener('complete', () => {
         es.close();
-        // 작업 조회해서 outline 가져오기
         import('@/api/generation').then(({ fetchJob }) =>
-          fetchJob(job.id).then(updated => {
+          fetchJob(currentJobId!).then(updated => {
             if (updated.outline) {
               try { setOutline(JSON.parse(updated.outline)); } catch { /* ignore */ }
+            }
+            // Step 2에서 추출된 요구사항도 복원
+            if (updated.requirementMapping) {
+              try {
+                const parsed = JSON.parse(updated.requirementMapping);
+                setRequirements(parsed.requirements || []);
+              } catch { /* ignore */ }
             }
             setWizardStep(2);
             setAnalyzing(false);
@@ -232,7 +524,13 @@ export function GeneratePage() {
   const handleSaveOutline = async () => {
     if (!jobId) return;
     await saveOutline(jobId, outline);
-    handleStartMapping();
+    // 매핑이 이미 완료된 경우에만 이동만 (매핑 데이터가 있고 실제 배치가 있을 때)
+    if (requirements.length > 0 && Object.values(reqMapping).some(ids => ids.length > 0)) {
+      setWizardStep(3);
+    } else {
+      // 요구사항은 있지만 매핑이 안 됐거나, 요구사항이 없으면 매핑 시작
+      handleStartMapping();
+    }
   };
 
   // Step 3: 요구사항 매핑
@@ -240,6 +538,8 @@ export function GeneratePage() {
     if (!jobId) return;
     setMapping(true);
     setMappingError(null);
+    setRequirements([]);
+    setReqMapping({});
     setWizardStep(3);
     try {
       await startRequirementMapping(jobId, customerDocs.map(d => d.id));
@@ -247,6 +547,14 @@ export function GeneratePage() {
       const token = localStorage.getItem('accessToken');
       const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
       const es = new EventSource(url);
+
+      // 배치별 부분 결과 수신 — 요구사항이 실시간으로 추가됨
+      es.addEventListener('requirements', (e) => {
+        try {
+          const partialReqs = JSON.parse((e as MessageEvent).data);
+          setRequirements(partialReqs);
+        } catch { /* ignore */ }
+      });
 
       es.addEventListener('complete', () => {
         es.close();
@@ -285,24 +593,33 @@ export function GeneratePage() {
     }
   };
 
-  // Step 3 → Step 4: 매핑 저장 + 섹션 생성 시작
+  // Step 3 → Step 4: 매핑 저장 + 미완료분 이어서 생성
   const handleSaveMapping = async () => {
     if (!jobId) return;
     await saveRequirementMapping(jobId, { requirements, mapping: reqMapping });
-    handleStartSectionGeneration();
+    const leafCount = (() => { const collect = (nodes: OutlineNode[]): number => nodes.reduce((sum, n) => sum + (n.children.length > 0 ? collect(n.children) : 1), 0); return collect(outline); })();
+    // Step 4로 이동만 — 자동 생성하지 않음 (사용자가 선택 후 생성)
+    setWizardStep(4);
+    // 대분류 전체 체크 초기화
+    setCheckedTopKeys(new Set(outline.map(n => n.key)));
   };
 
   // Step 4: 섹션 생성
-  const handleStartSectionGeneration = async () => {
+  const handleStartSectionGeneration = async (filterKeys?: string[]) => {
     if (!jobId) return;
     setGenerating(true);
     setGenerateError(null);
-    setSections([]);
+    if (!filterKeys || filterKeys.length === 0) {
+      // 전체 재생성 시에만 섹션 초기화
+      setSections([]);
+    }
     setGeneratingIndex(0);
     setWizardStep(4);
     try {
+      const job = gen.jobs.find(j => j.id === jobId);
+      const webSearch = job?.includeWebSearch ?? includeWebSearch;
       const refIds = refDocs.length > 0 ? refDocs.map(d => d.id) : undefined;
-      await startSectionGeneration(jobId, refIds, includeWebSearch);
+      await startSectionGeneration(jobId, refIds, webSearch, filterKeys);
 
       const token = localStorage.getItem('accessToken');
       const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
@@ -312,7 +629,15 @@ export function GeneratePage() {
         const data: GenerationProgressEvent = JSON.parse(e.data);
         if (data.currentSection != null && data.totalSections != null) {
           setGeneratingIndex(data.currentSection - 1);
+          setGeneratingKey(data.sectionKey ?? null);
           setTotalSectionsCount(data.totalSections);
+
+          // 이전 섹션이 완료되었으므로 중간 결과를 조회
+          fetchJob(jobId).then(updated => {
+            if (updated.generatedSections) {
+              try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+            }
+          }).catch(() => {});
         }
       });
 
@@ -324,7 +649,8 @@ export function GeneratePage() {
           }
           setTotalSectionsCount(updated.totalSections);
           setGenerating(false);
-          setGeneratingIndex(-1);
+          setGeneratingIndex(-1); setGeneratingKey(null);
+          gen.loadJobs();
         });
       });
 
@@ -337,7 +663,7 @@ export function GeneratePage() {
         }
         es.close();
         setGenerating(false);
-        setGeneratingIndex(-1);
+        setGeneratingIndex(-1); setGeneratingKey(null);
       });
 
       es.onerror = () => {
@@ -345,17 +671,58 @@ export function GeneratePage() {
         setGenerateError('서버와의 연결이 끊어졌습니다.');
         es.close();
         setGenerating(false);
-        setGeneratingIndex(-1);
+        setGeneratingIndex(-1); setGeneratingKey(null);
       };
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '생성 실패');
       setGenerating(false);
-      setGeneratingIndex(-1);
+      setGeneratingIndex(-1); setGeneratingKey(null);
     }
   };
 
   const handleSectionChange = (index: number, updated: SectionData) => {
     setSections(prev => prev.map((s, i) => i === index ? updated : s));
+  };
+
+  const handleRegenerateSection = async (sectionKey: string) => {
+    if (!jobId) return;
+    setRegeneratingKey(sectionKey);
+    try {
+      const refIds = refDocs.length > 0 ? refDocs.map(d => d.id) : undefined;
+      await regenerateSection(jobId, sectionKey, refIds, includeWebSearch);
+
+      const token = localStorage.getItem('accessToken');
+      const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
+      const es = new EventSource(url);
+
+      es.addEventListener('complete', () => {
+        es.close();
+        fetchJob(jobId).then(updated => {
+          if (updated.generatedSections) {
+            try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+          }
+          setRegeneratingKey(null);
+        });
+      });
+
+      es.addEventListener('error', (e) => {
+        es.close();
+        try {
+          const data: GenerationProgressEvent = JSON.parse((e as MessageEvent).data);
+          setGenerateError(data.message || '섹션 재생성 중 오류');
+        } catch {
+          setGenerateError('섹션 재생성 중 오류');
+        }
+        setRegeneratingKey(null);
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) return;
+        setRegeneratingKey(null);
+      };
+    } catch {
+      setRegeneratingKey(null);
+    }
   };
 
   // Step 5: 렌더링 시작
@@ -407,6 +774,71 @@ export function GeneratePage() {
     }
   };
 
+  // 이력에서 job 클릭 시 상태 복원
+  const handleLoadJob = async (job: GenerationJob) => {
+    // 이전 Job 상태 완전 초기화 후 복원
+    setJobId(job.id);
+    setOutline([]);
+    setRequirements([]);
+    setReqMapping({});
+    setSections([]);
+    setPreviewHtml(null);
+    setTotalSectionsCount(0);
+    setGeneratingIndex(-1); setGeneratingKey(null);
+    setRegeneratingKey(null);
+    setAnalyzeError(null);
+    setMappingError(null);
+    setGenerateError(null);
+    setRenderError(null);
+    setAnalyzing(false);
+    setMapping(false);
+    setGenerating(false);
+    setRendering(false);
+
+    // outline 복원
+    if (job.outline) {
+      try { setOutline(JSON.parse(job.outline)); } catch { /* ignore */ }
+    }
+
+    // 요구사항 매핑 복원
+    if (job.requirementMapping) {
+      try {
+        const parsed = JSON.parse(job.requirementMapping);
+        setRequirements(parsed.requirements || []);
+        setReqMapping(parsed.mapping || {});
+      } catch { /* ignore */ }
+    }
+
+    // 섹션 복원
+    if (job.generatedSections) {
+      try { setSections(JSON.parse(job.generatedSections)); } catch { /* ignore */ }
+    }
+
+    // 미리보기 복원
+    if (job.status === 'COMPLETE' && job.outputFilePath) {
+      const token = localStorage.getItem('accessToken') || '';
+      try {
+        const res = await fetch(getPreviewUrl(job.id) + (token ? `?token=${token}` : ''), { headers: { 'Authorization': `Bearer ${token}` } });
+        if (res.ok) setPreviewHtml(await res.text());
+      } catch { /* ignore */ }
+    }
+
+    // Step 1 설정 복원
+    setSelectedTemplateId(job.templateId);
+    if (job.userInput) setUserInput(job.userInput);
+    setIncludeWebSearch(job.includeWebSearch);
+    setTotalSectionsCount(job.totalSections);
+
+    // 현재 step 결정 + maxReached 설정
+    let targetStep = 1;
+    if (job.status === 'COMPLETE') targetStep = 5;
+    else if (job.generatedSections) { targetStep = 4; setTotalSectionsCount(job.totalSections); }
+    else if (job.requirementMapping) targetStep = 3;
+    else if (job.outline) targetStep = 2;
+    setMaxReachedStep(targetStep);
+    setWizardStep(targetStep);
+  };
+
   const handleDownload = async () => {
     if (!jobId) return;
     const token = localStorage.getItem('accessToken') || '';
@@ -428,6 +860,7 @@ export function GeneratePage() {
     setRefDocs([]);
     setOutline([]);
     setJobId(null);
+    setMaxReachedStep(1);
     setWizardStep(1);
     setAnalyzing(false);
     setAnalyzeError(null);
@@ -437,10 +870,11 @@ export function GeneratePage() {
     setMappingError(null);
     setSections([]);
     setGenerating(false);
-    setGeneratingIndex(-1);
+    setGeneratingIndex(-1); setGeneratingKey(null);
     setTotalSectionsCount(0);
     setGenerateError(null);
     setIncludeWebSearch(false);
+    setRegeneratingKey(null);
     setRendering(false);
     setRenderError(null);
     setPreviewHtml(null);
@@ -448,28 +882,38 @@ export function GeneratePage() {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* 사이드바 */}
-      <aside className="w-72 border-r bg-sidebar text-sidebar-foreground flex flex-col shrink-0">
+      <AppSidebar>
         <div className="flex items-center gap-2 px-3 pt-3 pb-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate('/')} title="채팅으로 돌아가기">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <h2 className="text-sm font-medium flex-1">문서 생성</h2>
+          <h2 className="text-sm font-medium flex-1">생성 이력</h2>
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleReset}>
             <Plus className="h-3.5 w-3.5 mr-1" />새로 만들기
           </Button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          <p className="text-xs text-sidebar-foreground/50 mb-2">생성 이력</p>
           {gen.jobs.length === 0 && <p className="text-xs text-sidebar-foreground/40 px-2">아직 생성된 문서가 없습니다.</p>}
-          {gen.jobs.map(job => <JobHistoryItem key={job.id} job={job} onDelete={gen.removeJob} />)}
+          {gen.jobs.map(job => <JobHistoryItem key={job.id} job={job} onDelete={gen.removeJob} onLoad={handleLoadJob} />)}
         </div>
-      </aside>
+      </AppSidebar>
 
       {/* 메인 위자드 영역 */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto py-8 px-6">
-          <StepIndicator current={wizardStep} />
+          <StepIndicator
+            current={wizardStep}
+            maxReached={maxReachedStep}
+            onStepClick={setWizardStep}
+            title={jobId ? (gen.jobs.find(j => j.id === jobId)?.title ?? null) : null}
+            jobSettings={jobId ? (() => {
+              const job = gen.jobs.find(j => j.id === jobId);
+              return {
+                customerDocs,
+                refDocs,
+                userInput: userInput || job?.userInput || '',
+                includeWebSearch: includeWebSearch || (job?.includeWebSearch ?? false),
+                templateName: gen.templates.find(t => t.id === (selectedTemplateId || job?.templateId))?.name || job?.templateName,
+              };
+            })() : null}
+          />
 
           {/* ── Step 1: 문서 설정 ── */}
           {wizardStep === 1 && (
@@ -523,12 +967,27 @@ export function GeneratePage() {
                     placeholder="특정 주제에 집중하거나 문서 스타일을 지정하고 싶을 때 입력하세요..." rows={4} className="resize-y" />
                 </div>
 
-                {/* 분석 시작 버튼 */}
+                {/* 웹 검색 옵션 */}
+                <div className="flex items-start gap-2 p-3 rounded-lg border bg-muted/20">
+                  <Checkbox id="genWebSearch" checked={includeWebSearch} onCheckedChange={checked => setIncludeWebSearch(checked === true)} className="mt-0.5" />
+                  <div>
+                    <label htmlFor="genWebSearch" className="text-sm font-medium cursor-pointer">웹 검색 포함</label>
+                    <p className="text-xs text-muted-foreground mt-0.5">섹션 내용 생성 시 업계 동향, 기술 트렌드 등 외부 정보를 검색하여 더 풍부한 내용을 작성합니다.</p>
+                  </div>
+                </div>
+
+                {/* 분석 시작 / 다음 버튼 */}
                 <div className="flex justify-end">
-                  <Button onClick={handleAnalyze} disabled={!selectedTemplateId || customerDocs.length === 0 || analyzing}>
-                    {analyzing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ArrowRight className="h-4 w-4 mr-1.5" />}
-                    {analyzing ? '목차 추출 중...' : '분석 시작'}
-                  </Button>
+                  {outline.length > 0 ? (
+                    <Button onClick={() => setWizardStep(2)}>
+                      <ArrowRight className="h-4 w-4 mr-1.5" />다음 (목차 확인)
+                    </Button>
+                  ) : (
+                    <Button onClick={handleAnalyze} disabled={!selectedTemplateId || customerDocs.length === 0 || analyzing}>
+                      {analyzing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ArrowRight className="h-4 w-4 mr-1.5" />}
+                      {analyzing ? '요구사항 및 목차 추출 중...' : '요구사항 및 목차 추출'}
+                    </Button>
+                  )}
                 </div>
 
                 {analyzeError && (
@@ -548,7 +1007,12 @@ export function GeneratePage() {
                 <CardDescription>AI가 추출한 목차를 확인하고, 필요에 따라 수정하세요. 항목을 추가/삭제/순서변경할 수 있습니다.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {outline.length === 0 ? (
+                {analyzing ? (
+                  <div className="flex items-center gap-3 py-12 justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    <span className="text-sm text-muted-foreground">고객 문서에서 목차를 추출하고 있습니다...</span>
+                  </div>
+                ) : outline.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-8 text-center">추출된 목차가 없습니다.</p>
                 ) : (
                   <div className="border rounded-lg p-4 bg-muted/20">
@@ -557,10 +1021,16 @@ export function GeneratePage() {
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setWizardStep(1)}>
-                    <ArrowLeft className="h-4 w-4 mr-1.5" />이전
-                  </Button>
-                  <Button onClick={handleSaveOutline} disabled={outline.length === 0}>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setWizardStep(1)} disabled={analyzing}>
+                      <ArrowLeft className="h-4 w-4 mr-1.5" />이전
+                    </Button>
+                    <Button variant="outline" onClick={handleAnalyze} disabled={analyzing}>
+                      {analyzing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
+                      {analyzing ? '추출 중...' : '목차 재추출'}
+                    </Button>
+                  </div>
+                  <Button onClick={handleSaveOutline} disabled={analyzing || outline.length === 0}>
                     <ArrowRight className="h-4 w-4 mr-1.5" />다음 (요구사항 배치)
                   </Button>
                 </div>
@@ -573,7 +1043,11 @@ export function GeneratePage() {
             <Card>
               <CardHeader>
                 <CardTitle>요구사항 배치</CardTitle>
-                <CardDescription>AI가 추출한 요구사항을 목차에 매핑했습니다. 좌측 목차를 클릭하면 배치된 요구사항을 확인할 수 있습니다.</CardDescription>
+                <CardDescription>
+                  {mapping
+                    ? 'AI가 요구사항을 추출하고 목차에 배치하고 있습니다. 잠시만 기다려 주세요.'
+                    : 'AI가 추출한 요구사항을 목차에 매핑했습니다. 좌측 목차를 클릭하면 배치된 요구사항을 확인할 수 있습니다.'}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {mapping ? (
@@ -599,9 +1073,14 @@ export function GeneratePage() {
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setWizardStep(2)}>
-                    <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (목차)
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setWizardStep(2)}>
+                      <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (목차)
+                    </Button>
+                    <Button variant="outline" onClick={handleStartMapping} disabled={mapping}>
+                      <RefreshCw className="h-4 w-4 mr-1.5" />요구사항 재배치
+                    </Button>
+                  </div>
                   <Button onClick={handleSaveMapping} disabled={mapping || requirements.length === 0}>
                     <ArrowRight className="h-4 w-4 mr-1.5" />다음 (내용 생성)
                   </Button>
@@ -624,9 +1103,15 @@ export function GeneratePage() {
               <CardContent className="space-y-4">
                 <SectionEditor
                   sections={sections}
+                  outline={outline}
                   generatingIndex={generating ? generatingIndex : -1}
+                  generatingKey={generating ? generatingKey : null}
                   totalSections={totalSectionsCount || sections.length}
+                  regeneratingKey={regeneratingKey}
+                  checkedKeys={checkedTopKeys}
+                  onCheckedChange={setCheckedTopKeys}
                   onSectionChange={handleSectionChange}
+                  onRegenerate={handleRegenerateSection}
                 />
 
                 {generateError && (
@@ -636,9 +1121,21 @@ export function GeneratePage() {
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setWizardStep(3)} disabled={generating}>
-                    <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (요구사항)
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setWizardStep(3)} disabled={generating}>
+                      <ArrowLeft className="h-4 w-4 mr-1.5" />이전 (요구사항)
+                    </Button>
+                    <Button variant="outline" onClick={async () => { if (jobId) await clearSections(jobId); setSections([]); handleStartSectionGeneration(); }} disabled={generating}>
+                      <RefreshCw className="h-4 w-4 mr-1.5" />전체 재생성
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => handleStartSectionGeneration(Array.from(checkedTopKeys))}
+                      disabled={generating || checkedTopKeys.size === 0}
+                    >
+                      <CheckCircle2 className="h-4 w-4 mr-1.5" />선택 생성 ({checkedTopKeys.size})
+                    </Button>
+                  </div>
                   <Button onClick={handleStartRendering} disabled={generating || sections.length === 0}>
                     <ArrowRight className="h-4 w-4 mr-1.5" />렌더링 & 미리보기
                   </Button>
@@ -698,8 +1195,25 @@ export function GeneratePage() {
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setWizardStep(4)}>
+                  <Button variant="outline" onClick={async () => {
+                    // sections나 outline이 비어있으면 DB에서 복원
+                    if (jobId && (sections.length === 0 || outline.length === 0)) {
+                      const updated = await fetchJob(jobId);
+                      if (updated.outline && outline.length === 0) {
+                        try { setOutline(JSON.parse(updated.outline)); } catch { /* ignore */ }
+                      }
+                      if (updated.generatedSections && sections.length === 0) {
+                        try { setSections(JSON.parse(updated.generatedSections)); } catch { /* ignore */ }
+                      }
+                      setTotalSectionsCount(updated.totalSections);
+                    }
+                    setWizardStep(4);
+                  }}>
                     <ArrowLeft className="h-4 w-4 mr-1.5" />내용 수정으로 돌아가기
+                  </Button>
+                  <Button variant="outline" onClick={() => { setPreviewHtml(null); handleStartRendering(); }} disabled={rendering}>
+                    {rendering ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
+                    다시 렌더링
                   </Button>
                 </div>
               </CardContent>
@@ -711,18 +1225,19 @@ export function GeneratePage() {
   );
 }
 
-function JobHistoryItem({ job, onDelete }: { job: GenerationJob; onDelete: (id: string) => void }) {
+function JobHistoryItem({ job, onDelete, onLoad }: { job: GenerationJob; onDelete: (id: string) => void; onLoad: (job: GenerationJob) => void }) {
   const isProcessing = ['PLANNING', 'GENERATING', 'REVIEWING', 'RENDERING', 'ANALYZING', 'MAPPING'].includes(job.status);
   const statusIcon = job.status === 'COMPLETE' ? <FileText className="h-3.5 w-3.5 text-green-500" />
     : job.status === 'FAILED' ? <AlertCircle className="h-3.5 w-3.5 text-destructive" />
     : isProcessing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
     : <Circle className="h-3.5 w-3.5 text-muted-foreground" />;
 
-  const handleClick = () => {
-    if (job.status === 'COMPLETE') {
-      const token = localStorage.getItem('accessToken') || '';
-      window.open(`${getPreviewUrl(job.id)}?token=${token}`, '_blank');
-    }
+  const handleClick = async () => {
+    // job 상세 조회 후 위자드 상태 복원
+    try {
+      const updated = await fetchJob(job.id);
+      onLoad(updated);
+    } catch { /* ignore */ }
   };
 
   const handleDownload = async (e: React.MouseEvent) => {
@@ -744,7 +1259,7 @@ function JobHistoryItem({ job, onDelete }: { job: GenerationJob; onDelete: (id: 
       <button onClick={handleClick} className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
         {statusIcon}
         <div className="flex-1 min-w-0">
-          <p className="text-sm truncate">{job.templateName}</p>
+          <p className="text-sm truncate">{job.title || job.templateName}</p>
           <div className="flex items-center gap-1 text-xs text-sidebar-foreground/40">
             <Clock className="h-3 w-3" />{new Date(job.createdAt).toLocaleDateString('ko-KR')}
           </div>

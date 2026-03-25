@@ -1,3 +1,5 @@
+import { authFetch } from './client';
+
 // --- Types ---
 
 export type QuestionnaireStatus = 'ANALYZING' | 'GENERATING' | 'RENDERING' | 'COMPLETE' | 'FAILED';
@@ -48,7 +50,7 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 // --- Questionnaire API ---
 
 export async function startQuestionnaire(request: QuestionnaireRequest): Promise<QuestionnaireJob> {
-  const res = await fetch('/api/questionnaires', {
+  const res = await authFetch('/api/questionnaires', {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(request),
@@ -58,19 +60,19 @@ export async function startQuestionnaire(request: QuestionnaireRequest): Promise
 }
 
 export async function fetchQuestionnaireJobs(): Promise<QuestionnaireJob[]> {
-  const res = await fetch('/api/questionnaires', { headers: authHeaders() });
+  const res = await authFetch('/api/questionnaires', { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch questionnaire jobs');
   return res.json();
 }
 
 export async function fetchQuestionnaireJob(id: string): Promise<QuestionnaireJob> {
-  const res = await fetch(`/api/questionnaires/${id}`, { headers: authHeaders() });
+  const res = await authFetch(`/api/questionnaires/${id}`, { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch questionnaire job');
   return res.json();
 }
 
 export async function deleteQuestionnaireJob(id: string): Promise<void> {
-  const res = await fetch(`/api/questionnaires/${id}`, {
+  const res = await authFetch(`/api/questionnaires/${id}`, {
     method: 'DELETE',
     headers: authHeaders(),
   });

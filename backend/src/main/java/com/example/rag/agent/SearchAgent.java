@@ -12,11 +12,16 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Component
 public class SearchAgent {
+
+    private static final Logger log = LoggerFactory.getLogger(SearchAgent.class);
 
     private final String decidePrompt;
     private final String analyzePrompt;
@@ -48,10 +53,13 @@ public class SearchAgent {
     public AnalysisResult analyze(String sessionId, String message, UUID userId,
                                    boolean includePublicDocs, List<UUID> tagIds, List<UUID> collectionIds) {
         List<Document> documents = getFilteredDocuments(userId, includePublicDocs, tagIds, collectionIds);
+        log.info("[SearchAgent] userId={}, includePublicDocs={}, tagIds={}, collectionIds={}, documents.size={}",
+                userId, includePublicDocs, tagIds, collectionIds, documents.size());
 
         String docList = documents.isEmpty() ? "(없음)" : documents.stream()
                 .map(d -> "- [%s] %s".formatted(d.getId().toString().substring(0, 8), d.getFilename()))
                 .collect(Collectors.joining("\n"));
+        log.info("[SearchAgent] docList={}", docList);
 
         String historyText = buildHistoryText(sessionId);
         String prompt = analyzePrompt.formatted(historyText, docList, message);
@@ -60,6 +68,7 @@ public class SearchAgent {
                 .user(prompt)
                 .call()
                 .content();
+        log.info("[SearchAgent] LLM response={}", response);
         if (response == null) {
             return new AnalysisResult(AgentAction.DIRECT_ANSWER, "", List.of(), null);
         }

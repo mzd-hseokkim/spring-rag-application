@@ -10,9 +10,11 @@ export function useConversations() {
     try {
       const data = await fetchConversations();
       setConversations(data);
+      return data;
     } catch (err) {
       console.error('Failed to load conversations:', err);
       toast.error('대화 목록 조회 실패');
+      return [];
     }
   }, []);
 

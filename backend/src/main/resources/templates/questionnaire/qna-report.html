@@ -220,7 +220,7 @@
             <td><span class="category-badge" th:text="${qa.category()}">일반</span></td>
             <td>
                 <div class="sources" th:if="${qa.sources() != null and !qa.sources().isEmpty()}">
-                    <span th:each="src : ${qa.sources()}" th:text="${src}">출처</span>
+                    <span th:each="src : ${qa.sources()}" th:utext="${src}">출처</span>
                 </div>
             </td>
         </tr>

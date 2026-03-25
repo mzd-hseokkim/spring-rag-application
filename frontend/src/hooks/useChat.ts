@@ -64,13 +64,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
   }
 }
 
-export function useChat() {
+export function useChat(onTitleGenerated?: (sessionId: string, title: string) => void) {
   const [state, dispatch] = useReducer(chatReducer, { messages: [], streaming: false });
   const sessionIdRef = useRef(localStorage.getItem('chat:sessionId') || generateSessionId());
   const conversationIdRef = useRef(localStorage.getItem('chat:conversationId') || '');
   const clientRef = useRef<Client | null>(null);
   const connectedRef = useRef(false);
   const restoredRef = useRef(false);
+  const onTitleGeneratedRef = useRef(onTitleGenerated);
+  onTitleGeneratedRef.current = onTitleGenerated;
 
   // WebSocket 연결
   useEffect(() => {
@@ -106,6 +108,9 @@ export function useChat() {
               if (Array.isArray(msg.sources) && msg.sources.length > 0) {
                 dispatch({ type: 'SET_SOURCES', sources: msg.sources });
               }
+              break;
+            case 'title_generated':
+              onTitleGeneratedRef.current?.(msg.sessionId, msg.title);
               break;
             case 'done':
             case 'stopped':

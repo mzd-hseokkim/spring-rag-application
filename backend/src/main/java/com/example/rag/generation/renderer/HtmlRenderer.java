@@ -13,7 +13,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Component
@@ -43,12 +45,16 @@ public class HtmlRenderer implements Renderer {
                         s.tables(),
                         s.references(),
                         s.layoutType() != null ? s.layoutType() : "TEXT_FULL",
-                        s.layoutData() != null ? s.layoutData() : java.util.Map.of()))
+                        convertLayoutDataNewlines(s.layoutData()),
+                        s.governingMessage() != null ? s.governingMessage() : "",
+                        s.visualGuide() != null ? s.visualGuide() : ""))
                 .toList();
 
         List<String> allReferences = sections.stream()
                 .flatMap(s -> s.references().stream())
                 .distinct()
+                .map(ref -> ref.replaceAll("(https?://[^\\s)]+)",
+                        "<a href=\"$1\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#2563eb;text-decoration:underline\">$1</a>"))
                 .toList();
 
         Context ctx = new Context();
@@ -72,5 +78,25 @@ public class HtmlRenderer implements Renderer {
         } catch (IOException e) {
             throw new RagException("Failed to write generated HTML file", e);
         }
+    }
+
+    /**
+     * layoutData 내 문자열 값의 \n을 <br>로 변환하고, · 구분자를 줄바꿈으로 치환.
+     */
+    private Map<String, Object> convertLayoutDataNewlines(Map<String, Object> layoutData) {
+        if (layoutData == null || layoutData.isEmpty()) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (var entry : layoutData.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof String s) {
+                result.put(entry.getKey(), s
+                        .replace("·", "<br>·")
+                        .replace("\n", "<br>")
+                        .replace("\\n", "<br>"));
+            } else {
+                result.put(entry.getKey(), value);
+            }
+        }
+        return result;
     }
 }

@@ -12,14 +12,23 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class RequirementMapper {
 
     private static final Logger log = LoggerFactory.getLogger(RequirementMapper.class);
     private static final TypeReference<Map<String, List<String>>> MAPPING_TYPE = new TypeReference<>() {};
+    private static final int BATCH_SIZE = 50;
+    private static final int FORCE_BATCH_SIZE = 30;
+    private static final int MAX_PARALLEL = 3;
+    private static final int MAX_FORCE_ROUNDS = 3;
 
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;
@@ -35,31 +44,218 @@ public class RequirementMapper {
 
     /**
      * 요구사항을 목차에 매핑한다.
-     * @return key=목차key, value=요구사항ID 리스트
+     * 요구사항이 많으면 배치로 분할하여 병렬 매핑 후 합산.
+     * 1차 매핑 후 미배치가 남으면 2차 강제 매핑을 수행.
      */
     public Map<String, List<String>> map(List<OutlineNode> outline, List<Requirement> requirements) {
+        String outlineText = flattenOutline(outline);
+
+        Map<String, List<String>> mergedMapping;
+        if (requirements.size() <= BATCH_SIZE) {
+            mergedMapping = new HashMap<>(mapBatch(outlineText, requirements));
+        } else {
+            mergedMapping = mapParallel(outlineText, requirements);
+        }
+
+        // 미배치 요구사항 수집
+        java.util.Set<String> mappedIds = new java.util.HashSet<>();
+        mergedMapping.values().forEach(mappedIds::addAll);
+        List<Requirement> unmapped = requirements.stream()
+                .filter(r -> !mappedIds.contains(r.id()))
+                .toList();
+
+        log.info("After 1st pass: {} mapped, {} unmapped out of {}",
+                mappedIds.size(), unmapped.size(), requirements.size());
+
+        // 반복 강제 매핑: 미배치가 목표(7%) 이하가 될 때까지 최대 MAX_FORCE_ROUNDS회 반복
+        int targetUnmapped = (int) Math.ceil(requirements.size() * 0.07);
+        for (int round = 1; round <= MAX_FORCE_ROUNDS && !unmapped.isEmpty() && unmapped.size() > targetUnmapped; round++) {
+            log.info("Force-mapping round {}/{}: {} unmapped (target: ≤{})", round, MAX_FORCE_ROUNDS, unmapped.size(), targetUnmapped);
+            Map<String, List<String>> forceMapped = forceMapUnmapped(outlineText, unmapped);
+            for (var entry : forceMapped.entrySet()) {
+                mergedMapping.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                        .addAll(entry.getValue());
+            }
+
+            // 미배치 재계산
+            java.util.Set<String> currentMappedIds = new java.util.HashSet<>();
+            mergedMapping.values().forEach(currentMappedIds::addAll);
+            unmapped = requirements.stream().filter(r -> !currentMappedIds.contains(r.id())).toList();
+            log.info("After force-mapping round {}: {} still unmapped out of {}", round, unmapped.size(), requirements.size());
+        }
+
+        log.info("Requirement mapping complete: {} outline keys, {} total assignments",
+                mergedMapping.size(), mergedMapping.values().stream().mapToInt(List::size).sum());
+        return mergedMapping;
+    }
+
+    private Map<String, List<String>> mapParallel(String outlineText, List<Requirement> requirements) {
+        List<List<Requirement>> batches = splitIntoBatches(requirements);
+        log.info("Splitting {} requirements into {} batches for mapping", requirements.size(), batches.size());
+
+        Map<String, List<String>> mergedMapping = new HashMap<>();
+        Object lock = new Object();
+        Semaphore semaphore = new Semaphore(MAX_PARALLEL);
+        AtomicInteger completed = new AtomicInteger(0);
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < batches.size(); i++) {
+            List<Requirement> batch = batches.get(i);
+            int totalBatches = batches.size();
+
+            futures.add(CompletableFuture.runAsync(() -> {
+                try {
+                    semaphore.acquire();
+                    try {
+                        Map<String, List<String>> partial = mapBatch(outlineText, batch);
+                        synchronized (lock) {
+                            for (var entry : partial.entrySet()) {
+                                mergedMapping.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                                        .addAll(entry.getValue());
+                            }
+                        }
+                        int done = completed.incrementAndGet();
+                        log.info("Mapping batch {}/{} complete: {} assignments",
+                                done, totalBatches, partial.values().stream().mapToInt(List::size).sum());
+                    } finally {
+                        semaphore.release();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                }
+            }));
+        }
+
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        return mergedMapping;
+    }
+
+    /**
+     * 2차 강제 매핑: 미배치 요구사항을 반드시 가장 유사한 섹션에 배치.
+     */
+    private Map<String, List<String>> forceMapUnmapped(String outlineText, List<Requirement> unmapped) {
+        List<List<Requirement>> batches = splitIntoBatches(unmapped, FORCE_BATCH_SIZE);
+        Map<String, List<String>> result = new HashMap<>();
+        Object lock = new Object();
+        Semaphore semaphore = new Semaphore(MAX_PARALLEL);
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (List<Requirement> batch : batches) {
+            futures.add(CompletableFuture.runAsync(() -> {
+                try {
+                    semaphore.acquire();
+                    try {
+                        Map<String, List<String>> partial = forceMapBatch(outlineText, batch);
+                        synchronized (lock) {
+                            for (var entry : partial.entrySet()) {
+                                result.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                                        .addAll(entry.getValue());
+                            }
+                        }
+                    } finally {
+                        semaphore.release();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                }
+            }));
+        }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        return result;
+    }
+
+    private Map<String, List<String>> forceMapBatch(String outlineText, List<Requirement> requirements) {
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+
+        StringBuilder reqText = new StringBuilder();
+        for (Requirement r : requirements) {
+            reqText.append("- ").append(r.id()).append(": ").append(r.item()).append("\n");
+        }
+
+        String forcePrompt = """
+                다음 요구사항들이 아직 목차에 배치되지 않았습니다.
+                각 요구사항을 **반드시** 가장 적합한 목차 항목에 배치하세요.
+                완벽히 일치하지 않더라도 **가장 유사한 항목**에 배치해야 합니다. 누락은 절대 불가합니다.
+
+                ## 제안서 목차 (★매핑대상 = 리프 노드)
+                %s
+
+                ## 미배치 요구사항 (%d개 — 전부 배치 필수)
+                %s
+
+                ## 출력 규칙
+                - ★매핑대상 표시가 있는 리프 노드 key만 사용
+                - **%d개 요구사항 전부** 빠짐없이 배치 (누락 시 실패로 간주)
+                - 반드시 JSON만 응답: {"목차key": ["요구사항id", ...]}
+                """.formatted(outlineText, requirements.size(), reqText.toString(), requirements.size());
+
+        String content = client.prompt().user(forcePrompt).call().content();
+        Map<String, List<String>> mapping = parseMapping(content);
+        int assigned = mapping.values().stream().mapToInt(List::size).sum();
+        log.info("Force-map batch: {}/{} requirements assigned", assigned, requirements.size());
+        return mapping;
+    }
+
+    private Map<String, List<String>> mapBatch(String outlineText, List<Requirement> requirements) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
         String prompt = promptLoader.load("generation-map-requirements.txt");
 
-        String outlineJson;
-        String reqJson;
-        try {
-            outlineJson = objectMapper.writeValueAsString(outline);
-            reqJson = objectMapper.writeValueAsString(requirements);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to serialize for mapping", e);
+        // 간결한 형태로 변환 (id + item만 — description 생략으로 토큰 절약)
+        StringBuilder reqJson = new StringBuilder("[\n");
+        for (int i = 0; i < requirements.size(); i++) {
+            Requirement r = requirements.get(i);
+            if (i > 0) reqJson.append(",\n");
+            reqJson.append("  {\"id\":\"").append(r.id()).append("\", \"item\":\"").append(r.item().replace("\"", "'")).append("\"}");
         }
+        reqJson.append("\n]");
+
+        log.info("Mapping batch of {} requirements to outline (compact)", requirements.size());
 
         String content = client.prompt()
                 .user(u -> u.text(prompt)
-                        .param("outline", outlineJson)
+                        .param("outline", outlineText)
                         .param("requirements", reqJson))
                 .call()
                 .content();
 
         Map<String, List<String>> mapping = parseMapping(content);
-        log.info("Requirement mapping complete: {} outline keys mapped", mapping.size());
+        log.info("Batch mapping parsed: {} keys, {} assignments",
+                mapping.size(), mapping.values().stream().mapToInt(List::size).sum());
         return mapping;
+    }
+
+    private List<List<Requirement>> splitIntoBatches(List<Requirement> requirements) {
+        return splitIntoBatches(requirements, BATCH_SIZE);
+    }
+
+    private List<List<Requirement>> splitIntoBatches(List<Requirement> requirements, int batchSize) {
+        List<List<Requirement>> batches = new ArrayList<>();
+        for (int i = 0; i < requirements.size(); i += batchSize) {
+            batches.add(requirements.subList(i, Math.min(i + batchSize, requirements.size())));
+        }
+        return batches;
+    }
+
+    private String flattenOutline(List<OutlineNode> nodes) {
+        StringBuilder sb = new StringBuilder();
+        flattenOutlineRecursive(nodes, sb, 0);
+        return sb.toString().trim();
+    }
+
+    private void flattenOutlineRecursive(List<OutlineNode> nodes, StringBuilder sb, int depth) {
+        for (OutlineNode node : nodes) {
+            boolean isLeaf = node.children().isEmpty();
+            sb.append("  ".repeat(depth)).append(node.key()).append(". ").append(node.title());
+            if (isLeaf) {
+                sb.append("  ★매핑대상");
+            }
+            sb.append("\n");
+            if (!isLeaf) {
+                flattenOutlineRecursive(node.children(), sb, depth + 1);
+            }
+        }
     }
 
     private Map<String, List<String>> parseMapping(String content) {
@@ -69,9 +265,16 @@ public class RequirementMapper {
             if (json.startsWith("```")) {
                 json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
             }
+            // JSON 객체 시작/끝 탐색
+            int objStart = json.indexOf('{');
+            int objEnd = json.lastIndexOf('}');
+            if (objStart >= 0 && objEnd > objStart) {
+                json = json.substring(objStart, objEnd + 1);
+            }
             return objectMapper.readValue(json, MAPPING_TYPE);
         } catch (Exception e) {
-            log.warn("Failed to parse requirement mapping JSON: {}", e.getMessage());
+            log.warn("Failed to parse requirement mapping JSON: {} | preview: {}",
+                    e.getMessage(), content.substring(0, Math.min(content.length(), 300)));
             return Map.of();
         }
     }

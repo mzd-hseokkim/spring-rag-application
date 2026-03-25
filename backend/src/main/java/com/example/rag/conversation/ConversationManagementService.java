@@ -7,6 +7,7 @@ import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,17 +27,20 @@ public class ConversationManagementService {
     private final AppUserRepository appUserRepository;
     private final ModelClientProvider modelClientProvider;
     private final ConversationService conversationService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     public ConversationManagementService(ConversationRepository conversationRepository,
                                          LlmModelRepository llmModelRepository,
                                          AppUserRepository appUserRepository,
                                          ModelClientProvider modelClientProvider,
-                                         ConversationService conversationService) {
+                                         ConversationService conversationService,
+                                         SimpMessagingTemplate messagingTemplate) {
         this.conversationRepository = conversationRepository;
         this.llmModelRepository = llmModelRepository;
         this.appUserRepository = appUserRepository;
         this.modelClientProvider = modelClientProvider;
         this.conversationService = conversationService;
+        this.messagingTemplate = messagingTemplate;
     }
 
     @Transactional(readOnly = true)
@@ -119,6 +123,17 @@ public class ConversationManagementService {
             if (title != null && !title.isBlank()) {
                 conv.setTitle(title.strip());
                 conversationRepository.save(conv);
+
+                // WebSocket으로 제목 생성 알림 전송
+                String userId = conv.getUser() != null ? conv.getUser().getId().toString() : null;
+                if (userId != null) {
+                    messagingTemplate.convertAndSendToUser(userId, "/queue/chat",
+                            java.util.Map.of(
+                                    "type", "title_generated",
+                                    "sessionId", sessionId,
+                                    "title", title.strip()
+                            ));
+                }
             }
         } catch (Exception e) {
             log.warn("Failed to generate conversation title for session {}: {}", sessionId, e.getMessage());

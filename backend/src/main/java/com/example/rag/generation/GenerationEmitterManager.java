@@ -22,4 +22,8 @@ public class GenerationEmitterManager {
     public SseEmitter get(UUID jobId) {
         return emitters.get(jobId);
     }
+
+    public void remove(UUID jobId) {
+        emitters.remove(jobId);
+    }
 }

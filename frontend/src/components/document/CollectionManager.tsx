@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { fetchCollections, createCollection, deleteCollection } from '@/api/client';
@@ -69,15 +70,14 @@ export function CollectionManager({ onCollectionsChange }: Props) {
           <Button size="sm" className="h-7 text-xs px-2" onClick={handleAdd}>추가</Button>
         </div>
       )}
-      <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
         {collections.map(col => (
-          <div key={col.id} className="flex items-center justify-between text-sm py-1 px-1 rounded hover:bg-muted/50 group">
-            <span className="truncate">{col.name}</span>
-            <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 text-destructive"
-              onClick={() => handleDelete(col.id)}>
-              <Trash2 className="h-3 w-3" />
-            </Button>
-          </div>
+          <Badge key={col.id} variant="outline" className="text-xs gap-1 pr-1">
+            {col.name}
+            <button onClick={() => handleDelete(col.id)} className="hover:text-destructive cursor-pointer">
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
         ))}
         {collections.length === 0 && !adding && (
           <p className="text-xs text-muted-foreground">등록된 컬렉션 없음</p>

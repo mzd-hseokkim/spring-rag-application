@@ -14,10 +14,16 @@ public record SectionContent(
         List<ContentTable> tables,
         List<String> references,
         String layoutType,
-        Map<String, Object> layoutData
+        Map<String, Object> layoutData,
+        String governingMessage,
+        String visualGuide,
+        List<String> sources
 ) {
     public SectionContent {
         if (layoutType == null || layoutType.isBlank()) layoutType = "TEXT_FULL";
         if (layoutData == null) layoutData = Map.of();
+        if (governingMessage == null) governingMessage = "";
+        if (visualGuide == null) visualGuide = "";
+        if (sources == null) sources = List.of();
     }
 }

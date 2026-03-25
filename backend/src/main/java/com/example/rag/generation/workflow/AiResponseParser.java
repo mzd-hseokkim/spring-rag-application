@@ -51,7 +51,10 @@ public class AiResponseParser {
         List<ContentTable> tables = parseTables(node != null ? node.get("tables") : null);
         String layoutType = textOrDefault(node, "layoutType", "TEXT_FULL");
         java.util.Map<String, Object> layoutData = parseLayoutData(node != null ? node.get("layoutData") : null);
-        return new SectionContent(key, title, content, highlights, tables, references, layoutType, layoutData);
+        String governingMessage = textOrDefault(node, "governingMessage", "");
+        String visualGuide = textOrDefault(node, "visualGuide", "");
+        // sources는 백엔드에서 채우므로 빈 배열로 초기화
+        return new SectionContent(key, title, content, highlights, tables, references, layoutType, layoutData, governingMessage, visualGuide, List.of());
     }
 
     private List<SectionPlan> parseSectionPlans(JsonNode node) {

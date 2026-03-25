@@ -1,8 +1,25 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { OutlineNode } from '@/api/generation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChevronRight, ChevronDown, Plus, Trash2, GripVertical, ArrowUp, ArrowDown } from 'lucide-react';
+
+/** "1.2.10" 같은 계층 번호를 자연수 순서로 비교 */
+function compareKeys(a: string, b: string): number {
+  const pa = a.split('.').map(s => parseInt(s, 10) || 0);
+  const pb = b.split('.').map(s => parseInt(s, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? -1) - (pb[i] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function sortOutline(nodes: OutlineNode[]): OutlineNode[] {
+  return [...nodes]
+    .sort((a, b) => compareKeys(a.key, b.key))
+    .map(n => ({ ...n, children: sortOutline(n.children) }));
+}
 
 interface OutlineEditorProps {
   outline: OutlineNode[];
@@ -10,7 +27,8 @@ interface OutlineEditorProps {
   readOnly?: boolean;
 }
 
-export function OutlineEditor({ outline, onChange, readOnly }: OutlineEditorProps) {
+export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: OutlineEditorProps) {
+  const outline = useMemo(() => sortOutline(rawOutline), [rawOutline]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(outline.map(n => n.key)));
 
   const toggleExpand = (key: string) => {
@@ -121,7 +139,7 @@ export function OutlineEditor({ outline, onChange, readOnly }: OutlineEditorProp
               <button onClick={() => moveNode(path, 1)} className="p-0.5 rounded hover:bg-muted cursor-pointer" title="아래로">
                 <ArrowDown className="h-3.5 w-3.5" />
               </button>
-              {depth < 1 && (
+              {depth < 2 && (
                 <button onClick={() => addChild(path)} className="p-0.5 rounded hover:bg-muted cursor-pointer" title="하위 항목 추가">
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -145,10 +163,12 @@ export function OutlineEditor({ outline, onChange, readOnly }: OutlineEditorProp
   };
 
   return (
-    <div className="space-y-1">
-      {outline.map(node => renderNode(node, [node.key], 0))}
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 320px)', minHeight: '400px' }}>
+      <div className="flex-1 overflow-y-auto space-y-1 pr-1">
+        {outline.map(node => renderNode(node, [node.key], 0))}
+      </div>
       {!readOnly && (
-        <Button variant="outline" size="sm" onClick={() => addChild([])} className="mt-2">
+        <Button variant="outline" size="sm" onClick={() => addChild([])} className="mt-2 shrink-0">
           <Plus className="h-3.5 w-3.5 mr-1" />
           대분류 추가
         </Button>

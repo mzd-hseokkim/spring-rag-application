@@ -6,6 +6,8 @@ import com.example.rag.auth.AppUserRepository;
 import com.example.rag.generation.dto.GenerationRequest;
 import com.example.rag.generation.dto.GenerationResponse;
 import com.example.rag.generation.dto.OutlineNode;
+import com.example.rag.document.Document;
+import com.example.rag.document.DocumentRepository;
 import com.example.rag.generation.template.DocumentTemplate;
 import com.example.rag.generation.template.DocumentTemplateRepository;
 import com.example.rag.generation.workflow.GenerationWorkflowService;
@@ -20,8 +22,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional(readOnly = true)
@@ -31,17 +36,20 @@ public class GenerationService {
 
     private final GenerationJobRepository jobRepository;
     private final DocumentTemplateRepository templateRepository;
+    private final DocumentRepository documentRepository;
     private final AppUserRepository userRepository;
     private final GenerationWorkflowService workflowService;
     private final OutlineExtractor outlineExtractor;
 
     public GenerationService(GenerationJobRepository jobRepository,
                              DocumentTemplateRepository templateRepository,
+                             DocumentRepository documentRepository,
                              AppUserRepository userRepository,
                              GenerationWorkflowService workflowService,
                              OutlineExtractor outlineExtractor) {
         this.jobRepository = jobRepository;
         this.templateRepository = templateRepository;
+        this.documentRepository = documentRepository;
         this.userRepository = userRepository;
         this.workflowService = workflowService;
         this.outlineExtractor = outlineExtractor;
@@ -61,6 +69,11 @@ public class GenerationService {
         if (request.conversationId() != null) {
             job.setConversationId(request.conversationId());
         }
+
+        // RFP 문서명 기반 제목 생성
+        String title = buildTitle(request.customerDocumentIds());
+        job.setTitle(title);
+        job.setIncludeWebSearch(request.includeWebSearch());
         job.setCurrentStep(1);
         job.setStepStatus("COMPLETE");
         job = jobRepository.save(job);
@@ -137,19 +150,25 @@ public class GenerationService {
      * Step 4: 섹션 생성 시작 (async)
      */
     @Transactional
-    public void startSectionGeneration(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch) {
+    public void startSectionGeneration(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch,
+                                        List<String> sectionKeys) {
         GenerationJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        if (includeWebSearch) {
+            job.setIncludeWebSearch(true);
+        }
         job.setStatus(GenerationStatus.GENERATING);
         job.setCurrentStep(4);
         job.setStepStatus("PROCESSING");
         job.setErrorMessage(null);
         jobRepository.save(job);
 
+        boolean webSearch = job.isIncludeWebSearch();
+        List<String> keys = sectionKeys != null ? sectionKeys : List.of();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                workflowService.generateWizardSections(jobId, refDocIds, includeWebSearch);
+                workflowService.generateWizardSections(jobId, refDocIds, webSearch, keys);
             }
         });
     }
@@ -183,6 +202,37 @@ public class GenerationService {
         }
         jobRepository.save(job);
         return toResponse(job);
+    }
+
+    /**
+     * Step 4: 기존 섹션 전체 초기화 (전체 재생성 전 호출)
+     */
+    @Transactional
+    public void clearSections(UUID jobId) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setGeneratedSections(null);
+        job.setCurrentSection(0);
+        jobRepository.save(job);
+    }
+
+    /**
+     * Step 4: 단일 섹션 재생성 (async)
+     */
+    @Transactional
+    public void startSingleSectionRegeneration(UUID jobId, String sectionKey,
+                                                List<UUID> refDocIds, boolean includeWebSearch) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        job.setErrorMessage(null);
+        jobRepository.save(job);
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workflowService.regenerateSection(jobId, sectionKey, refDocIds, includeWebSearch);
+            }
+        });
     }
 
     /**
@@ -278,12 +328,29 @@ public class GenerationService {
         jobRepository.deleteById(id);
     }
 
+    private String buildTitle(List<UUID> customerDocIds) {
+        String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        if (customerDocIds == null || customerDocIds.isEmpty()) {
+            return "제안서 " + date;
+        }
+        String docNames = documentRepository.findAllById(customerDocIds).stream()
+                .map(Document::getFilename)
+                .map(name -> name.contains(".") ? name.substring(0, name.lastIndexOf('.')) : name)
+                .collect(Collectors.joining(", "));
+        if (docNames.length() > 80) {
+            docNames = docNames.substring(0, 80) + "...";
+        }
+        return docNames + " — 제안서 " + date;
+    }
+
     private GenerationResponse toResponse(GenerationJob job) {
         return new GenerationResponse(
                 job.getId(),
                 job.getStatus(),
                 job.getTemplate().getId(),
                 job.getTemplate().getName(),
+                job.getTitle(),
+                job.getUserInput(),
                 job.getCurrentSection(),
                 job.getTotalSections(),
                 job.getCurrentStep(),
@@ -291,6 +358,7 @@ public class GenerationService {
                 job.getOutline(),
                 job.getRequirementMapping(),
                 job.getGeneratedSections(),
+                job.isIncludeWebSearch(),
                 job.getOutputFilePath(),
                 job.getErrorMessage(),
                 job.getCreatedAt(),

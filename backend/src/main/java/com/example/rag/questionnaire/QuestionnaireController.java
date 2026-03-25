@@ -47,7 +47,7 @@ public class QuestionnaireController {
 
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable UUID id) {
-        SseEmitter emitter = new SseEmitter(600_000L);
+        SseEmitter emitter = new SseEmitter(0L); // 타임아웃 없음
         emitterManager.register(id, emitter);
         return emitter;
     }

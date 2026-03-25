@@ -75,7 +75,8 @@ public class GenerationController {
     @PostMapping("/{id}/generate-sections")
     public void generateSections(@PathVariable UUID id, @RequestBody GenerateSectionsRequest request) {
         List<UUID> refDocIds = request.referenceDocumentIds() != null ? request.referenceDocumentIds() : List.of();
-        generationService.startSectionGeneration(id, refDocIds, request.includeWebSearch());
+        List<String> sectionKeys = request.sectionKeys() != null ? request.sectionKeys() : List.of();
+        generationService.startSectionGeneration(id, refDocIds, request.includeWebSearch(), sectionKeys);
     }
 
     /**
@@ -94,8 +95,27 @@ public class GenerationController {
         generationService.startRendering(id);
     }
 
+    /**
+     * 위자드 Step 4: 단일 섹션 재생성
+     */
+    @PostMapping("/{id}/regenerate-section/{key}")
+    public void regenerateSection(@PathVariable UUID id, @PathVariable String key,
+                                   @RequestBody GenerateSectionsRequest request) {
+        List<UUID> refDocIds = request.referenceDocumentIds() != null ? request.referenceDocumentIds() : List.of();
+        generationService.startSingleSectionRegeneration(id, key, refDocIds, request.includeWebSearch());
+    }
+
+    /**
+     * 위자드 Step 4: 기존 섹션 전체 초기화
+     */
+    @DeleteMapping("/{id}/sections")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void clearSections(@PathVariable UUID id) {
+        generationService.clearSections(id);
+    }
+
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
-    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch) {}
+    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch, java.util.List<String> sectionKeys) {}
 
     @GetMapping("/{id}")
     public GenerationResponse get(@PathVariable UUID id) {
@@ -110,7 +130,7 @@ public class GenerationController {
 
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable UUID id) {
-        SseEmitter emitter = new SseEmitter(600_000L);
+        SseEmitter emitter = new SseEmitter(0L); // 타임아웃 없음
         emitterManager.register(id, emitter);
         return emitter;
     }

@@ -23,7 +23,7 @@ public class ContentGeneratorService {
             "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[]}";
 
     private static final String SECTION_V2_FORMAT =
-            "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"content\":\"마크다운 본문\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[],\"layoutType\":\"TEXT_FULL|TEXT_TABLE|COMPARE_2COL|PROCESS_HORIZONTAL|KPI_CARDS|TABLE_FULL|TEXT_IMAGE|IMAGE_FULL\",\"layoutData\":{}}";
+            "{\"key\":\"section_key\",\"title\":\"섹션 제목\",\"governingMessage\":\"이 장표의 핵심 메시지 (1문장)\",\"visualGuide\":\"이 장표에 포함할 시각 요소 설명\",\"content\":\"bullet point 중심 마크다운 (1000자 이내)\",\"highlights\":[\"포인트1\"],\"tables\":[],\"references\":[],\"layoutType\":\"TEXT_FULL|TEXT_TABLE|COMPARE_2COL|PROCESS_HORIZONTAL|KPI_CARDS|TABLE_FULL|TEXT_IMAGE|IMAGE_FULL\",\"layoutData\":{}}";
 
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;
@@ -35,6 +35,10 @@ public class ContentGeneratorService {
         this.modelClientProvider = modelClientProvider;
         this.promptLoader = promptLoader;
         this.parser = parser;
+    }
+
+    public ChatClient getModelClient() {
+        return modelClientProvider.getChatClient(ModelPurpose.CHAT);
     }
 
     public DocumentOutline generateOutline(String userInput, String systemPrompt,

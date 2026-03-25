@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQuestionnaire } from '@/hooks/useQuestionnaire';
 import { usePersonas } from '@/hooks/usePersonas';
 import { searchDocuments } from '@/api/client';
@@ -12,7 +11,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ArrowLeft, FileText, Loader2, AlertCircle, Clock, X, ClipboardList, Target, BookOpen, Trash2, Plus, Search, Download } from 'lucide-react';
+import { AppSidebar } from '@/components/layout/AppSidebar';
+import { FileText, Loader2, AlertCircle, Clock, X, ClipboardList, Target, BookOpen, Trash2, Plus, Search, Download } from 'lucide-react';
 import type { QuestionnaireJob } from '@/api/questionnaire';
 import { getQuestionnairePreviewUrl, getQuestionnaireDownloadUrl } from '@/api/questionnaire';
 
@@ -120,7 +120,6 @@ function DocPicker({ label, description, icon, selectedItems, onToggle, onRemove
 }
 
 export function QuestionnairePage() {
-  const navigate = useNavigate();
   const qna = useQuestionnaire();
   const { personas, loadPersonas, createPersona, updatePersona, regeneratePrompt, deletePersona } = usePersonas();
 
@@ -188,12 +187,9 @@ export function QuestionnairePage() {
 
   return (
     <div className="flex h-screen bg-background">
-      <aside className="w-72 border-r bg-sidebar text-sidebar-foreground flex flex-col shrink-0">
+      <AppSidebar>
         <div className="flex items-center gap-2 px-3 pt-3 pb-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate('/')} title="채팅으로 돌아가기">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <h2 className="text-sm font-medium flex-1">예상 질의서</h2>
+          <h2 className="text-sm font-medium flex-1">생성 이력</h2>
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleReset}>
             <Plus className="h-3.5 w-3.5 mr-1" />
             새로 만들기
@@ -201,7 +197,6 @@ export function QuestionnairePage() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          <p className="text-xs text-sidebar-foreground/50 mb-2">생성 이력</p>
           {qna.jobs.length === 0 && (
             <p className="text-xs text-sidebar-foreground/40 px-2">아직 생성된 질의서가 없습니다.</p>
           )}
@@ -209,7 +204,7 @@ export function QuestionnairePage() {
             <JobHistoryItem key={job.id} job={job} onDelete={qna.removeJob} />
           ))}
         </div>
-      </aside>
+      </AppSidebar>
 
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto py-8 px-6">

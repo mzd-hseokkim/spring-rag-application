@@ -86,6 +86,13 @@ public class SemanticChunkingStrategy implements ChunkingStrategy {
         return buffered;
     }
 
+    /**
+     * 임베딩 모델의 최대 토큰 한도를 초과하지 않도록 텍스트를 잘라서 임베딩한다.
+     * 대부분의 임베딩 모델은 8192 토큰 한도를 가지며, 한국어/영어 혼합 기준
+     * 약 1문자 ≈ 1~2토큰이므로 안전하게 문자 수 기준으로 제한한다.
+     */
+    private static final int MAX_EMBED_CHARS = 6000;
+
     private float[][] embedBatch(List<String> texts) {
         EmbeddingModel embeddingModel = embeddingModelSupplier.get();
         float[][] result = new float[texts.size()][];
@@ -94,7 +101,11 @@ public class SemanticChunkingStrategy implements ChunkingStrategy {
         for (int i = 0; i < texts.size(); i += batchSize) {
             List<String> batch = texts.subList(i, Math.min(i + batchSize, texts.size()));
             for (int j = 0; j < batch.size(); j++) {
-                result[i + j] = embeddingModel.embed(batch.get(j));
+                String text = batch.get(j);
+                if (text.length() > MAX_EMBED_CHARS) {
+                    text = text.substring(0, MAX_EMBED_CHARS);
+                }
+                result[i + j] = embeddingModel.embed(text);
             }
         }
         return result;
