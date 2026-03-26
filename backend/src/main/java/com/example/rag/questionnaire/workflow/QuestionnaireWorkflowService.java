@@ -45,6 +45,7 @@ public class QuestionnaireWorkflowService {
     private final QuestionnaireGeneratorService generator;
     private final RequirementExtractor requirementExtractor;
     private final RequirementMatcher requirementMatcher;
+    private final RequirementCacheService requirementCache;
     private final QuestionnaireHtmlRenderer renderer;
     private final SearchService searchService;
     private final TavilySearchService tavilySearchService;
@@ -57,6 +58,7 @@ public class QuestionnaireWorkflowService {
     public QuestionnaireWorkflowService(QuestionnaireGeneratorService generator,
                                         RequirementExtractor requirementExtractor,
                                         RequirementMatcher requirementMatcher,
+                                        RequirementCacheService requirementCache,
                                         QuestionnaireHtmlRenderer renderer,
                                         SearchService searchService,
                                         TavilySearchService tavilySearchService,
@@ -68,6 +70,7 @@ public class QuestionnaireWorkflowService {
         this.generator = generator;
         this.requirementExtractor = requirementExtractor;
         this.requirementMatcher = requirementMatcher;
+        this.requirementCache = requirementCache;
         this.renderer = renderer;
         this.searchService = searchService;
         this.tavilySearchService = tavilySearchService;
@@ -78,6 +81,7 @@ public class QuestionnaireWorkflowService {
         this.objectMapper = objectMapper;
     }
 
+    @SuppressWarnings("java:S107") // async workflow entry point — parameter object adds unnecessary indirection
     @Async("ingestionExecutor")
     public void execute(QuestionnaireJob detachedJob, List<UUID> customerDocIds, List<UUID> proposalDocIds,
                         List<UUID> refDocIds, List<UUID> personaIds, int questionCount,
@@ -104,13 +108,21 @@ public class QuestionnaireWorkflowService {
                         "이전 분석 결과를 재사용합니다. 질문 생성을 준비합니다..."));
                 log.info("Questionnaire job {} - using cached analysis ({} chars)", job.getId(), documentAnalysis.length());
             } else {
-                // Phase 1a: 고객문서에서 요구사항 추출
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "고객 문서에서 요구사항을 추출하고 있습니다..."));
-                List<String> customerChunks = collectDocumentContent(customerDocIds, job.getUserInput());
-                log.info("Questionnaire job {} - collected {} customer chunks", job.getId(), customerChunks.size());
+                // Phase 1a: 고객문서에서 요구사항 추출 (캐시 우선)
+                List<Requirement> requirements = requirementCache.get(customerDocIds);
+                if (!requirements.isEmpty()) {
+                    emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
+                            "캐시된 요구사항 " + requirements.size() + "개를 사용합니다."));
+                    log.info("Questionnaire job {} - using {} cached requirements", job.getId(), requirements.size());
+                } else {
+                    emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "고객 문서에서 요구사항을 추출하고 있습니다..."));
+                    List<String> customerChunks = collectDocumentContent(customerDocIds, job.getUserInput());
+                    log.info("Questionnaire job {} - collected {} customer chunks", job.getId(), customerChunks.size());
 
-                List<Requirement> requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
-                        msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
+                    requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
+                            msg -> emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, msg)));
+                    requirementCache.put(customerDocIds, requirements);
+                }
                 emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING,
                         requirements.size() + "개 요구사항을 추출했습니다."));
                 log.info("Questionnaire job {} - extracted {} requirements", job.getId(), requirements.size());
@@ -133,7 +145,9 @@ public class QuestionnaireWorkflowService {
                 }
 
                 documentAnalysis = gapMatrix.toMarkdown();
-                log.info("Questionnaire job {} - gap matrix: {}", job.getId(), gapMatrix.summary());
+                if (log.isInfoEnabled()) {
+                    log.info("Questionnaire job {} - gap matrix: {}", job.getId(), gapMatrix.summary());
+                }
 
                 // 캐시에 저장
                 analysisCache.put(customerDocIds, proposalDocIds, analysisMode, job.getUserInput(), documentAnalysis);
@@ -146,52 +160,9 @@ public class QuestionnaireWorkflowService {
             jobRepository.save(job);
 
             // ── Phase 2: GENERATING — 페르소나별 질문 생성 ──
-            // 갭 매트릭스 파싱 (캐시 히트 시에도 페르소나별 정렬을 위해)
-            GapMatrix gapMatrixForPersona = GapMatrix.fromMarkdown(documentAnalysis);
-
             updateStatus(job, QuestionnaireStatus.GENERATING);
-            List<PersonaQna> allQna = new ArrayList<>();
-
-            for (int i = 0; i < personas.size(); i++) {
-                Persona persona = personas.get(i);
-                job.setCurrentPersona(i + 1);
-                jobRepository.save(job);
-
-                emitEvent(job, QuestionnaireProgressEvent.progress(i + 1, personas.size(), persona.getName()));
-
-                // 페르소나 관심 분야 기준으로 갭 매트릭스 재정렬
-                String personaAnalysis = gapMatrixForPersona != null
-                        ? gapMatrixForPersona.toMarkdownForPersona(persona.getFocusAreas())
-                        : documentAnalysis;
-
-                // 참조 문서 검색 (페르소나 관점)
-                List<String> refContext = List.of();
-                if (!refDocIds.isEmpty()) {
-                    emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
-                            persona.getName() + " — 참조 문서 검색 중..."));
-                    refContext = searchForPersona(persona, job.getUserInput(), refDocIds);
-                }
-
-                // 웹 검색 (옵션)
-                List<String> webContext = List.of();
-                if (includeWebSearch) {
-                    emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
-                            persona.getName() + " — 웹 검색 중..."));
-                    webContext = searchWebForPersona(persona, job.getUserInput());
-                    log.info("Questionnaire job {} - web search for persona '{}' returned {} results",
-                            job.getId(), persona.getName(), webContext.size());
-                }
-
-                // 문서 분석 결과 + 참조 + 웹으로 질문 생성
-                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
-                        persona.getName() + " — 질문/답변 생성 중..."));
-                PersonaQna qna = generateWithRetry(persona, personaAnalysis, refContext, webContext,
-                        job.getUserInput(), questionCount);
-                allQna.add(qna);
-
-                log.info("Questionnaire job {} - persona {}/{} complete: {} ({} questions)",
-                        job.getId(), i + 1, personas.size(), persona.getName(), qna.questions().size());
-            }
+            List<PersonaQna> allQna = generateForAllPersonas(
+                    job, personas, documentAnalysis, refDocIds, includeWebSearch, questionCount);
 
             job.setGeneratedQna(toJson(allQna));
             jobRepository.save(job);
@@ -251,6 +222,52 @@ public class QuestionnaireWorkflowService {
         int totalChars = result.stream().mapToInt(String::length).sum();
         log.info("Collected {} unique chunks ({} chars)", result.size(), totalChars);
         return result;
+    }
+
+    @SuppressWarnings("java:S107")
+    private List<PersonaQna> generateForAllPersonas(QuestionnaireJob job, List<Persona> personas,
+                                                      String documentAnalysis, List<UUID> refDocIds,
+                                                      boolean includeWebSearch, int questionCount) {
+        GapMatrix gapMatrixForPersona = GapMatrix.fromMarkdown(documentAnalysis);
+        List<PersonaQna> allQna = new ArrayList<>();
+
+        for (int i = 0; i < personas.size(); i++) {
+            Persona persona = personas.get(i);
+            job.setCurrentPersona(i + 1);
+            jobRepository.save(job);
+
+            emitEvent(job, QuestionnaireProgressEvent.progress(i + 1, personas.size(), persona.getName()));
+
+            String personaAnalysis = gapMatrixForPersona != null
+                    ? gapMatrixForPersona.toMarkdownForPersona(persona.getFocusAreas())
+                    : documentAnalysis;
+
+            List<String> refContext = List.of();
+            if (!refDocIds.isEmpty()) {
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
+                        persona.getName() + " — 참조 문서 검색 중..."));
+                refContext = searchForPersona(persona, job.getUserInput(), refDocIds);
+            }
+
+            List<String> webContext = List.of();
+            if (includeWebSearch) {
+                emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
+                        persona.getName() + " — 웹 검색 중..."));
+                webContext = searchWebForPersona(persona, job.getUserInput());
+                log.info("Questionnaire job {} - web search for persona '{}' returned {} results",
+                        job.getId(), persona.getName(), webContext.size());
+            }
+
+            emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
+                    persona.getName() + " — 질문/답변 생성 중..."));
+            PersonaQna qna = generateWithRetry(persona, personaAnalysis, refContext, webContext,
+                    job.getUserInput(), questionCount);
+            allQna.add(qna);
+
+            log.info("Questionnaire job {} - persona {}/{} complete: {} ({} questions)",
+                    job.getId(), i + 1, personas.size(), persona.getName(), qna.questions().size());
+        }
+        return allQna;
     }
 
     private PersonaQna generateWithRetry(Persona persona, String documentAnalysis,

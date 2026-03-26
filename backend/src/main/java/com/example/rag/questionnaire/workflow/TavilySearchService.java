@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -47,7 +48,7 @@ public class TavilySearchService {
      */
     public List<String> searchStrict(String query, int maxResults) {
         if (!isAvailable()) {
-            throw new WebSearchException(0, "Tavily API key not configured");
+            throw new WebSearchException(0);
         }
         try {
             return doSearch(query, maxResults, true);
@@ -55,9 +56,9 @@ public class TavilySearchService {
             throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new WebSearchException(0, "웹 검색이 중단되었습니다.");
+            throw new WebSearchException(0);
         } catch (Exception e) {
-            throw new WebSearchException(500, e.getMessage());
+            throw new WebSearchException(500);
         }
     }
 
@@ -82,7 +83,7 @@ public class TavilySearchService {
         }
     }
 
-    private List<String> doSearch(String query, int maxResults, boolean strict) throws Exception {
+    private List<String> doSearch(String query, int maxResults, boolean strict) throws IOException, InterruptedException {
         Map<String, Object> body = Map.of(
                 "query", query,
                 "max_results", maxResults,
@@ -107,7 +108,7 @@ public class TavilySearchService {
                 log.warn("Tavily API returned status {}: {}", response.statusCode(), response.body());
             }
             if (strict) {
-                throw new WebSearchException(response.statusCode(), response.body());
+                throw new WebSearchException(response.statusCode());
             }
             return List.of();
         }

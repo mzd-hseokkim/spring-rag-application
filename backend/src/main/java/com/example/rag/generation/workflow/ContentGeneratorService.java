@@ -16,6 +16,10 @@ public class ContentGeneratorService {
 
     private static final Logger log = LoggerFactory.getLogger(ContentGeneratorService.class);
 
+    private static final String PARAM_FORMAT = "format";
+    private static final String PARAM_CONTEXT = "context";
+    private static final String SECTION_SEPARATOR = "\n---\n";
+
     private static final String OUTLINE_FORMAT =
             "{\"title\":\"문서 제목\",\"summary\":\"문서 요약\",\"sections\":[{\"key\":\"section_key\",\"heading\":\"섹션 제목\",\"purpose\":\"섹션 목적\",\"keyPoints\":[\"포인트1\"],\"estimatedLength\":500}]}";
 
@@ -45,14 +49,14 @@ public class ContentGeneratorService {
                                            List<String> ragContext) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
         String userPrompt = promptLoader.load("generation-outline.txt");
-        String contextText = ragContext.isEmpty() ? "없음" : String.join("\n---\n", ragContext);
+        String contextText = ragContext.isEmpty() ? "없음" : String.join(SECTION_SEPARATOR, ragContext);
 
         String content = client.prompt()
                 .system(systemPrompt)
                 .user(u -> u.text(userPrompt)
-                        .param("format", OUTLINE_FORMAT)
+                        .param(PARAM_FORMAT, OUTLINE_FORMAT)
                         .param("input", userInput)
-                        .param("context", contextText))
+                        .param(PARAM_CONTEXT, contextText))
                 .call()
                 .content();
 
@@ -70,17 +74,17 @@ public class ContentGeneratorService {
                 .map(s -> "## " + s.title() + "\n" + s.content())
                 .collect(Collectors.joining("\n\n"));
         String previousContext = joined.isBlank() ? "없음 (첫 번째 섹션)" : joined;
-        String contextText = ragContext.isEmpty() ? "없음" : String.join("\n---\n", ragContext);
+        String contextText = ragContext.isEmpty() ? "없음" : String.join(SECTION_SEPARATOR, ragContext);
 
         String content = client.prompt()
                 .system(systemPrompt)
                 .user(u -> u.text(userPrompt)
-                        .param("format", SECTION_FORMAT)
+                        .param(PARAM_FORMAT, SECTION_FORMAT)
                         .param("heading", plan.heading())
                         .param("purpose", plan.purpose())
                         .param("keyPoints", String.join(", ", plan.keyPoints()))
                         .param("previous", previousContext)
-                        .param("context", contextText))
+                        .param(PARAM_CONTEXT, contextText))
                 .call()
                 .content();
 
@@ -93,7 +97,7 @@ public class ContentGeneratorService {
     /**
      * 요구사항 기반 섹션 생성 (위자드 Step 4용)
      */
-    public SectionContent generateSectionWithRequirements(String key, String heading, String description,
+    public SectionContent generateSectionWithRequirements(String heading, String description,
                                                            String requirementsText, String systemPrompt,
                                                            List<String> ragContext, List<String> webContext,
                                                            List<SectionContent> previousSections) {
@@ -108,20 +112,20 @@ public class ContentGeneratorService {
             prevCtx = prevCtx.substring(prevCtx.length() - 5000);
         }
         final String previousContext = prevCtx;
-        String contextText = ragContext.isEmpty() ? "없음" : String.join("\n---\n", ragContext);
-        String webText = webContext.isEmpty() ? "없음" : String.join("\n---\n", webContext);
+        String contextText = ragContext.isEmpty() ? "없음" : String.join(SECTION_SEPARATOR, ragContext);
+        String webText = webContext.isEmpty() ? "없음" : String.join(SECTION_SEPARATOR, webContext);
         String reqText = requirementsText.isBlank() ? "없음" : requirementsText;
         String desc = description != null ? description : "";
 
         String content = client.prompt()
                 .system(systemPrompt)
                 .user(u -> u.text(userPrompt)
-                        .param("format", SECTION_V2_FORMAT)
+                        .param(PARAM_FORMAT, SECTION_V2_FORMAT)
                         .param("heading", heading)
                         .param("description", desc)
                         .param("requirements", reqText)
                         .param("previous", previousContext)
-                        .param("context", contextText)
+                        .param(PARAM_CONTEXT, contextText)
                         .param("webContext", webText))
                 .call()
                 .content();

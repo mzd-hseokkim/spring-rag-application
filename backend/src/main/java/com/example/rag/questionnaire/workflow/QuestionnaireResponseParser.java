@@ -60,16 +60,29 @@ public class QuestionnaireResponseParser {
         try {
             return objectMapper.readTree(json);
         } catch (Exception e) {
-            log.debug("Direct parse failed, attempting repair");
+            log.debug("Direct parse failed, attempting repair: {}", e.getMessage());
         }
+        // 1차: 괄호 보충
         String repaired = repairTruncatedJson(json);
         try {
             return objectMapper.readTree(repaired);
         } catch (Exception e) {
-            log.error("JSON parse failed even after repair. Extracted JSON:\n{}",
-                    json.substring(0, Math.min(json.length(), 500)));
-            throw new RagException("Failed to parse AI response as JSON", e);
+            log.debug("Bracket repair failed, attempting truncation: {}", e.getMessage());
         }
+        // 2차: 마지막 불완전 항목 제거 후 배열 닫기
+        String truncated = truncateToLastComplete(json);
+        if (truncated != null) {
+            try {
+                return objectMapper.readTree(truncated);
+            } catch (Exception e) {
+                log.debug("Truncation repair also failed: {}", e.getMessage());
+            }
+        }
+        if (log.isErrorEnabled()) {
+            log.error("JSON parse failed after all repair attempts. Extracted JSON (first 500 chars):\n{}",
+                    json.substring(0, Math.min(json.length(), 500)));
+        }
+        throw new RagException("Failed to parse AI response as JSON");
     }
 
     private String extractJson(String raw) {
@@ -103,6 +116,24 @@ public class QuestionnaireResponseParser {
         for (int i = 0; i < brackets; i++) sb.append(']');
         for (int i = 0; i < braces; i++) sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * 마지막으로 완성된 JSON 객체(}로 끝나는)까지만 남기고 배열을 닫는다.
+     * LLM이 중간에 잘못된 JSON을 생성했을 때, 정상 파싱된 항목만 살린다.
+     */
+    private String truncateToLastComplete(String json) {
+        // 마지막 완전한 "}" 를 찾아서 그 뒤를 잘라내고 "]" 로 닫기
+        int lastCloseBrace = json.lastIndexOf('}');
+        if (lastCloseBrace <= 0) return null;
+        String candidate = json.substring(0, lastCloseBrace + 1);
+        // 배열 시작 "[" 이 있어야 함
+        int arrayStart = candidate.indexOf('[');
+        if (arrayStart < 0) return null;
+        // 마지막 "}" 뒤에 쉼표가 있을 수 있으므로 제거하고 "]" 닫기
+        String trimmed = candidate.substring(arrayStart).stripTrailing();
+        if (trimmed.endsWith(",")) trimmed = trimmed.substring(0, trimmed.length() - 1);
+        return trimmed + "]";
     }
 
     /** Returns [braces, brackets, inString(0 or 1)] */

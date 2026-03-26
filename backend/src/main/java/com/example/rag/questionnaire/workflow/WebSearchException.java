@@ -4,8 +4,8 @@ public class WebSearchException extends RuntimeException {
 
     private final int statusCode;
 
-    public WebSearchException(int statusCode, String responseBody) {
-        super(toMessage(statusCode, responseBody));
+    public WebSearchException(int statusCode) {
+        super(toMessage(statusCode));
         this.statusCode = statusCode;
     }
 
@@ -13,7 +13,7 @@ public class WebSearchException extends RuntimeException {
         return statusCode;
     }
 
-    private static String toMessage(int statusCode, String responseBody) {
+    private static String toMessage(int statusCode) {
         return switch (statusCode) {
             case 429 -> "웹 검색 API 요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.";
             case 432 -> "웹 검색 API 사용량 한도를 초과했습니다. 관리자에게 문의해 주세요.";

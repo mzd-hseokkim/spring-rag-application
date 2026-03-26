@@ -12,8 +12,8 @@ import com.example.rag.generation.dto.GenerationProgressEvent;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.generation.renderer.DocumentRendererService;
 import com.example.rag.questionnaire.workflow.Requirement;
+import com.example.rag.questionnaire.workflow.RequirementCacheService;
 import com.example.rag.questionnaire.workflow.RequirementExtractor;
-import com.example.rag.questionnaire.workflow.QuestionnaireGeneratorService;
 import com.example.rag.questionnaire.workflow.TavilySearchService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.example.rag.search.ChunkSearchResult;
@@ -37,10 +37,18 @@ public class GenerationWorkflowService {
 
     private static final Logger log = LoggerFactory.getLogger(GenerationWorkflowService.class);
     private static final int MAX_RETRIES = 2;
+    private static final String JOB_NOT_FOUND = "Job not found: ";
+    private static final String STEP_STATUS_PROCESSING = "PROCESSING";
+    private static final String STEP_STATUS_COMPLETE = "COMPLETE";
+    private static final String STEP_STATUS_FAILED = "FAILED";
+    private static final String FIELD_REQUIREMENTS = "requirements";
+    private static final String FIELD_MAPPING = "mapping";
+    private static final String MSG_CACHED_REQUIREMENTS = "개를 사용합니다.";
 
     private final ContentGeneratorService contentGenerator;
     private final OutlineExtractor outlineExtractor;
     private final RequirementExtractor requirementExtractor;
+    private final RequirementCacheService requirementCache;
     private final RequirementMapper requirementMapper;
     private final TavilySearchService tavilySearchService;
     private final DocumentRendererService rendererService;
@@ -54,6 +62,7 @@ public class GenerationWorkflowService {
     public GenerationWorkflowService(ContentGeneratorService contentGenerator,
                                      OutlineExtractor outlineExtractor,
                                      RequirementExtractor requirementExtractor,
+                                     RequirementCacheService requirementCache,
                                      RequirementMapper requirementMapper,
                                      TavilySearchService tavilySearchService,
                                      DocumentRendererService rendererService,
@@ -66,6 +75,7 @@ public class GenerationWorkflowService {
         this.contentGenerator = contentGenerator;
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
+        this.requirementCache = requirementCache;
         this.requirementMapper = requirementMapper;
         this.tavilySearchService = tavilySearchService;
         this.rendererService = rendererService;
@@ -81,7 +91,7 @@ public class GenerationWorkflowService {
     public void execute(GenerationJob detachedJob, List<UUID> documentIds) {
         // @Async는 별도 스레드에서 실행되므로, 호출측 트랜잭션 커밋 후 DB에서 다시 조회 (template, user eager fetch)
         GenerationJob job = jobRepository.findByIdWithTemplate(detachedJob.getId())
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + detachedJob.getId()));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + detachedJob.getId()));
         try {
             // Phase 1: PLAN
             updateStatus(job, GenerationStatus.PLANNING);
@@ -155,48 +165,42 @@ public class GenerationWorkflowService {
     @Async("ingestionExecutor")
     public void extractOutline(UUID jobId, List<UUID> customerDocIds) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
             // Phase 1: 고객문서 전체 청크 로드
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "고객 문서를 읽고 있습니다..."));
-            List<String> customerChunks = new ArrayList<>();
-            for (UUID docId : customerDocIds) {
-                List<DocumentChunk> chunks = chunkRepository.findByDocumentIdOrderByChunkIndex(docId);
-                for (DocumentChunk chunk : chunks) {
-                    customerChunks.add(chunk.getContent());
-                }
-            }
+            List<String> customerChunks = loadCustomerChunks(customerDocIds);
             log.info("Generation job {} - loaded {} total chunks from {} customer documents",
                     jobId, customerChunks.size(), customerDocIds.size());
 
             // Phase 2: 요구사항 — 이미 추출된 것이 있으면 재사용, 없으면 추출
-            List<Requirement> requirements = List.of();
-            if (job.getRequirementMapping() != null) {
-                try {
-                    var parsed = objectMapper.readTree(job.getRequirementMapping());
-                    if (parsed.has("requirements") && parsed.get("requirements").size() > 0) {
-                        requirements = objectMapper.readValue(
-                                parsed.get("requirements").toString(),
-                                new TypeReference<List<Requirement>>() {});
-                        log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
-                        emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                                "기존 요구사항 " + requirements.size() + "개를 사용합니다."));
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to parse existing requirements: {}", e.getMessage());
-                }
+            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+            if (!requirements.isEmpty()) {
+                log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
+                emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                        "기존 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
             }
 
             if (requirements.isEmpty()) {
-                emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 추출하고 있습니다..."));
-                requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
-                        msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
-                        partialReqs -> emitRequirements(job, partialReqs));
+                // 공유 캐시에서 확인
+                requirements = requirementCache.get(customerDocIds);
+                if (!requirements.isEmpty()) {
+                    emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                            "캐시된 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
+                    log.info("Generation job {} - using {} cached requirements", jobId, requirements.size());
+                    emitRequirements(job, requirements);
+                } else {
+                    emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 추출하고 있습니다..."));
+                    requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
+                            msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
+                            partialReqs -> emitRequirements(job, partialReqs));
+                    requirementCache.put(customerDocIds, requirements);
+                }
 
                 // 요구사항을 job에 미리 저장 (Step 3에서 재활용)
                 var reqData = new java.util.LinkedHashMap<String, Object>();
-                reqData.put("requirements", requirements);
-                reqData.put("mapping", java.util.Map.of());
+                reqData.put(FIELD_REQUIREMENTS, requirements);
+                reqData.put(FIELD_MAPPING, java.util.Map.of());
                 job.setRequirementMapping(toJson(reqData));
             }
 
@@ -217,7 +221,7 @@ public class GenerationWorkflowService {
                     msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)));
             job.setOutline(outlineExtractor.toJson(outline));
             job.setCurrentStep(2);
-            job.setStepStatus("COMPLETE");
+            job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.DRAFT);
             jobRepository.save(job);
 
@@ -228,7 +232,7 @@ public class GenerationWorkflowService {
         } catch (Exception e) {
             log.error("Generation job {} outline extraction failed", jobId, e);
             job.setErrorMessage(e.getMessage());
-            job.setStepStatus("FAILED");
+            job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
@@ -242,44 +246,37 @@ public class GenerationWorkflowService {
     @Async("ingestionExecutor")
     public void mapRequirements(UUID jobId, List<UUID> customerDocIds) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
             job.setStatus(GenerationStatus.MAPPING);
             job.setCurrentStep(3);
-            job.setStepStatus("PROCESSING");
+            job.setStepStatus(STEP_STATUS_PROCESSING);
             jobRepository.save(job);
 
             // Step 2에서 미리 추출된 요구사항이 있는지 확인
-            List<Requirement> requirements = List.of();
-            if (job.getRequirementMapping() != null) {
-                try {
-                    var parsed = objectMapper.readTree(job.getRequirementMapping());
-                    if (parsed.has("requirements") && parsed.get("requirements").size() > 0) {
-                        requirements = objectMapper.readValue(
-                                parsed.get("requirements").toString(),
-                                new TypeReference<List<Requirement>>() {});
-                        log.info("Generation job {} - reusing {} requirements from Step 2", jobId, requirements.size());
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to parse existing requirements: {}", e.getMessage());
-                }
+            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+            if (!requirements.isEmpty()) {
+                log.info("Generation job {} - reusing {} requirements from Step 2", jobId, requirements.size());
             }
 
-            // 기존 요구사항이 없으면 전체 문서에서 추출
+            // 기존 요구사항이 없으면 공유 캐시 확인 → 없으면 추출
             if (requirements.isEmpty()) {
-                emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, "고객 문서 전체를 읽고 요구사항을 추출하고 있습니다..."));
-                List<String> customerChunks = new ArrayList<>();
-                for (UUID docId : customerDocIds) {
-                    List<DocumentChunk> chunks = chunkRepository.findByDocumentIdOrderByChunkIndex(docId);
-                    for (DocumentChunk chunk : chunks) {
-                        customerChunks.add(chunk.getContent());
-                    }
-                }
-                log.info("Generation job {} - loaded {} total chunks for requirement extraction", jobId, customerChunks.size());
+                requirements = requirementCache.get(customerDocIds);
+                if (!requirements.isEmpty()) {
+                    emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING,
+                            "캐시된 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
+                    log.info("Generation job {} - using {} cached requirements for mapping", jobId, requirements.size());
+                    emitRequirements(job, requirements);
+                } else {
+                    emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, "고객 문서 전체를 읽고 요구사항을 추출하고 있습니다..."));
+                    List<String> customerChunks = loadCustomerChunks(customerDocIds);
+                    log.info("Generation job {} - loaded {} total chunks for requirement extraction", jobId, customerChunks.size());
 
-                requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
-                        msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, msg)),
-                        partialReqs -> emitRequirements(job, partialReqs));
+                    requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
+                            msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING, msg)),
+                            partialReqs -> emitRequirements(job, partialReqs));
+                    requirementCache.put(customerDocIds, requirements);
+                }
             }
 
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.MAPPING,
@@ -294,22 +291,22 @@ public class GenerationWorkflowService {
 
             // 매핑 결과 저장 (requirements 목록도 함께 저장)
             var result = new java.util.LinkedHashMap<String, Object>();
-            result.put("requirements", requirements);
-            result.put("mapping", mapping);
+            result.put(FIELD_REQUIREMENTS, requirements);
+            result.put(FIELD_MAPPING, mapping);
 
             job.setRequirementMapping(toJson(result));
             job.setCurrentStep(3);
-            job.setStepStatus("COMPLETE");
+            job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.DRAFT);
             jobRepository.save(job);
 
-            emitEvent(job, GenerationProgressEvent.complete("requirements"));
+            emitEvent(job, GenerationProgressEvent.complete(FIELD_REQUIREMENTS));
             log.info("Generation job {} - requirement mapping complete: {} keys", jobId, mapping.size());
 
         } catch (Exception e) {
             log.error("Generation job {} requirement mapping failed", jobId, e);
             job.setErrorMessage(e.getMessage());
-            job.setStepStatus("FAILED");
+            job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
@@ -321,38 +318,25 @@ public class GenerationWorkflowService {
      */
     @Async("ingestionExecutor")
     public void generateWizardSections(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch) {
-        generateWizardSections(jobId, refDocIds, includeWebSearch, List.of());
+        generateWizardSections(jobId, refDocIds, includeWebSearch, List.of(), false);
     }
 
     @Async("ingestionExecutor")
-    public void generateWizardSections(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch, List<String> filterKeys) {
+    public void generateWizardSections(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch, List<String> filterKeys, boolean forceRegenerate) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
             job.setStatus(GenerationStatus.GENERATING);
             job.setCurrentStep(4);
-            job.setStepStatus("PROCESSING");
+            job.setStepStatus(STEP_STATUS_PROCESSING);
             jobRepository.save(job);
 
             // 목차 파싱
             List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
 
             // 요구사항 매핑 파싱
-            Map<String, List<String>> mapping = Map.of();
-            List<Requirement> requirements = List.of();
-            if (job.getRequirementMapping() != null) {
-                try {
-                    var parsed = objectMapper.readTree(job.getRequirementMapping());
-                    requirements = objectMapper.readValue(
-                            parsed.get("requirements").toString(),
-                            new TypeReference<List<Requirement>>() {});
-                    mapping = objectMapper.readValue(
-                            parsed.get("mapping").toString(),
-                            new TypeReference<Map<String, List<String>>>() {});
-                } catch (Exception e) {
-                    log.warn("Failed to parse requirement mapping: {}", e.getMessage());
-                }
-            }
+            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+            Map<String, List<String>> mapping = parseMappingFromJson(job.getRequirementMapping());
 
             Map<String, Requirement> reqMap = new java.util.HashMap<>();
             for (Requirement r : requirements) reqMap.put(r.id(), r);
@@ -382,16 +366,20 @@ public class GenerationWorkflowService {
             // 기존에 생성된 섹션이 있으면 복원 (이어서 생성)
             List<SectionContent> sections = new ArrayList<>();
             java.util.Set<String> existingKeys = new java.util.HashSet<>();
-            if (job.getGeneratedSections() != null) {
-                try {
-                    List<SectionContent> existing = objectMapper.readValue(job.getGeneratedSections(),
-                            new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {});
-                    sections.addAll(existing);
-                    existing.forEach(s -> existingKeys.add(s.key()));
-                    log.info("Generation job {} - resuming with {} existing sections", jobId, existing.size());
-                } catch (Exception e) {
-                    log.warn("Failed to parse existing sections, starting fresh: {}", e.getMessage());
+            List<SectionContent> existing = parseSections(job.getGeneratedSections());
+            if (!existing.isEmpty()) {
+                // forceRegenerate이면 선택된 섹션의 기존 결과를 제거
+                if (forceRegenerate && !filterKeys.isEmpty()) {
+                    java.util.Set<String> forceKeys = new java.util.HashSet<>(filterKeys);
+                    existing = existing.stream()
+                            .filter(s -> forceKeys.stream().noneMatch(fk -> s.key().equals(fk) || s.key().startsWith(fk + ".")))
+                            .toList();
+                    log.info("Generation job {} - force regenerating {} top-level keys, kept {} existing sections",
+                            jobId, filterKeys.size(), existing.size());
                 }
+                sections.addAll(existing);
+                existing.forEach(s -> existingKeys.add(s.key()));
+                log.info("Generation job {} - resuming with {} existing sections", jobId, existing.size());
             }
 
             for (int i = 0; i < leafSections.size(); i++) {
@@ -407,67 +395,7 @@ public class GenerationWorkflowService {
 
                 emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title, leaf.key));
 
-                // 해당 섹션의 요구사항 텍스트
-                String reqText = leaf.requirementIds.stream()
-                        .map(reqMap::get)
-                        .filter(java.util.Objects::nonNull)
-                        .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
-                        .collect(java.util.stream.Collectors.joining("\n"));
-
-                // LLM으로 검색어 생성
-                List<String> searchQueries = generateSearchQueries(leaf, reqText);
-                log.debug("Section '{}' search queries: {}", leaf.title, searchQueries);
-
-                // 참조문서 RAG 검색 — 생성된 검색어로
-                List<String> ragContext = List.of();
-                List<String> sources = new ArrayList<>();
-                if (!refDocIds.isEmpty()) {
-                    java.util.LinkedHashSet<String> uniqueChunks = new java.util.LinkedHashSet<>();
-                    List<String> ragSourceList = new ArrayList<>();
-                    for (String query : searchQueries) {
-                        List<ChunkSearchResult> results = searchService.searchDirect(query, refDocIds);
-                        results.forEach(r -> {
-                            uniqueChunks.add(r.contextContent());
-                            ragSourceList.add("[문서] " + r.filename() + " (청크 #" + r.chunkIndex() + ")");
-                        });
-                    }
-                    ragContext = new ArrayList<>(uniqueChunks);
-                    ragSourceList.stream().distinct().forEach(sources::add);
-                }
-
-                // 웹 검색 — 생성된 검색어로
-                List<String> webContext = List.of();
-                if (includeWebSearch) {
-                    List<String> allWebResults = new ArrayList<>();
-                    for (String query : searchQueries) {
-                        List<String> results = tavilySearchService.search(query, 2);
-                        allWebResults.addAll(results);
-                    }
-                    webContext = allWebResults.stream().distinct().toList();
-                    webContext.stream()
-                            .map(this::formatWebSource)
-                            .forEach(sources::add);
-                }
-
-                // 섹션 생성 (재시도 포함)
-                SectionContent content = null;
-                for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-                    try {
-                        content = contentGenerator.generateSectionWithRequirements(
-                                leaf.key, leaf.title, leaf.description, reqText,
-                                systemPrompt, ragContext, webContext, sections);
-                        break;
-                    } catch (Exception e) {
-                        if (attempt == MAX_RETRIES) throw e;
-                        log.warn("Section generation retry {}/{} for '{}': {}", attempt + 1, MAX_RETRIES, leaf.title, e.getMessage());
-                    }
-                }
-                // key 강제 덮어씌움 + 실제 출처(sources) 추가
-                content = new SectionContent(
-                        leaf.key, content.title(), content.content(),
-                        content.highlights(), content.tables(), content.references(),
-                        content.layoutType(), content.layoutData(),
-                        content.governingMessage(), content.visualGuide(), sources);
+                SectionContent content = generateLeafSection(leaf, reqMap, refDocIds, includeWebSearch, systemPrompt, sections);
                 sections.add(content);
                 // 중간 저장 — 프론트엔드가 progress 이벤트마다 조회하여 완료된 섹션을 표시
                 job.setGeneratedSections(toJson(sections));
@@ -477,7 +405,7 @@ public class GenerationWorkflowService {
 
             job.setGeneratedSections(toJson(sections));
             job.setCurrentStep(4);
-            job.setStepStatus("COMPLETE");
+            job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.READY);
             jobRepository.save(job);
 
@@ -487,7 +415,7 @@ public class GenerationWorkflowService {
         } catch (Exception e) {
             log.error("Generation job {} wizard section generation failed", jobId, e);
             job.setErrorMessage(e.getMessage());
-            job.setStepStatus("FAILED");
+            job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
@@ -500,18 +428,16 @@ public class GenerationWorkflowService {
     @Async("ingestionExecutor")
     public void regenerateSection(UUID jobId, String sectionKey, List<UUID> refDocIds, boolean includeWebSearch) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.GENERATING, sectionKey + " 섹션을 재생성하고 있습니다..."));
 
             // 기존 섹션 목록 파싱
-            List<SectionContent> sections;
-            try {
-                sections = new ArrayList<>(objectMapper.readValue(job.getGeneratedSections(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {}));
-            } catch (Exception e) {
-                throw new IllegalStateException("Failed to parse existing sections", e);
+            List<SectionContent> parsed = parseSections(job.getGeneratedSections());
+            if (parsed.isEmpty()) {
+                throw new IllegalStateException("Failed to parse existing sections");
             }
+            List<SectionContent> sections = new ArrayList<>(parsed);
 
             // 대상 섹션 찾기
             int targetIndex = -1;
@@ -526,27 +452,7 @@ public class GenerationWorkflowService {
             }
 
             // 요구사항 매핑에서 해당 섹션의 요구사항 추출
-            String reqText = "";
-            if (job.getRequirementMapping() != null) {
-                try {
-                    var parsed = objectMapper.readTree(job.getRequirementMapping());
-                    var reqList = objectMapper.readValue(parsed.get("requirements").toString(),
-                            new com.fasterxml.jackson.core.type.TypeReference<List<com.example.rag.questionnaire.workflow.Requirement>>() {});
-                    var mapping = objectMapper.readValue(parsed.get("mapping").toString(),
-                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, List<String>>>() {});
-                    Map<String, com.example.rag.questionnaire.workflow.Requirement> reqMap = new java.util.HashMap<>();
-                    for (var r : reqList) reqMap.put(r.id(), r);
-
-                    List<String> reqIds = mapping.getOrDefault(sectionKey, List.of());
-                    reqText = reqIds.stream()
-                            .map(reqMap::get)
-                            .filter(java.util.Objects::nonNull)
-                            .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
-                            .collect(java.util.stream.Collectors.joining("\n"));
-                } catch (Exception e) {
-                    log.warn("Failed to extract requirements for section {}: {}", sectionKey, e.getMessage());
-                }
-            }
+            String reqText = buildRequirementTextForSection(job.getRequirementMapping(), sectionKey);
 
             SectionContent old = sections.get(targetIndex);
             String systemPrompt = job.getTemplate().getSystemPrompt();
@@ -574,7 +480,7 @@ public class GenerationWorkflowService {
 
             // 재생성
             SectionContent regenerated = contentGenerator.generateSectionWithRequirements(
-                    old.key(), old.title(), "", reqText, systemPrompt, ragContext, webContext, previous);
+                    old.title(), "", reqText, systemPrompt, ragContext, webContext, previous);
 
             // key 강제 덮어씌움 + sources 추가
             List<String> sources = new ArrayList<>();
@@ -617,9 +523,11 @@ public class GenerationWorkflowService {
         java.util.regex.Matcher urlMatcher = java.util.regex.Pattern
                 .compile("(https?://[^\\s)]+)").matcher(webResult);
         String url = urlMatcher.find() ? urlMatcher.group(1) : "";
-        log.debug("formatWebSource input ({}chars): {}", webResult.length(),
-                webResult.substring(0, Math.min(webResult.length(), 200)));
-        log.debug("formatWebSource extracted URL: '{}'", url);
+        if (log.isDebugEnabled()) {
+            log.debug("formatWebSource input ({}chars): {}", webResult.length(),
+                    webResult.substring(0, Math.min(webResult.length(), 200)));
+            log.debug("formatWebSource extracted URL: '{}'", url);
+        }
 
         // 제목 추출 (첫 번째 [...] 부분)
         String title = "";
@@ -651,7 +559,7 @@ public class GenerationWorkflowService {
                     .user(u -> u.text(prompt)
                             .param("title", leaf.title)
                             .param("description", desc)
-                            .param("requirements", reqs))
+                            .param(FIELD_REQUIREMENTS, reqs))
                     .call()
                     .content();
 
@@ -716,11 +624,11 @@ public class GenerationWorkflowService {
     @Async("ingestionExecutor")
     public void renderWizardDocument(UUID jobId) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
-                .orElseThrow(() -> new IllegalStateException("Job not found: " + jobId));
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
             job.setStatus(GenerationStatus.RENDERING);
             job.setCurrentStep(5);
-            job.setStepStatus("PROCESSING");
+            job.setStepStatus(STEP_STATUS_PROCESSING);
             jobRepository.save(job);
 
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.RENDERING, "최종 문서를 렌더링하고 있습니다..."));
@@ -731,19 +639,16 @@ public class GenerationWorkflowService {
             DocumentOutline outline = new DocumentOutline(title, "", buildSectionPlans(outlineNodes));
 
             // 섹션 파싱
-            List<SectionContent> sections;
-            try {
-                sections = objectMapper.readValue(job.getGeneratedSections(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {});
-            } catch (Exception e) {
-                throw new IllegalStateException("Failed to parse generated sections", e);
+            List<SectionContent> sections = parseSections(job.getGeneratedSections());
+            if (sections.isEmpty()) {
+                throw new IllegalStateException("Failed to parse generated sections");
             }
 
             // HTML 렌더링
             String outputPath = rendererService.render(job.getTemplate(), outline, sections, job.getUser().getId(), job.getId());
             job.setOutputFilePath(outputPath);
             job.setCurrentStep(5);
-            job.setStepStatus("COMPLETE");
+            job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.COMPLETE);
             jobRepository.save(job);
 
@@ -753,7 +658,7 @@ public class GenerationWorkflowService {
         } catch (Exception e) {
             log.error("Generation job {} wizard rendering failed", jobId, e);
             job.setErrorMessage(e.getMessage());
-            job.setStepStatus("FAILED");
+            job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
@@ -818,7 +723,7 @@ public class GenerationWorkflowService {
         if (emitter == null) return;
         try {
             emitter.send(SseEmitter.event()
-                    .name("requirements")
+                    .name(FIELD_REQUIREMENTS)
                     .data(requirements));
         } catch (IllegalStateException e) {
             log.debug("SSE emitter already completed for job {}: {}", job.getId(), e.getMessage());
@@ -850,6 +755,154 @@ public class GenerationWorkflowService {
             log.debug("SSE client disconnected for job {}: {}", job.getId(), e.getMessage());
             emitterManager.remove(job.getId());
         }
+    }
+
+    /**
+     * 단일 리프 섹션의 검색 + 생성 — Cognitive Complexity 분리용.
+     */
+    private SectionContent generateLeafSection(LeafSection leaf, Map<String, Requirement> reqMap,
+                                                List<UUID> refDocIds, boolean includeWebSearch,
+                                                String systemPrompt, List<SectionContent> sections) {
+        String reqText = leaf.requirementIds.stream()
+                .map(reqMap::get)
+                .filter(java.util.Objects::nonNull)
+                .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
+                .collect(java.util.stream.Collectors.joining("\n"));
+
+        List<String> searchQueries = generateSearchQueries(leaf, reqText);
+
+        List<String> ragContext = List.of();
+        List<String> sources = new ArrayList<>();
+        if (!refDocIds.isEmpty()) {
+            java.util.LinkedHashSet<String> uniqueChunks = new java.util.LinkedHashSet<>();
+            List<String> ragSourceList = new ArrayList<>();
+            for (String query : searchQueries) {
+                List<ChunkSearchResult> results = searchService.searchDirect(query, refDocIds);
+                results.forEach(r -> {
+                    uniqueChunks.add(r.contextContent());
+                    ragSourceList.add("[문서] " + r.filename() + " (청크 #" + r.chunkIndex() + ")");
+                });
+            }
+            ragContext = new ArrayList<>(uniqueChunks);
+            ragSourceList.stream().distinct().forEach(sources::add);
+        }
+
+        List<String> webContext = List.of();
+        if (includeWebSearch) {
+            List<String> allWebResults = new ArrayList<>();
+            for (String query : searchQueries) {
+                allWebResults.addAll(tavilySearchService.search(query, 2));
+            }
+            webContext = allWebResults.stream().distinct().toList();
+            webContext.stream().map(this::formatWebSource).forEach(sources::add);
+        }
+
+        SectionContent content = generateSectionWithRetry(leaf, reqText, systemPrompt, ragContext, webContext, sections);
+        return new SectionContent(
+                leaf.key, content.title(), content.content(),
+                content.highlights(), content.tables(), content.references(),
+                content.layoutType(), content.layoutData(),
+                content.governingMessage(), content.visualGuide(), sources);
+    }
+
+    /**
+     * 특정 섹션에 매핑된 요구사항을 텍스트로 변환 — 중첩 try 방지를 위해 분리.
+     */
+    private String buildRequirementTextForSection(String requirementMappingJson, String sectionKey) {
+        List<Requirement> reqList = parseRequirementsFromMapping(requirementMappingJson);
+        Map<String, List<String>> mapping = parseMappingFromJson(requirementMappingJson);
+        if (reqList.isEmpty()) return "";
+
+        Map<String, Requirement> reqMap = new java.util.HashMap<>();
+        for (Requirement r : reqList) reqMap.put(r.id(), r);
+
+        List<String> reqIds = mapping.getOrDefault(sectionKey, List.of());
+        return reqIds.stream()
+                .map(reqMap::get)
+                .filter(java.util.Objects::nonNull)
+                .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    /**
+     * 재시도를 포함한 섹션 생성 — 중첩 try 방지를 위해 분리.
+     */
+    private SectionContent generateSectionWithRetry(LeafSection leaf, String reqText, String systemPrompt,
+                                                     List<String> ragContext, List<String> webContext,
+                                                     List<SectionContent> sections) {
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                return contentGenerator.generateSectionWithRequirements(
+                        leaf.title, leaf.description, reqText,
+                        systemPrompt, ragContext, webContext, sections);
+            } catch (Exception e) {
+                if (attempt == MAX_RETRIES) throw e;
+                log.warn("Section generation retry {}/{} for '{}': {}", attempt + 1, MAX_RETRIES, leaf.title, e.getMessage());
+            }
+        }
+        throw new IllegalStateException("Unreachable");
+    }
+
+    /**
+     * JSON에서 요구사항 목록을 파싱 — 중첩 try 방지를 위해 분리.
+     */
+    private List<Requirement> parseRequirementsFromMapping(String requirementMappingJson) {
+        if (requirementMappingJson == null) return List.of();
+        try {
+            var parsed = objectMapper.readTree(requirementMappingJson);
+            if (parsed.has(FIELD_REQUIREMENTS) && parsed.get(FIELD_REQUIREMENTS).size() > 0) {
+                return objectMapper.readValue(
+                        parsed.get(FIELD_REQUIREMENTS).toString(),
+                        new TypeReference<List<Requirement>>() {});
+            }
+        } catch (Exception e) {
+            log.warn("Failed to parse existing requirements: {}", e.getMessage());
+        }
+        return List.of();
+    }
+
+    /**
+     * JSON에서 요구사항 매핑(mapping)을 파싱 — 중첩 try 방지를 위해 분리.
+     */
+    private Map<String, List<String>> parseMappingFromJson(String requirementMappingJson) {
+        if (requirementMappingJson == null) return Map.of();
+        try {
+            var parsed = objectMapper.readTree(requirementMappingJson);
+            return objectMapper.readValue(
+                    parsed.get(FIELD_MAPPING).toString(),
+                    new TypeReference<Map<String, List<String>>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse requirement mapping: {}", e.getMessage());
+        }
+        return Map.of();
+    }
+
+    /**
+     * JSON에서 기존 섹션 목록을 파싱 — 중첩 try 방지를 위해 분리.
+     */
+    private List<SectionContent> parseSections(String sectionsJson) {
+        if (sectionsJson == null) return List.of();
+        try {
+            return objectMapper.readValue(sectionsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse sections JSON: {}", e.getMessage());
+        }
+        return List.of();
+    }
+
+    /**
+     * 고객문서에서 전체 청크를 로드 — Cognitive Complexity 분리용.
+     */
+    private List<String> loadCustomerChunks(List<UUID> customerDocIds) {
+        List<String> customerChunks = new ArrayList<>();
+        for (UUID docId : customerDocIds) {
+            List<DocumentChunk> chunks = chunkRepository.findByDocumentIdOrderByChunkIndex(docId);
+            for (DocumentChunk chunk : chunks) {
+                customerChunks.add(chunk.getContent());
+            }
+        }
+        return customerChunks;
     }
 
     private String toJson(Object obj) {

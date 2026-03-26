@@ -1,6 +1,7 @@
 package com.example.rag.generation.workflow;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.common.RagException;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
@@ -24,6 +25,7 @@ public class OutlineExtractor {
     private static final TypeReference<List<OutlineNode>> OUTLINE_LIST_TYPE = new TypeReference<>() {};
     private static final int REQ_SUMMARY_CHAR_LIMIT = 12_000;
     private static final int MAX_PARALLEL = 3;
+    private static final String TRUNCATION_SUFFIX = "\n... (이하 생략)";
 
     private final ModelClientProvider modelClientProvider;
     private final PromptLoader promptLoader;
@@ -100,7 +102,7 @@ public class OutlineExtractor {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
+                    throw new RagException("Outline map interrupted", e);
                 }
             }));
         }
@@ -152,10 +154,10 @@ public class OutlineExtractor {
 
         String rawContent = String.join("\n---\n", customerChunks);
         if (rawContent.length() > 20_000) {
-            rawContent = rawContent.substring(0, 20_000) + "\n... (이하 생략)";
+            rawContent = rawContent.substring(0, 20_000) + TRUNCATION_SUFFIX;
         }
         final String suggestions = rawSuggestions.length() > 20_000
-                ? rawSuggestions.substring(0, 20_000) + "\n... (이하 생략)"
+                ? rawSuggestions.substring(0, 20_000) + TRUNCATION_SUFFIX
                 : rawSuggestions;
 
         // Pass 1: 대분류만 생성
@@ -216,7 +218,7 @@ public class OutlineExtractor {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
+                    throw new RagException("Outline reduce interrupted", e);
                 }
             }));
         }
@@ -259,7 +261,9 @@ public class OutlineExtractor {
 
         String content = client.prompt().user(expandPrompt).call().content();
         List<OutlineNode> children = parseOutline(content);
-        log.info("Expanded section '{}': {} children", topSection.key(), children.size());
+        if (log.isInfoEnabled()) {
+            log.info("Expanded section '{}': {} children", topSection.key(), children.size());
+        }
 
         return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), children);
     }
@@ -274,7 +278,7 @@ public class OutlineExtractor {
         String rawContent = String.join("\n---\n", customerChunks);
         int contentLimit = reqs.length() > 500 ? 25_000 : 50_000;
         if (rawContent.length() > contentLimit) {
-            rawContent = rawContent.substring(0, contentLimit) + "\n... (이하 생략)";
+            rawContent = rawContent.substring(0, contentLimit) + TRUNCATION_SUFFIX;
         }
         final String documentContent = rawContent;
         String input = userInput != null ? userInput : "";
@@ -322,7 +326,7 @@ public class OutlineExtractor {
         try {
             return objectMapper.writeValueAsString(outline);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to serialize outline", e);
+            throw new RagException("Failed to serialize outline", e);
         }
     }
 

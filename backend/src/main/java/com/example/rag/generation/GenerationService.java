@@ -5,13 +5,11 @@ import com.example.rag.auth.AppUser;
 import com.example.rag.auth.AppUserRepository;
 import com.example.rag.generation.dto.GenerationRequest;
 import com.example.rag.generation.dto.GenerationResponse;
-import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.document.Document;
 import com.example.rag.document.DocumentRepository;
 import com.example.rag.generation.template.DocumentTemplate;
 import com.example.rag.generation.template.DocumentTemplateRepository;
 import com.example.rag.generation.workflow.GenerationWorkflowService;
-import com.example.rag.generation.workflow.OutlineExtractor;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -33,26 +31,24 @@ import java.util.stream.Collectors;
 public class GenerationService {
 
     private static final String JOB_NOT_FOUND = "Generation job not found: ";
+    private static final String STEP_STATUS_PROCESSING = "PROCESSING";
 
     private final GenerationJobRepository jobRepository;
     private final DocumentTemplateRepository templateRepository;
     private final DocumentRepository documentRepository;
     private final AppUserRepository userRepository;
     private final GenerationWorkflowService workflowService;
-    private final OutlineExtractor outlineExtractor;
 
     public GenerationService(GenerationJobRepository jobRepository,
                              DocumentTemplateRepository templateRepository,
                              DocumentRepository documentRepository,
                              AppUserRepository userRepository,
-                             GenerationWorkflowService workflowService,
-                             OutlineExtractor outlineExtractor) {
+                             GenerationWorkflowService workflowService) {
         this.jobRepository = jobRepository;
         this.templateRepository = templateRepository;
         this.documentRepository = documentRepository;
         this.userRepository = userRepository;
         this.workflowService = workflowService;
-        this.outlineExtractor = outlineExtractor;
     }
 
     /**
@@ -89,7 +85,7 @@ public class GenerationService {
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         job.setStatus(GenerationStatus.ANALYZING);
         job.setCurrentStep(2);
-        job.setStepStatus("PROCESSING");
+        job.setStepStatus(STEP_STATUS_PROCESSING);
         job.setErrorMessage(null);
         jobRepository.save(job);
 
@@ -122,7 +118,7 @@ public class GenerationService {
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         job.setStatus(GenerationStatus.MAPPING);
         job.setCurrentStep(3);
-        job.setStepStatus("PROCESSING");
+        job.setStepStatus(STEP_STATUS_PROCESSING);
         job.setErrorMessage(null);
         jobRepository.save(job);
 
@@ -151,7 +147,7 @@ public class GenerationService {
      */
     @Transactional
     public void startSectionGeneration(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch,
-                                        List<String> sectionKeys) {
+                                        List<String> sectionKeys, boolean forceRegenerate) {
         GenerationJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         if (includeWebSearch) {
@@ -159,16 +155,17 @@ public class GenerationService {
         }
         job.setStatus(GenerationStatus.GENERATING);
         job.setCurrentStep(4);
-        job.setStepStatus("PROCESSING");
+        job.setStepStatus(STEP_STATUS_PROCESSING);
         job.setErrorMessage(null);
         jobRepository.save(job);
 
         boolean webSearch = job.isIncludeWebSearch();
         List<String> keys = sectionKeys != null ? sectionKeys : List.of();
+        boolean force = forceRegenerate;
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                workflowService.generateWizardSections(jobId, refDocIds, webSearch, keys);
+                workflowService.generateWizardSections(jobId, refDocIds, webSearch, keys, force);
             }
         });
     }
@@ -244,7 +241,7 @@ public class GenerationService {
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         job.setStatus(GenerationStatus.RENDERING);
         job.setCurrentStep(5);
-        job.setStepStatus("PROCESSING");
+        job.setStepStatus(STEP_STATUS_PROCESSING);
         job.setErrorMessage(null);
         jobRepository.save(job);
 
@@ -321,6 +318,14 @@ public class GenerationService {
         } catch (IOException e) {
             throw new RagException("Failed to read generated HTML file", e);
         }
+    }
+
+    @Transactional
+    public GenerationResponse updateTitle(UUID id, String title) {
+        GenerationJob job = jobRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Job not found: " + id));
+        job.setTitle(title);
+        return toResponse(jobRepository.save(job));
     }
 
     @Transactional

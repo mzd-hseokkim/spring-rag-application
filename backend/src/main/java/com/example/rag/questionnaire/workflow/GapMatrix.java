@@ -1,7 +1,6 @@
 package com.example.rag.questionnaire.workflow;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 public record GapMatrix(
         List<GapEntry> entries,
@@ -23,19 +22,8 @@ public record GapMatrix(
             return null;
         }
         try {
-            List<GapEntry> entries = new java.util.ArrayList<>();
-            String summary = "";
+            String summary = extractSummary(markdown);
 
-            // 종합 요약 추출
-            int summaryStart = markdown.indexOf("### 종합 요약\n");
-            if (summaryStart >= 0) {
-                int summaryEnd = markdown.indexOf("\n\n", summaryStart + 14);
-                if (summaryEnd > summaryStart) {
-                    summary = markdown.substring(summaryStart + 14, summaryEnd).trim();
-                }
-            }
-
-            // 요구사항 상세 섹션 파싱
             String detailMarker = "### 요구사항 상세";
             int detailStart = markdown.indexOf(detailMarker);
             if (detailStart < 0) return null;
@@ -43,42 +31,62 @@ public record GapMatrix(
             String detailSection = markdown.substring(detailStart);
             String[] blocks = detailSection.split("####\\s+");
 
+            List<GapEntry> entries = new java.util.ArrayList<>();
             for (String block : blocks) {
                 if (block.isBlank() || block.startsWith("#")) continue;
-
-                String id = "", item = "", importance = "", category = "", description = "";
-                String matchStatus = "", proposalContent = "", gapDescription = "";
-
-                // "REQ-01. 항목명 [상]"
-                int dotIdx = block.indexOf('.');
-                int bracketOpen = block.indexOf('[');
-                int bracketClose = block.indexOf(']');
-                if (dotIdx > 0 && bracketOpen > dotIdx && bracketClose > bracketOpen) {
-                    id = block.substring(0, dotIdx).trim();
-                    item = block.substring(dotIdx + 1, bracketOpen).trim();
-                    importance = block.substring(bracketOpen + 1, bracketClose).trim();
-                }
-
-                for (String line : block.split("\n")) {
-                    line = line.trim();
-                    if (line.startsWith("- **분류**:")) category = line.substring(11).trim();
-                    else if (line.startsWith("- **요구사항**:")) description = line.substring(14).trim();
-                    else if (line.startsWith("- **대응상태**:")) matchStatus = line.substring(14).trim();
-                    else if (line.startsWith("- **제안서 대응 내용**:")) proposalContent = line.substring(21).trim();
-                    else if (line.startsWith("- **갭/미흡 사항**:")) gapDescription = line.substring(18).trim();
-                }
-
-                if (!id.isEmpty()) {
-                    entries.add(new GapEntry(
-                            new Requirement(id, category, item, description, importance),
-                            matchStatus, proposalContent, gapDescription));
-                }
+                GapEntry entry = parseBlock(block);
+                if (entry != null) entries.add(entry);
             }
 
             return entries.isEmpty() ? null : new GapMatrix(entries, summary);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractSummary(String markdown) {
+        int summaryStart = markdown.indexOf("### 종합 요약\n");
+        if (summaryStart >= 0) {
+            int summaryEnd = markdown.indexOf("\n\n", summaryStart + 14);
+            if (summaryEnd > summaryStart) {
+                return markdown.substring(summaryStart + 14, summaryEnd).trim();
+            }
+        }
+        return "";
+    }
+
+    private static GapEntry parseBlock(String block) {
+        String id = "";
+        String item = "";
+        String importance = "";
+        String category = "";
+        String description = "";
+        String matchStatus = "";
+        String proposalContent = "";
+        String gapDescription = "";
+
+        int dotIdx = block.indexOf('.');
+        int bracketOpen = block.indexOf('[');
+        int bracketClose = block.indexOf(']');
+        if (dotIdx > 0 && bracketOpen > dotIdx && bracketClose > bracketOpen) {
+            id = block.substring(0, dotIdx).trim();
+            item = block.substring(dotIdx + 1, bracketOpen).trim();
+            importance = block.substring(bracketOpen + 1, bracketClose).trim();
+        }
+
+        for (String line : block.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("- **분류**:")) category = trimmed.substring(11).trim();
+            else if (trimmed.startsWith("- **요구사항**:")) description = trimmed.substring(14).trim();
+            else if (trimmed.startsWith("- **대응상태**:")) matchStatus = trimmed.substring(14).trim();
+            else if (trimmed.startsWith("- **제안서 대응 내용**:")) proposalContent = trimmed.substring(21).trim();
+            else if (trimmed.startsWith("- **갭/미흡 사항**:")) gapDescription = trimmed.substring(18).trim();
+        }
+
+        if (id.isEmpty()) return null;
+        return new GapEntry(
+                new Requirement(id, category, item, description, importance),
+                matchStatus, proposalContent, gapDescription);
     }
 
     public String toMarkdown() {
@@ -170,6 +178,6 @@ public record GapMatrix(
         String text = entry.requirement().category() + " "
                 + entry.requirement().item() + " "
                 + entry.requirement().description();
-        return keywords.stream().anyMatch(kw -> text.contains(kw));
+        return keywords.stream().anyMatch(text::contains);
     }
 }

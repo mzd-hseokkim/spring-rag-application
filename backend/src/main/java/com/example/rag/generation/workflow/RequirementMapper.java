@@ -1,6 +1,7 @@
 package com.example.rag.generation.workflow;
 
 import com.example.rag.common.PromptLoader;
+import com.example.rag.common.RagException;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
@@ -122,7 +123,7 @@ public class RequirementMapper {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
+                    throw new RagException("Requirement mapping interrupted", e);
                 }
             }));
         }
@@ -158,7 +159,7 @@ public class RequirementMapper {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
+                    throw new RagException("Requirement mapping interrupted", e);
                 }
             }));
         }

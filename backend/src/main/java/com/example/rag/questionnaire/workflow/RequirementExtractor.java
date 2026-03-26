@@ -142,7 +142,7 @@ public class RequirementExtractor {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new RuntimeException("Batch extraction interrupted", e);
+                    throw new com.example.rag.common.RagException("Batch extraction interrupted", e);
                 }
             });
             futures.add(future);

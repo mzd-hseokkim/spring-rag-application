@@ -32,6 +32,8 @@ public class ChatService {
 
     private static final String STEP_GENERATE = "generate";
     private static final String STEP_SEARCH = "search";
+    private static final String ACTION_DIRECT_ANSWER = "DIRECT_ANSWER";
+    private static final String MSG_GENERATING_DIRECT = "직접 답변 생성 중...";
 
     private final String ragSystemPrompt;
     private final String generalSystemPrompt;
@@ -163,8 +165,8 @@ public class ChatService {
 
         return switch (analysis.action()) {
             case DIRECT_ANSWER -> {
-                callback.accept(new AgentStepEvent(STEP_GENERATE, "직접 답변 생성 중..."));
-                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
+                callback.accept(new AgentStepEvent(STEP_GENERATE, MSG_GENERATING_DIRECT));
+                pipelineTracer.logTrace(trace, userId, ACTION_DIRECT_ANSWER);
                 yield chatGeneral(sessionId, message, modelId);
             }
             case CLARIFY -> {
@@ -176,7 +178,7 @@ public class ChatService {
                 callback.accept(new AgentStepEvent("web_search", "웹 검색 중..."));
                 String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
                 pipelineTracer.logTrace(trace, userId, "WEB_SEARCH");
-                yield chatWithWebSearch(sessionId, message, searchQuery, modelId, userId, callback);
+                yield chatWithWebSearch(sessionId, message, searchQuery, modelId, callback);
             }
             case SEARCH -> {
                 String searchQuery = analysis.searchQuery().isBlank() ? message : analysis.searchQuery();
@@ -215,8 +217,8 @@ public class ChatService {
 
         return switch (decision.action()) {
             case DIRECT_ANSWER -> {
-                callback.accept(new AgentStepEvent("direct", "직접 답변 생성 중..."));
-                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
+                callback.accept(new AgentStepEvent("direct", MSG_GENERATING_DIRECT));
+                pipelineTracer.logTrace(trace, userId, ACTION_DIRECT_ANSWER);
                 yield chatGeneral(sessionId, message, modelId);
             }
             case CLARIFY -> {
@@ -226,8 +228,8 @@ public class ChatService {
             }
             case WEB_SEARCH -> {
                 // 레거시 파이프라인에서는 WEB_SEARCH가 발생하지 않지만 exhaustive switch를 위해 처리
-                callback.accept(new AgentStepEvent(STEP_GENERATE, "직접 답변 생성 중..."));
-                pipelineTracer.logTrace(trace, userId, "DIRECT_ANSWER");
+                callback.accept(new AgentStepEvent(STEP_GENERATE, MSG_GENERATING_DIRECT));
+                pipelineTracer.logTrace(trace, userId, ACTION_DIRECT_ANSWER);
                 yield chatGeneral(sessionId, message, modelId);
             }
             case SEARCH -> {
@@ -263,7 +265,7 @@ public class ChatService {
         // 문서 검색 결과가 빈약하고 웹검색이 활성화된 경우 웹검색 폴백
         if (enableWebSearch && searchResults.isEmpty() && tavilySearchService.isAvailable()) {
             callback.accept(new AgentStepEvent("web_search", "문서에서 정보를 찾지 못해 웹 검색 중..."));
-            return chatWithWebSearch(sessionId, message, searchQuery, modelId, userId, callback);
+            return chatWithWebSearch(sessionId, message, searchQuery, modelId, callback);
         }
 
         callback.accept(new AgentStepEvent(STEP_GENERATE, "답변 생성 중..."));
@@ -336,7 +338,7 @@ public class ChatService {
     }
 
     private ChatResponse chatWithWebSearch(String sessionId, String message, String searchQuery,
-                                              String modelId, UUID userId,
+                                              String modelId,
                                               Consumer<AgentStepEvent> callback) {
         List<String> webResults;
         try {
