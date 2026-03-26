@@ -119,6 +119,16 @@ export async function fetchJobs(): Promise<GenerationJob[]> {
   return res.json();
 }
 
+export async function updateJobTitle(id: string, title: string): Promise<GenerationJob> {
+  const res = await authFetch(`/api/generations/${id}/title`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error('Failed to update title');
+  return res.json();
+}
+
 export async function deleteJob(id: string): Promise<void> {
   const res = await authFetch(`/api/generations/${id}`, {
     method: 'DELETE',
@@ -165,11 +175,11 @@ export async function saveRequirementMapping(jobId: string, mapping: unknown): P
   return res.json();
 }
 
-export async function startSectionGeneration(jobId: string, referenceDocumentIds?: string[], includeWebSearch?: boolean, sectionKeys?: string[]): Promise<void> {
+export async function startSectionGeneration(jobId: string, referenceDocumentIds?: string[], includeWebSearch?: boolean, sectionKeys?: string[], forceRegenerate?: boolean): Promise<void> {
   const res = await authFetch(`/api/generations/${jobId}/generate-sections`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ referenceDocumentIds: referenceDocumentIds || [], includeWebSearch: includeWebSearch || false, sectionKeys: sectionKeys || [] }),
+    body: JSON.stringify({ referenceDocumentIds: referenceDocumentIds || [], includeWebSearch: includeWebSearch || false, sectionKeys: sectionKeys || [], forceRegenerate: forceRegenerate || false }),
   });
   if (!res.ok) throw new Error('Failed to start section generation');
 }

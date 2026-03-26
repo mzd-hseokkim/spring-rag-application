@@ -1,12 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, updateJobTitle, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { SectionEditor } from '@/components/generation/SectionEditor';
-import { GenerationProgress } from '@/components/generation/GenerationProgress';
-import { GenerationResult } from '@/components/generation/GenerationResult';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -17,10 +15,109 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { AppSidebar } from '@/components/layout/AppSidebar';
 import {
   ArrowLeft, ArrowRight, FileText, Loader2, AlertCircle, Clock, X, Trash2, Plus,
-  Search, Download, BookOpen, Target, CheckCircle2, Circle, RefreshCw
+  Search, Download, BookOpen, Target, CheckCircle2, Circle, RefreshCw, Pencil, Check
 } from 'lucide-react';
 
 type DocItem = { id: string; filename: string; chunkCount: number };
+
+type Requirement = { id: string; category: string; item: string; description: string; importance: string };
+
+/** 요구사항 ID 정렬: 접두어 그룹별 → 숫자순 (CSR-001 < CSR-002 < DAR-001 < REQ-01) */
+function compareReqIds(a: string, b: string): number {
+  const parse = (id: string) => {
+    const m = id.match(/^([A-Za-z가-힣]+)-?(\d+)$/);
+    return m ? { prefix: m[1], num: parseInt(m[2], 10) } : { prefix: id, num: 0 };
+  };
+  const pa = parse(a), pb = parse(b);
+  if (pa.prefix !== pb.prefix) return pa.prefix.localeCompare(pb.prefix);
+  return pa.num - pb.num;
+}
+
+// ─── Markdown 다운로드 유틸 ───
+
+function outlineToMarkdown(nodes: OutlineNode[], depth = 0): string {
+  return nodes.map(node => {
+    const prefix = '#'.repeat(Math.min(depth + 2, 6));
+    let line = `${prefix} ${node.key}. ${node.title}`;
+    if (node.description) line += `\n\n${node.description}`;
+    const children = node.children.length > 0 ? '\n\n' + outlineToMarkdown(node.children, depth + 1) : '';
+    return line + children;
+  }).join('\n\n');
+}
+
+function buildOutlineMarkdown(outline: OutlineNode[]): string {
+  return `# 목차 구성\n\n${outlineToMarkdown(outline)}`;
+}
+
+function buildRequirementMarkdown(
+  outline: OutlineNode[],
+  requirements: Requirement[],
+  mapping: Record<string, string[]>,
+): string {
+  const reqMap = new Map(requirements.map(r => [r.id, r]));
+  const allMappedIds = new Set(Object.values(mapping).flat());
+  const unmapped = requirements.filter(r => !allMappedIds.has(r.id));
+
+  // 요구사항 목록
+  const lines: string[] = ['# 요구사항 및 목차 배치\n'];
+
+  // 카테고리별 요구사항 요약
+  const categories = new Map<string, Requirement[]>();
+  for (const req of requirements) {
+    const cat = req.category || '기타';
+    const list = categories.get(cat) || [];
+    list.push(req);
+    categories.set(cat, list);
+  }
+
+  const sorted = [...requirements].sort((a, b) => compareReqIds(a.id, b.id));
+  lines.push(`## 요구사항 목록 (${sorted.length}개)\n`);
+  lines.push('| ID | 카테고리 | 항목 | 설명 | 중요도 |');
+  lines.push('|---|---|---|---|---|');
+  for (const req of sorted) {
+    lines.push(`| ${req.id} | ${req.category} | ${req.item} | ${req.description} | ${req.importance} |`);
+  }
+
+  // 목차별 배치
+  lines.push('\n## 목차별 요구사항 배치\n');
+  const renderMapping = (nodes: OutlineNode[], depth: number) => {
+    for (const node of nodes) {
+      const prefix = '#'.repeat(Math.min(depth + 3, 6));
+      const ids = mapping[node.key] || [];
+      const suffix = ids.length > 0 ? ` (${ids.length}개)` : '';
+      lines.push(`${prefix} ${node.key}. ${node.title}${suffix}\n`);
+      if (ids.length > 0) {
+        for (const id of ids) {
+          const req = reqMap.get(id);
+          if (req) lines.push(`- **[${req.id}]** [${req.importance}] ${req.item}: ${req.description}`);
+        }
+        lines.push('');
+      }
+      if (node.children.length > 0) renderMapping(node.children, depth + 1);
+    }
+  };
+  renderMapping(outline, 0);
+
+  // 미배치
+  if (unmapped.length > 0) {
+    lines.push(`## 미배치 요구사항 (${unmapped.length}개)\n`);
+    for (const req of unmapped) {
+      lines.push(`- **[${req.id}]** [${req.importance}] ${req.item}: ${req.description}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function downloadMarkdown(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // ─── DocPicker (질의서 페이지에서 재사용 가능한 패턴) ───
 function DocPicker({ label, description, icon, selectedItems, onToggle, onRemove }: {
@@ -31,7 +128,7 @@ function DocPicker({ label, description, icon, selectedItems, onToggle, onRemove
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<DocItem[]>([]);
   const [searching, setSearching] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const selectedIds = selectedItems.map(d => d.id);
 
   const doSearch = useCallback(async (keyword: string) => {
@@ -116,7 +213,6 @@ function StepIndicator({ current, maxReached, onStepClick, title, jobSettings }:
       {/* 스텝 표시 */}
       <div className="flex items-center gap-1">
         {STEPS.map((step, i) => {
-          const isCompleted = step.num < current;
           const isVisited = step.num <= maxReached;
           const isCurrent = step.num === current;
           const canClick = isVisited;
@@ -232,7 +328,7 @@ export function GeneratePage() {
   const [jobId, setJobId] = useState<string | null>(null);
 
   // Step 3 state
-  const [requirements, setRequirements] = useState<Array<{ id: string; category: string; item: string; description: string; importance: string }>>([]);
+  const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [reqMapping, setReqMapping] = useState<Record<string, string[]>>({});
   const [mapping, setMapping] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
@@ -261,7 +357,7 @@ export function GeneratePage() {
 
   // 페이지 진입 시 진행 중인 Job이 있으면 상태 복원 + 폴링
   const resumedRef = useRef(false);
-  const pollingRef = useRef<ReturnType<typeof setInterval>>();
+  const pollingRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   useEffect(() => {
     if (resumedRef.current || gen.jobs.length === 0 || jobId) return;
@@ -597,7 +693,6 @@ export function GeneratePage() {
   const handleSaveMapping = async () => {
     if (!jobId) return;
     await saveRequirementMapping(jobId, { requirements, mapping: reqMapping });
-    const leafCount = (() => { const collect = (nodes: OutlineNode[]): number => nodes.reduce((sum, n) => sum + (n.children.length > 0 ? collect(n.children) : 1), 0); return collect(outline); })();
     // Step 4로 이동만 — 자동 생성하지 않음 (사용자가 선택 후 생성)
     setWizardStep(4);
     // 대분류 전체 체크 초기화
@@ -605,7 +700,7 @@ export function GeneratePage() {
   };
 
   // Step 4: 섹션 생성
-  const handleStartSectionGeneration = async (filterKeys?: string[]) => {
+  const handleStartSectionGeneration = async (filterKeys?: string[], forceRegenerate?: boolean) => {
     if (!jobId) return;
     setGenerating(true);
     setGenerateError(null);
@@ -619,7 +714,7 @@ export function GeneratePage() {
       const job = gen.jobs.find(j => j.id === jobId);
       const webSearch = job?.includeWebSearch ?? includeWebSearch;
       const refIds = refDocs.length > 0 ? refDocs.map(d => d.id) : undefined;
-      await startSectionGeneration(jobId, refIds, webSearch, filterKeys);
+      await startSectionGeneration(jobId, refIds, webSearch, filterKeys, forceRegenerate);
 
       const token = localStorage.getItem('accessToken');
       const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
@@ -891,7 +986,7 @@ export function GeneratePage() {
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {gen.jobs.length === 0 && <p className="text-xs text-sidebar-foreground/40 px-2">아직 생성된 문서가 없습니다.</p>}
-          {gen.jobs.map(job => <JobHistoryItem key={job.id} job={job} onDelete={gen.removeJob} onLoad={handleLoadJob} />)}
+          {gen.jobs.map(job => <JobHistoryItem key={job.id} job={job} onDelete={gen.removeJob} onLoad={handleLoadJob} onRename={async (id, title) => { await updateJobTitle(id, title); gen.loadJobs(); }} />)}
         </div>
       </AppSidebar>
 
@@ -1029,6 +1124,11 @@ export function GeneratePage() {
                       {analyzing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
                       {analyzing ? '추출 중...' : '목차 재추출'}
                     </Button>
+                    {outline.length > 0 && (
+                      <Button variant="outline" onClick={() => downloadMarkdown(buildOutlineMarkdown(outline), '목차.md')}>
+                        <Download className="h-4 w-4 mr-1.5" />목차 다운로드
+                      </Button>
+                    )}
                   </div>
                   <Button onClick={handleSaveOutline} disabled={analyzing || outline.length === 0}>
                     <ArrowRight className="h-4 w-4 mr-1.5" />다음 (요구사항 배치)
@@ -1080,6 +1180,13 @@ export function GeneratePage() {
                     <Button variant="outline" onClick={handleStartMapping} disabled={mapping}>
                       <RefreshCw className="h-4 w-4 mr-1.5" />요구사항 재배치
                     </Button>
+                    {requirements.length > 0 && (
+                      <Button variant="outline" onClick={() => downloadMarkdown(
+                        buildRequirementMarkdown(outline, requirements, reqMapping), '요구사항_배치.md'
+                      )}>
+                        <Download className="h-4 w-4 mr-1.5" />다운로드
+                      </Button>
+                    )}
                   </div>
                   <Button onClick={handleSaveMapping} disabled={mapping || requirements.length === 0}>
                     <ArrowRight className="h-4 w-4 mr-1.5" />다음 (내용 생성)
@@ -1130,7 +1237,17 @@ export function GeneratePage() {
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={() => handleStartSectionGeneration(Array.from(checkedTopKeys))}
+                      onClick={() => {
+                        const keys = Array.from(checkedTopKeys);
+                        const hasExisting = sections.some(s => keys.some(k => s.key === k || s.key.startsWith(k + '.')));
+                        if (hasExisting) {
+                          if (window.confirm('이미 생성된 상세 내용이 있습니다. 삭제하고 재생성하시겠습니까?')) {
+                            handleStartSectionGeneration(keys, true);
+                          }
+                        } else {
+                          handleStartSectionGeneration(keys);
+                        }
+                      }}
                       disabled={generating || checkedTopKeys.size === 0}
                     >
                       <CheckCircle2 className="h-4 w-4 mr-1.5" />선택 생성 ({checkedTopKeys.size})
@@ -1225,15 +1342,29 @@ export function GeneratePage() {
   );
 }
 
-function JobHistoryItem({ job, onDelete, onLoad }: { job: GenerationJob; onDelete: (id: string) => void; onLoad: (job: GenerationJob) => void }) {
+function JobHistoryItem({ job, onDelete, onLoad, onRename }: { job: GenerationJob; onDelete: (id: string) => void; onLoad: (job: GenerationJob) => void; onRename: (id: string, title: string) => void }) {
   const isProcessing = ['PLANNING', 'GENERATING', 'REVIEWING', 'RENDERING', 'ANALYZING', 'MAPPING'].includes(job.status);
   const statusIcon = job.status === 'COMPLETE' ? <FileText className="h-3.5 w-3.5 text-green-500" />
     : job.status === 'FAILED' ? <AlertCircle className="h-3.5 w-3.5 text-destructive" />
     : isProcessing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
     : <Circle className="h-3.5 w-3.5 text-muted-foreground" />;
 
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(job.title || job.templateName);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
+
+  const commitRename = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== (job.title || job.templateName)) {
+      onRename(job.id, trimmed);
+    }
+    setEditing(false);
+  };
+
   const handleClick = async () => {
-    // job 상세 조회 후 위자드 상태 복원
+    if (editing) return;
     try {
       const updated = await fetchJob(job.id);
       onLoad(updated);
@@ -1259,11 +1390,27 @@ function JobHistoryItem({ job, onDelete, onLoad }: { job: GenerationJob; onDelet
       <button onClick={handleClick} className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
         {statusIcon}
         <div className="flex-1 min-w-0">
-          <p className="text-sm truncate">{job.title || job.templateName}</p>
+          {editing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setEditValue(job.title || job.templateName); setEditing(false); } }}
+              onClick={e => e.stopPropagation()}
+              className="text-sm w-full bg-transparent border-b border-primary outline-none px-0 py-0"
+            />
+          ) : (
+            <p className="text-sm truncate" title={job.title || job.templateName}>{job.title || job.templateName}</p>
+          )}
           <div className="flex items-center gap-1 text-xs text-sidebar-foreground/40">
             <Clock className="h-3 w-3" />{new Date(job.createdAt).toLocaleDateString('ko-KR')}
           </div>
         </div>
+      </button>
+      <button onClick={e => { e.stopPropagation(); setEditValue(job.title || job.templateName); setEditing(true); }}
+        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all cursor-pointer shrink-0" title="이름 변경">
+        <Pencil className="h-3.5 w-3.5" />
       </button>
       {job.status === 'COMPLETE' && (
         <button onClick={handleDownload} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all cursor-pointer shrink-0" title="다운로드">

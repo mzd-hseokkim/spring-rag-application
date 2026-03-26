@@ -3,6 +3,7 @@ package com.example.rag.document.pipeline;
 import com.example.rag.document.*;
 import com.example.rag.document.parser.DocumentParser;
 import com.example.rag.model.ModelClientProvider;
+import com.example.rag.questionnaire.workflow.RequirementCacheService;
 import com.example.rag.settings.ChunkingSettings;
 import com.example.rag.settings.EmbeddingSettings;
 import com.example.rag.settings.SettingsService;
@@ -36,6 +37,7 @@ public class IngestionPipeline {
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository chunkRepository;
     private final IngestionEventPublisher eventPublisher;
+    private final RequirementCacheService requirementCache;
     private final TransactionTemplate tx;
 
     public IngestionPipeline(List<DocumentParser> parsers,
@@ -44,6 +46,7 @@ public class IngestionPipeline {
                              DocumentRepository documentRepository,
                              DocumentChunkRepository chunkRepository,
                              IngestionEventPublisher eventPublisher,
+                             RequirementCacheService requirementCache,
                              PlatformTransactionManager txManager) {
         this.parsers = parsers;
         this.modelProvider = modelProvider;
@@ -51,6 +54,7 @@ public class IngestionPipeline {
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
         this.eventPublisher = eventPublisher;
+        this.requirementCache = requirementCache;
         this.tx = new TransactionTemplate(txManager);
     }
 
@@ -133,6 +137,9 @@ public class IngestionPipeline {
                 doc.markCompleted(allChildContents.size());
                 documentRepository.save(doc);
             });
+
+            // 문서 내용이 변경되었으므로 해당 문서의 요구사항 캐시 무효화
+            requirementCache.evict(List.of(documentId));
 
             eventPublisher.publish(documentId, "COMPLETED",
                     parentChunks.size() + "개 parent, " + allChildContents.size() + "개 child 처리 완료");

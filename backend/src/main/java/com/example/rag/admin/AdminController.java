@@ -3,6 +3,7 @@ package com.example.rag.admin;
 import com.example.rag.audit.AuditService;
 import com.example.rag.auth.UserRole;
 import com.example.rag.document.pipeline.ReindexService;
+import com.example.rag.questionnaire.workflow.RequirementCacheService;
 import com.example.rag.settings.ChunkingSettings;
 import com.example.rag.settings.EmbeddingSettings;
 import com.example.rag.settings.SettingsService;
@@ -30,15 +31,18 @@ public class AdminController {
     private final AdminService adminService;
     private final SettingsService settingsService;
     private final ReindexService reindexService;
+    private final RequirementCacheService requirementCache;
     private final AuditService auditService;
 
     public AdminController(AdminService adminService,
                            SettingsService settingsService,
                            ReindexService reindexService,
+                           RequirementCacheService requirementCache,
                            AuditService auditService) {
         this.adminService = adminService;
         this.settingsService = settingsService;
         this.reindexService = reindexService;
+        this.requirementCache = requirementCache;
         this.auditService = auditService;
     }
 
@@ -136,6 +140,15 @@ public class AdminController {
         reindexService.reindexAll();
         auditService.log(currentUserId(auth), null, "REINDEX_ALL", TARGET_DOCUMENT, null);
         return Map.of(KEY_MESSAGE, "전체 재인덱싱이 시작되었습니다.");
+    }
+
+    // --- 캐시 관리 ---
+
+    @DeleteMapping("/cache/requirements")
+    public Map<String, Object> clearRequirementCache(Authentication auth) {
+        int deleted = requirementCache.evictAll();
+        auditService.log(currentUserId(auth), null, "CLEAR_CACHE", "REQUIREMENT_CACHE", null);
+        return Map.of(KEY_MESSAGE, "요구사항 캐시가 삭제되었습니다.", "deleted", deleted);
     }
 
     // --- 설정 ---

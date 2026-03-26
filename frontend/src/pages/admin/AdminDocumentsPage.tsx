@@ -180,7 +180,7 @@ export function AdminDocumentsPage() {
             <div className="space-y-1">
               <SettingLabel label="청크 모드" tooltip="문서를 청크로 분할하는 전략. semantic은 임베딩 기반 의미 분할, fixed는 고정 길이 분할." />
               <Select value={chunkSettings.mode}
-                onValueChange={v => setChunkSettings({ ...chunkSettings, mode: v })}>
+                onValueChange={v => v && setChunkSettings({ ...chunkSettings, mode: v })}>
                 <SelectTrigger className="h-8 w-full text-sm">
                   <SelectValue />
                 </SelectTrigger>

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import type { OutlineNode } from '@/api/generation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ChevronRight, ChevronDown, Plus, Trash2, GripVertical, ArrowUp, ArrowDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
 
 /** "1.2.10" 같은 계층 번호를 자연수 순서로 비교 */
 function compareKeys(a: string, b: string): number {

@@ -72,7 +72,7 @@ export function AdminAuditPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">감사 로그</h1>
-        <Select value={actionFilter} onValueChange={v => { setActionFilter(v === '__all__' ? '' : v); setPage(0); }}>
+        <Select value={actionFilter} onValueChange={v => { setActionFilter(v === '__all__' || v === null ? '' : v); setPage(0); }}>
           <SelectTrigger className="h-8 w-48 text-xs">
             <SelectValue placeholder="전체 액션" />
           </SelectTrigger>

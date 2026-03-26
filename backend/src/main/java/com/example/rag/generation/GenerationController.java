@@ -76,7 +76,7 @@ public class GenerationController {
     public void generateSections(@PathVariable UUID id, @RequestBody GenerateSectionsRequest request) {
         List<UUID> refDocIds = request.referenceDocumentIds() != null ? request.referenceDocumentIds() : List.of();
         List<String> sectionKeys = request.sectionKeys() != null ? request.sectionKeys() : List.of();
-        generationService.startSectionGeneration(id, refDocIds, request.includeWebSearch(), sectionKeys);
+        generationService.startSectionGeneration(id, refDocIds, request.includeWebSearch(), sectionKeys, request.forceRegenerate());
     }
 
     /**
@@ -115,7 +115,7 @@ public class GenerationController {
     }
 
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
-    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch, java.util.List<String> sectionKeys) {}
+    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch, java.util.List<String> sectionKeys, boolean forceRegenerate) {}
 
     @GetMapping("/{id}")
     public GenerationResponse get(@PathVariable UUID id) {
@@ -146,6 +146,11 @@ public class GenerationController {
     @GetMapping(value = "/{id}/preview", produces = MediaType.TEXT_HTML_VALUE)
     public String preview(@PathVariable UUID id) {
         return generationService.getPreviewHtml(id);
+    }
+
+    @PatchMapping("/{id}/title")
+    public GenerationResponse updateTitle(@PathVariable UUID id, @RequestBody java.util.Map<String, String> body) {
+        return generationService.updateTitle(id, body.get("title"));
     }
 
     @DeleteMapping("/{id}")

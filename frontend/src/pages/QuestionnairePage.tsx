@@ -12,9 +12,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AppSidebar } from '@/components/layout/AppSidebar';
-import { FileText, Loader2, AlertCircle, Clock, X, ClipboardList, Target, BookOpen, Trash2, Plus, Search, Download } from 'lucide-react';
+import { FileText, Loader2, AlertCircle, Clock, X, ClipboardList, Target, BookOpen, Trash2, Plus, Search, Download, Pencil } from 'lucide-react';
 import type { QuestionnaireJob } from '@/api/questionnaire';
-import { getQuestionnairePreviewUrl, getQuestionnaireDownloadUrl } from '@/api/questionnaire';
+import { getQuestionnairePreviewUrl, getQuestionnaireDownloadUrl, updateQuestionnaireJobTitle } from '@/api/questionnaire';
 
 type DocItem = { id: string; filename: string; chunkCount: number };
 
@@ -30,7 +30,7 @@ function DocPicker({ label, description, icon, selectedItems, onToggle, onRemove
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<DocItem[]>([]);
   const [searching, setSearching] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const selectedIds = selectedItems.map(d => d.id);
 
   const doSearch = useCallback(async (keyword: string) => {
@@ -201,7 +201,7 @@ export function QuestionnairePage() {
             <p className="text-xs text-sidebar-foreground/40 px-2">아직 생성된 질의서가 없습니다.</p>
           )}
           {qna.jobs.map((job) => (
-            <JobHistoryItem key={job.id} job={job} onDelete={qna.removeJob} />
+            <JobHistoryItem key={job.id} job={job} onDelete={qna.removeJob} onRename={async (id, title) => { await updateQuestionnaireJobTitle(id, title); qna.loadJobs(); }} />
           ))}
         </div>
       </AppSidebar>
@@ -385,7 +385,7 @@ export function QuestionnairePage() {
   );
 }
 
-function JobHistoryItem({ job, onDelete }: { job: QuestionnaireJob; onDelete: (id: string) => void }) {
+function JobHistoryItem({ job, onDelete, onRename }: { job: QuestionnaireJob; onDelete: (id: string) => void; onRename: (id: string, title: string) => void }) {
   const statusIcon = {
     COMPLETE: <ClipboardList className="h-3.5 w-3.5 text-green-500" />,
     FAILED: <AlertCircle className="h-3.5 w-3.5 text-destructive" />,
@@ -394,7 +394,22 @@ function JobHistoryItem({ job, onDelete }: { job: QuestionnaireJob; onDelete: (i
     RENDERING: <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />,
   };
 
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(job.title || '예상 질의서');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
+
+  const commitRename = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== (job.title || '예상 질의서')) {
+      onRename(job.id, trimmed);
+    }
+    setEditing(false);
+  };
+
   const handleClick = () => {
+    if (editing) return;
     if (job.status === 'COMPLETE') {
       const token = localStorage.getItem('accessToken') || '';
       window.open(`${getQuestionnairePreviewUrl(job.id)}?token=${token}`, '_blank');
@@ -420,12 +435,28 @@ function JobHistoryItem({ job, onDelete }: { job: QuestionnaireJob; onDelete: (i
       <button onClick={handleClick} className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
         {statusIcon[job.status]}
         <div className="flex-1 min-w-0">
-          <p className="text-sm truncate">{job.title || '예상 질의서'}</p>
+          {editing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setEditValue(job.title || '예상 질의서'); setEditing(false); } }}
+              onClick={e => e.stopPropagation()}
+              className="text-sm w-full bg-transparent border-b border-primary outline-none px-0 py-0"
+            />
+          ) : (
+            <p className="text-sm truncate" title={job.title || '예상 질의서'}>{job.title || '예상 질의서'}</p>
+          )}
           <div className="flex items-center gap-1 text-xs text-sidebar-foreground/40">
             <Clock className="h-3 w-3" />
             {new Date(job.createdAt).toLocaleDateString('ko-KR')}
           </div>
         </div>
+      </button>
+      <button onClick={e => { e.stopPropagation(); setEditValue(job.title || '예상 질의서'); setEditing(true); }}
+        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all cursor-pointer shrink-0" title="이름 변경">
+        <Pencil className="h-3.5 w-3.5" />
       </button>
       {job.status === 'COMPLETE' && (
         <button

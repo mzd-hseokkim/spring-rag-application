@@ -124,7 +124,12 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
     <div className="flex flex-col h-full">
       <Card className="shrink-0 rounded-none border-x-0 border-t-0 ring-0 py-0">
         <div className="flex items-center justify-between px-4 py-3">
-          <h2 className="text-base font-semibold text-muted-foreground">채팅</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold text-muted-foreground">채팅</h2>
+            <Button variant="outline" size="sm" onClick={onNewSession} disabled={chat.streaming}>
+              새 대화
+            </Button>
+          </div>
           <div className="flex items-center gap-3">
             {hasFilters && (
               <Popover>
@@ -201,9 +206,6 @@ export function ChatView({ models, chat, onNewSession, onSendComplete, onFileDro
               onSelect={setSelectedModelId}
               disabled={chat.streaming}
             />
-            <Button variant="outline" size="sm" onClick={onNewSession} disabled={chat.streaming}>
-              새 대화
-            </Button>
           </div>
         </div>
       </Card>

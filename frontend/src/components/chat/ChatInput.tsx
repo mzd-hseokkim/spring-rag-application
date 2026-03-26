@@ -131,15 +131,13 @@ export function ChatInput({ onSend, onStop, onFileDrop, disabled, streaming, foc
         <Plus className="size-4" />
       </Button>
       <Popover>
-        <PopoverTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className="shrink-0 relative" title="Agentic Tools">
-            <Wrench className="size-4" />
-            {activeToolCount > 0 && (
-              <Badge variant="default" className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none flex items-center justify-center">
-                {activeToolCount}
-              </Badge>
-            )}
-          </Button>
+        <PopoverTrigger className="shrink-0 relative inline-flex items-center justify-center rounded-md h-9 w-9 hover:bg-accent hover:text-accent-foreground cursor-pointer" title="Agentic Tools">
+          <Wrench className="size-4" />
+          {activeToolCount > 0 && (
+            <Badge variant="default" className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none flex items-center justify-center">
+              {activeToolCount}
+            </Badge>
+          )}
         </PopoverTrigger>
         <PopoverContent className="w-56 p-0" align="start" side="top">
           <div className="px-3 py-2 border-b">

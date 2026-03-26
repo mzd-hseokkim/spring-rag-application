@@ -125,6 +125,14 @@ public class QuestionnaireService {
     }
 
     @Transactional
+    public QuestionnaireResponse updateTitle(UUID id, String title) {
+        QuestionnaireJob job = jobRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Job not found: " + id));
+        job.setTitle(title);
+        return toResponse(jobRepository.save(job));
+    }
+
+    @Transactional
     public void deleteJob(UUID id) {
         jobRepository.deleteById(id);
     }

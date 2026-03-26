@@ -235,7 +235,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
         {outline ? (
           outline.map(node => renderOutlineNode(node, 0))
         ) : (
-          slots?.map((slot, i) => {
+          slots?.map((slot) => {
             const sec = sectionMap.get(slot.key);
             const isComplete = !!sec;
             const isGenerating = isLeafGenerating(slot.key);

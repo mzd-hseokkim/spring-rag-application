@@ -98,7 +98,7 @@ export function AdminUsersPage() {
                 <td className="px-4 py-3">{user.email}</td>
                 <td className="px-4 py-3">{user.name}</td>
                 <td className="px-4 py-3">
-                  <Select value={user.role} onValueChange={v => handleRoleChange(user.id, v)}>
+                  <Select value={user.role} onValueChange={v => v && handleRoleChange(user.id, v)}>
                     <SelectTrigger className="w-28 h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>

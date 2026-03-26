@@ -54,7 +54,7 @@ export function OverviewTab() {
             <ResponsiveContainer width="100%" height={250}>
               <PieChart>
                 <Pie data={agentDist} dataKey="count" nameKey="action" cx="50%" cy="50%"
-                     outerRadius={80} label={({ action, percent }) => `${action} ${(percent * 100).toFixed(0)}%`}>
+                     outerRadius={80} label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
                   {agentDist.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip />

@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { OverviewTab } from './dashboard/OverviewTab';
 import { TokenUsageTab } from './dashboard/TokenUsageTab';

@@ -107,7 +107,7 @@ export function SettingsPage() {
                 <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center overflow-hidden shrink-0">
                   {user?.avatarUrl ? (
                     <img src={user.avatarUrl} alt="avatar" className="w-full h-full object-cover"
-                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; e.target.parentElement?.querySelector('.avatar-fallback')?.classList.remove('hidden'); }} />
+                      onError={e => { const img = e.target as HTMLImageElement; img.style.display = 'none'; img.parentElement?.querySelector('.avatar-fallback')?.classList.remove('hidden'); }} />
                   ) : null}
                   <UserIcon className={`size-8 text-muted-foreground avatar-fallback ${user?.avatarUrl ? 'hidden' : ''}`} />
                 </div>

@@ -71,6 +71,16 @@ export async function fetchQuestionnaireJob(id: string): Promise<QuestionnaireJo
   return res.json();
 }
 
+export async function updateQuestionnaireJobTitle(id: string, title: string): Promise<QuestionnaireJob> {
+  const res = await authFetch(`/api/questionnaires/${id}/title`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error('Failed to update title');
+  return res.json();
+}
+
 export async function deleteQuestionnaireJob(id: string): Promise<void> {
   const res = await authFetch(`/api/questionnaires/${id}`, {
     method: 'DELETE',

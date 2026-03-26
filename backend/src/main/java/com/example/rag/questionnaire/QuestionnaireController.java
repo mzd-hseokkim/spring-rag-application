@@ -65,6 +65,11 @@ public class QuestionnaireController {
         return questionnaireService.getPreviewHtml(id);
     }
 
+    @PatchMapping("/{id}/title")
+    public QuestionnaireResponse updateTitle(@PathVariable UUID id, @RequestBody java.util.Map<String, String> body) {
+        return questionnaireService.updateTitle(id, body.get("title"));
+    }
+
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable UUID id) {
