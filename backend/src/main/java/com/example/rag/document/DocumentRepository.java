@@ -1,8 +1,10 @@
 package com.example.rag.document;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,4 +38,14 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
            "AND LOWER(d.filename) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "ORDER BY d.createdAt DESC")
     List<Document> searchByFilename(DocumentStatus status, UUID userId, String keyword);
+
+    @Query(value = "SELECT d.id FROM document d WHERE d.status = 'PENDING' ORDER BY d.created_at LIMIT :batchSize FOR UPDATE SKIP LOCKED", nativeQuery = true)
+    List<UUID> findPendingForClaim(int batchSize);
+
+    @Query("SELECT d FROM Document d WHERE d.status = 'PROCESSING' AND d.leasedUntil < :now")
+    List<Document> findStaleProcessingDocuments(LocalDateTime now);
+
+    @Modifying
+    @Query("UPDATE Document d SET d.leasedUntil = :expiry WHERE d.id = :documentId")
+    void renewLease(UUID documentId, LocalDateTime expiry);
 }

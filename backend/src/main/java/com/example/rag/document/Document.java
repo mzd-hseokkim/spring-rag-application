@@ -58,6 +58,15 @@ public class Document {
     @JoinColumn(name = "user_id")
     private AppUser user;
 
+    @Column(name = "retry_count", nullable = false)
+    private int retryCount = 0;
+
+    @Column(name = "leased_by", length = 100)
+    private String leasedBy;
+
+    @Column(name = "leased_until")
+    private LocalDateTime leasedUntil;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -98,6 +107,19 @@ public class Document {
         this.status = DocumentStatus.PROCESSING;
     }
 
+    public void markProcessing(String workerId, LocalDateTime leaseExpiry) {
+        this.status = DocumentStatus.PROCESSING;
+        this.leasedBy = workerId;
+        this.leasedUntil = leaseExpiry;
+    }
+
+    public void markPendingForRetry() {
+        this.status = DocumentStatus.PENDING;
+        this.retryCount++;
+        this.leasedBy = null;
+        this.leasedUntil = null;
+    }
+
     public void markCompleted(int chunkCount) {
         this.status = DocumentStatus.COMPLETED;
         this.chunkCount = chunkCount;
@@ -107,6 +129,10 @@ public class Document {
         this.status = DocumentStatus.FAILED;
         this.errorMessage = errorMessage;
     }
+
+    public int getRetryCount() { return retryCount; }
+    public String getLeasedBy() { return leasedBy; }
+    public LocalDateTime getLeasedUntil() { return leasedUntil; }
 
     public String getStoredPath() { return storedPath; }
     public void setStoredPath(String storedPath) { this.storedPath = storedPath; }
