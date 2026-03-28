@@ -18,6 +18,12 @@ export interface DocumentTemplate {
   updatedAt: string;
 }
 
+export interface JobDocItem {
+  id: string;
+  filename: string;
+  chunkCount: number;
+}
+
 export interface GenerationJob {
   id: string;
   status: GenerationStatus;
@@ -35,6 +41,8 @@ export interface GenerationJob {
   includeWebSearch: boolean;
   outputFilePath: string | null;
   errorMessage: string | null;
+  customerDocuments: JobDocItem[];
+  referenceDocuments: JobDocItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -175,6 +183,15 @@ export async function saveRequirementMapping(jobId: string, mapping: unknown): P
   return res.json();
 }
 
+export async function generateUnmappedSections(jobId: string): Promise<GenerationJob> {
+  const res = await authFetch(`/api/generations/${jobId}/generate-unmapped-sections`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to generate sections for unmapped requirements');
+  return res.json();
+}
+
 export async function startSectionGeneration(jobId: string, referenceDocumentIds?: string[], includeWebSearch?: boolean, sectionKeys?: string[], forceRegenerate?: boolean): Promise<void> {
   const res = await authFetch(`/api/generations/${jobId}/generate-sections`, {
     method: 'POST',
@@ -184,11 +201,11 @@ export async function startSectionGeneration(jobId: string, referenceDocumentIds
   if (!res.ok) throw new Error('Failed to start section generation');
 }
 
-export async function regenerateSection(jobId: string, sectionKey: string, referenceDocumentIds?: string[], includeWebSearch?: boolean): Promise<void> {
+export async function regenerateSection(jobId: string, sectionKey: string, referenceDocumentIds?: string[], includeWebSearch?: boolean, userInstruction?: string): Promise<void> {
   const res = await authFetch(`/api/generations/${jobId}/regenerate-section/${sectionKey}`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ referenceDocumentIds: referenceDocumentIds || [], includeWebSearch: includeWebSearch || false }),
+    body: JSON.stringify({ referenceDocumentIds: referenceDocumentIds || [], includeWebSearch: includeWebSearch || false, userInstruction: userInstruction || '' }),
   });
   if (!res.ok) throw new Error('Failed to regenerate section');
 }

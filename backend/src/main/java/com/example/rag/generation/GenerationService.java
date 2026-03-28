@@ -34,17 +34,20 @@ public class GenerationService {
     private static final String STEP_STATUS_PROCESSING = "PROCESSING";
 
     private final GenerationJobRepository jobRepository;
+    private final GenerationJobDocumentRepository jobDocumentRepository;
     private final DocumentTemplateRepository templateRepository;
     private final DocumentRepository documentRepository;
     private final AppUserRepository userRepository;
     private final GenerationWorkflowService workflowService;
 
     public GenerationService(GenerationJobRepository jobRepository,
+                             GenerationJobDocumentRepository jobDocumentRepository,
                              DocumentTemplateRepository templateRepository,
                              DocumentRepository documentRepository,
                              AppUserRepository userRepository,
                              GenerationWorkflowService workflowService) {
         this.jobRepository = jobRepository;
+        this.jobDocumentRepository = jobDocumentRepository;
         this.templateRepository = templateRepository;
         this.documentRepository = documentRepository;
         this.userRepository = userRepository;
@@ -73,6 +76,20 @@ public class GenerationService {
         job.setCurrentStep(1);
         job.setStepStatus("COMPLETE");
         job = jobRepository.save(job);
+
+        // 문서 연결 저장
+        UUID savedJobId = job.getId();
+        if (request.customerDocumentIds() != null) {
+            for (UUID docId : request.customerDocumentIds()) {
+                jobDocumentRepository.save(new GenerationJobDocument(savedJobId, docId, "CUSTOMER"));
+            }
+        }
+        if (request.referenceDocumentIds() != null) {
+            for (UUID docId : request.referenceDocumentIds()) {
+                jobDocumentRepository.save(new GenerationJobDocument(savedJobId, docId, "REFERENCE"));
+            }
+        }
+
         return toResponse(job);
     }
 
@@ -139,6 +156,17 @@ public class GenerationService {
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         job.setRequirementMapping(mappingJson);
         jobRepository.save(job);
+        return toResponse(job);
+    }
+
+    /**
+     * Step 3: 미배치 요구사항을 위한 새 목차 섹션 생성
+     */
+    @Transactional
+    public GenerationResponse generateSectionsForUnmapped(UUID jobId) {
+        workflowService.generateSectionsForUnmapped(jobId);
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         return toResponse(job);
     }
 
@@ -218,7 +246,7 @@ public class GenerationService {
      */
     @Transactional
     public void startSingleSectionRegeneration(UUID jobId, String sectionKey,
-                                                List<UUID> refDocIds, boolean includeWebSearch) {
+                                                List<UUID> refDocIds, boolean includeWebSearch, String userInstruction) {
         GenerationJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
         job.setErrorMessage(null);
@@ -227,7 +255,7 @@ public class GenerationService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                workflowService.regenerateSection(jobId, sectionKey, refDocIds, includeWebSearch);
+                workflowService.regenerateSection(jobId, sectionKey, refDocIds, includeWebSearch, userInstruction);
             }
         });
     }
@@ -349,6 +377,33 @@ public class GenerationService {
     }
 
     private GenerationResponse toResponse(GenerationJob job) {
+        List<GenerationJobDocument> jobDocs = jobDocumentRepository.findByJobId(job.getId());
+
+        // 문서 ID → Document 조회
+        List<UUID> allDocIds = jobDocs.stream().map(GenerationJobDocument::getDocumentId).toList();
+        var docMap = documentRepository.findAllById(allDocIds).stream()
+                .collect(Collectors.toMap(Document::getId, d -> d));
+
+        List<GenerationResponse.DocItem> customerDocs = jobDocs.stream()
+                .filter(jd -> "CUSTOMER".equals(jd.getDocumentRole()))
+                .map(jd -> {
+                    Document doc = docMap.get(jd.getDocumentId());
+                    return doc != null
+                            ? new GenerationResponse.DocItem(doc.getId(), doc.getFilename(), doc.getChunkCount())
+                            : new GenerationResponse.DocItem(jd.getDocumentId(), "(삭제된 문서)", 0);
+                })
+                .toList();
+
+        List<GenerationResponse.DocItem> refDocs = jobDocs.stream()
+                .filter(jd -> "REFERENCE".equals(jd.getDocumentRole()))
+                .map(jd -> {
+                    Document doc = docMap.get(jd.getDocumentId());
+                    return doc != null
+                            ? new GenerationResponse.DocItem(doc.getId(), doc.getFilename(), doc.getChunkCount())
+                            : new GenerationResponse.DocItem(jd.getDocumentId(), "(삭제된 문서)", 0);
+                })
+                .toList();
+
         return new GenerationResponse(
                 job.getId(),
                 job.getStatus(),
@@ -366,6 +421,8 @@ public class GenerationService {
                 job.isIncludeWebSearch(),
                 job.getOutputFilePath(),
                 job.getErrorMessage(),
+                customerDocs,
+                refDocs,
                 job.getCreatedAt(),
                 job.getUpdatedAt()
         );

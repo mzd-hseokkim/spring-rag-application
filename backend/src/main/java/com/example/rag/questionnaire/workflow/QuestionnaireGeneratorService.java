@@ -93,7 +93,8 @@ public class QuestionnaireGeneratorService {
      */
     public PersonaQna generateForPersona(Persona persona, String documentAnalysis,
                                           List<String> refContext, List<String> webContext,
-                                          String userInput, int questionCount) {
+                                          String userInput, int questionCount,
+                                          boolean proposalProvided) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
 
         String systemPrompt;
@@ -120,6 +121,7 @@ public class QuestionnaireGeneratorService {
                         .param("webContext", webContextText)
                         .param(USER_INPUT_PARAM, input)
                         .param("questionCount", String.valueOf(questionCount))
+                        .param("proposalProvided", String.valueOf(proposalProvided))
                         .param("format", QNA_FORMAT))
                 .call()
                 .content();

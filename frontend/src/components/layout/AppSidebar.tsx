@@ -67,9 +67,11 @@ export function AppSidebar({ children }: AppSidebarProps) {
         <div className="mx-3 border-t border-sidebar-border" />
 
         {/* Page-specific sub-content */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          {children}
-        </div>
+        {children && (
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {children}
+          </div>
+        )}
 
         {/* User footer */}
         <div className="border-t border-sidebar-border px-3 h-14 flex items-center gap-2">

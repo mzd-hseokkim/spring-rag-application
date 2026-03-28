@@ -88,7 +88,7 @@ public class TavilySearchService {
                 "query", query,
                 "max_results", maxResults,
                 "include_answer", true,
-                "search_depth", "advanced"
+                "search_depth", "basic"
         );
 
         String requestBody = objectMapper.writeValueAsString(body);

@@ -314,6 +314,58 @@ public class GenerationWorkflowService {
     }
 
     /**
+     * 미배치 요구사항을 위한 새 목차 섹션 생성 (동기)
+     */
+    public void generateSectionsForUnmapped(UUID jobId) {
+        GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
+                .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
+
+        List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
+        List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+        Map<String, List<String>> mapping = new java.util.LinkedHashMap<>(parseMappingFromJson(job.getRequirementMapping()));
+
+        // 미배치 요구사항 수집
+        java.util.Set<String> mappedIds = new java.util.HashSet<>();
+        mapping.values().forEach(mappedIds::addAll);
+        List<Requirement> unmapped = requirements.stream()
+                .filter(r -> !mappedIds.contains(r.id()))
+                .toList();
+
+        if (unmapped.isEmpty()) {
+            log.info("Job {} - no unmapped requirements, skipping section generation", jobId);
+            return;
+        }
+
+        log.info("Job {} - generating sections for {} unmapped requirements", jobId, unmapped.size());
+        RequirementMapper.UnmappedSectionsResult result = requirementMapper.generateSectionsForUnmapped(outline, unmapped);
+
+        if (result.newSections().isEmpty()) {
+            log.warn("Job {} - AI returned no new sections for unmapped requirements", jobId);
+            return;
+        }
+
+        // outline에 새 섹션 추가
+        List<OutlineNode> updatedOutline = new ArrayList<>(outline);
+        updatedOutline.addAll(result.newSections());
+
+        // mapping에 새 매핑 추가
+        for (var entry : result.newMapping().entrySet()) {
+            mapping.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+
+        // 저장
+        job.setOutline(toJson(updatedOutline));
+        var mappingResult = new java.util.LinkedHashMap<String, Object>();
+        mappingResult.put(FIELD_REQUIREMENTS, requirements);
+        mappingResult.put(FIELD_MAPPING, mapping);
+        job.setRequirementMapping(toJson(mappingResult));
+        jobRepository.save(job);
+
+        log.info("Job {} - added {} new sections, {} new mapping keys",
+                jobId, result.newSections().size(), result.newMapping().size());
+    }
+
+    /**
      * 위자드 Step 4: 요구사항 기반 섹션별 내용 생성 (async)
      */
     @Async("ingestionExecutor")
@@ -382,6 +434,9 @@ public class GenerationWorkflowService {
                 log.info("Generation job {} - resuming with {} existing sections", jobId, existing.size());
             }
 
+            // 웹 검색 결과 캐시 (같은 job 내 동일 쿼리 재사용)
+            Map<String, List<String>> webSearchCache = new java.util.HashMap<>();
+
             for (int i = 0; i < leafSections.size(); i++) {
                 LeafSection leaf = leafSections.get(i);
                 job.setCurrentSection(i + 1);
@@ -395,7 +450,7 @@ public class GenerationWorkflowService {
 
                 emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title, leaf.key));
 
-                SectionContent content = generateLeafSection(leaf, reqMap, refDocIds, includeWebSearch, systemPrompt, sections);
+                SectionContent content = generateLeafSection(leaf, reqMap, refDocIds, includeWebSearch, systemPrompt, sections, webSearchCache);
                 sections.add(content);
                 // 중간 저장 — 프론트엔드가 progress 이벤트마다 조회하여 완료된 섹션을 표시
                 job.setGeneratedSections(toJson(sections));
@@ -426,7 +481,7 @@ public class GenerationWorkflowService {
      * 위자드 Step 4: 단일 섹션 재생성 (async)
      */
     @Async("ingestionExecutor")
-    public void regenerateSection(UUID jobId, String sectionKey, List<UUID> refDocIds, boolean includeWebSearch) {
+    public void regenerateSection(UUID jobId, String sectionKey, List<UUID> refDocIds, boolean includeWebSearch, String userInstruction) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
         try {
@@ -480,7 +535,7 @@ public class GenerationWorkflowService {
 
             // 재생성
             SectionContent regenerated = contentGenerator.generateSectionWithRequirements(
-                    old.title(), "", reqText, systemPrompt, ragContext, webContext, previous);
+                    old.title(), userInstruction, reqText, systemPrompt, ragContext, webContext, previous);
 
             // key 강제 덮어씌움 + sources 추가
             List<String> sources = new ArrayList<>();
@@ -569,7 +624,7 @@ public class GenerationWorkflowService {
             List<String> queries = java.util.Arrays.stream(content.trim().split("\n"))
                     .map(String::trim)
                     .filter(s -> !s.isEmpty() && !s.startsWith("#"))
-                    .limit(3)
+                    .limit(1)
                     .toList();
             return queries.isEmpty() ? List.of(leaf.title) : queries;
         } catch (Exception e) {
@@ -635,14 +690,20 @@ public class GenerationWorkflowService {
 
             // 목차에서 DocumentOutline 구성
             List<OutlineNode> outlineNodes = outlineExtractor.fromJson(job.getOutline());
-            String title = outlineNodes.isEmpty() ? "제안서" : outlineNodes.get(0).title();
-            DocumentOutline outline = new DocumentOutline(title, "", buildSectionPlans(outlineNodes));
+            String docTitle = job.getTitle() != null && !job.getTitle().isBlank()
+                    ? job.getTitle() : "제안서";
+            List<SectionPlan> allPlans = new ArrayList<>();
+            flattenOutlineNodes(outlineNodes, allPlans);
+            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans);
 
-            // 섹션 파싱
+            // 섹션 파싱 (key 기준 정렬)
             List<SectionContent> sections = parseSections(job.getGeneratedSections());
             if (sections.isEmpty()) {
                 throw new IllegalStateException("Failed to parse generated sections");
             }
+            sections = sections.stream()
+                    .sorted(java.util.Comparator.comparing(SectionContent::key, GenerationWorkflowService::compareKeys))
+                    .toList();
 
             // HTML 렌더링
             String outputPath = rendererService.render(job.getTemplate(), outline, sections, job.getUser().getId(), job.getId());
@@ -662,6 +723,15 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        }
+    }
+
+    private void flattenOutlineNodes(List<OutlineNode> nodes, List<SectionPlan> result) {
+        for (OutlineNode node : nodes) {
+            result.add(new SectionPlan(node.key(), node.title(), node.description(), List.of(), 0));
+            if (!node.children().isEmpty()) {
+                flattenOutlineNodes(node.children(), result);
+            }
         }
     }
 
@@ -762,7 +832,8 @@ public class GenerationWorkflowService {
      */
     private SectionContent generateLeafSection(LeafSection leaf, Map<String, Requirement> reqMap,
                                                 List<UUID> refDocIds, boolean includeWebSearch,
-                                                String systemPrompt, List<SectionContent> sections) {
+                                                String systemPrompt, List<SectionContent> sections,
+                                                Map<String, List<String>> webSearchCache) {
         String reqText = leaf.requirementIds.stream()
                 .map(reqMap::get)
                 .filter(java.util.Objects::nonNull)
@@ -791,7 +862,15 @@ public class GenerationWorkflowService {
         if (includeWebSearch) {
             List<String> allWebResults = new ArrayList<>();
             for (String query : searchQueries) {
-                allWebResults.addAll(tavilySearchService.search(query, 2));
+                List<String> cached = webSearchCache.get(query);
+                if (cached != null) {
+                    log.debug("Web search cache hit for query: {}", query);
+                    allWebResults.addAll(cached);
+                } else {
+                    List<String> fresh = tavilySearchService.search(query, 3);
+                    webSearchCache.put(query, fresh);
+                    allWebResults.addAll(fresh);
+                }
             }
             webContext = allWebResults.stream().distinct().toList();
             webContext.stream().map(this::formatWebSource).forEach(sources::add);

@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import type { OutlineNode } from '@/api/generation';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { ChevronRight, ChevronDown, AlertCircle, List, FolderTree, Plus, X, Search } from 'lucide-react';
+import { ChevronRight, ChevronDown, AlertCircle, List, FolderTree, Plus, X, Search, Wand2, Loader2 } from 'lucide-react';
 
 /** 섹션별 배치 패널 — 배치된 요구사항 목록 + 추가/제거 */
 function SectionMappingPanel({ selectedKey, selectedReqs, unmapped, mapping, onChange, readOnly }: {
@@ -190,6 +190,7 @@ interface RequirementMapViewProps {
   requirements: Requirement[];
   mapping: Record<string, string[]>;
   onChange?: (mapping: Record<string, string[]>) => void;
+  onGenerateUnmapped?: () => Promise<void>;
   readOnly?: boolean;
 }
 
@@ -200,13 +201,14 @@ const importanceBadge = (imp: string) => {
 
 type RightTab = 'section' | 'all';
 
-export function RequirementMapView({ outline: rawOutline, requirements, mapping, onChange, readOnly }: RequirementMapViewProps) {
+export function RequirementMapView({ outline: rawOutline, requirements, mapping, onChange, onGenerateUnmapped, readOnly }: RequirementMapViewProps) {
   const outline = useMemo(() => sortOutline(rawOutline), [rawOutline]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(outline.map(n => n.key)));
   const [rightTab, setRightTab] = useState<RightTab>('all');
   const [showUnmappedOnly, setShowUnmappedOnly] = useState(false);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  const [generatingUnmapped, setGeneratingUnmapped] = useState(false);
   const allReqScrollRef = useRef<HTMLDivElement>(null);
   const prevReqCountRef = useRef(requirements.length);
 
@@ -373,6 +375,22 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
               <span className="text-sm text-destructive">미배치 요구사항</span>
               <Badge variant="destructive" className="text-xs ml-auto">{unmapped.length}개</Badge>
             </div>
+            {!readOnly && onGenerateUnmapped && (
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setGeneratingUnmapped(true);
+                  try { await onGenerateUnmapped(); } finally { setGeneratingUnmapped(false); }
+                }}
+                disabled={generatingUnmapped}
+                className="mt-1.5 w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-wait"
+              >
+                {generatingUnmapped
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />목차 생성 중...</>
+                  : <><Wand2 className="h-3.5 w-3.5" />미배치 목차 자동 생성</>
+                }
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -411,6 +429,25 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
             섹션별 배치
           </button>
         </div>
+
+        {/* 미배치 목차 자동 생성 버튼 */}
+        {unmapped.length > 0 && !readOnly && onGenerateUnmapped && (
+          <div className="px-3 pt-2 shrink-0">
+            <button
+              onClick={async () => {
+                setGeneratingUnmapped(true);
+                try { await onGenerateUnmapped(); } finally { setGeneratingUnmapped(false); }
+              }}
+              disabled={generatingUnmapped}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-wait"
+            >
+              {generatingUnmapped
+                ? <><Loader2 className="h-4 w-4 animate-spin" />미배치 목차 생성 중...</>
+                : <><Wand2 className="h-4 w-4" />미배치 요구사항 목차 자동 생성 ({unmapped.length}건)</>
+              }
+            </button>
+          </div>
+        )}
 
         {/* 탭 내용 */}
         <div ref={rightTab === 'all' ? allReqScrollRef : undefined} className="flex-1 overflow-y-auto p-3">

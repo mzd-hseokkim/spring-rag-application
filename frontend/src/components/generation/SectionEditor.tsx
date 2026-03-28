@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle2, Loader2, Circle, FileText, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Loader2, Circle, FileText, RefreshCw, ChevronRight, ChevronDown, X } from 'lucide-react';
 import { LinkifySource } from '@/components/ui/linkify-source';
 import type { OutlineNode } from '@/api/generation';
 
@@ -58,11 +58,13 @@ interface SectionEditorProps {
   checkedKeys?: Set<string>;
   onCheckedChange?: (keys: Set<string>) => void;
   onSectionChange: (index: number, updated: SectionData) => void;
-  onRegenerate?: (sectionKey: string) => void;
+  onRegenerate?: (sectionKey: string, userInstruction?: string) => void;
 }
 
 export function SectionEditor({ sections, outline: rawOutline, sectionTitles, sectionKeys, generatingIndex, generatingKey, totalSections, regeneratingKey, checkedKeys, onCheckedChange, onSectionChange, onRegenerate }: SectionEditorProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [showRegenInput, setShowRegenInput] = useState(false);
+  const [regenInstruction, setRegenInstruction] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     if (rawOutline) return new Set(rawOutline.map(n => n.key));
     return new Set<string>();
@@ -291,19 +293,54 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
                 )}
               </div>
               {onRegenerate && (
-                <Button
-                  variant="outline" size="sm"
-                  onClick={() => onRegenerate(selected.key)}
-                  disabled={regeneratingKey === selected.key}
-                  className="shrink-0"
-                >
-                  {regeneratingKey === selected.key
-                    ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                    : <RefreshCw className="h-3.5 w-3.5 mr-1" />}
-                  {regeneratingKey === selected.key ? '재생성 중...' : '이 섹션 재생성'}
-                </Button>
+                regeneratingKey === selected.key ? (
+                  <Button variant="outline" size="sm" disabled className="shrink-0">
+                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />재생성 중...
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline" size="sm"
+                    onClick={() => { setShowRegenInput(v => !v); setRegenInstruction(''); }}
+                    className="shrink-0"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-1" />이 섹션 재생성
+                  </Button>
+                )
               )}
             </div>
+
+            {/* 재생성 지침 입력 */}
+            {showRegenInput && onRegenerate && regeneratingKey !== selected.key && (
+              <div className="border rounded-lg p-3 bg-muted/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">재생성 지침 (선택사항)</label>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setShowRegenInput(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <Textarea
+                  value={regenInstruction}
+                  onChange={e => setRegenInstruction(e.target.value)}
+                  placeholder="예: 더 구체적인 수치를 포함해주세요 / 표 형식으로 정리해주세요 / 기술적 내용을 줄이고 비즈니스 관점으로 작성해주세요"
+                  rows={2}
+                  className="text-sm resize-none"
+                />
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="ghost" size="sm"
+                    onClick={() => { setShowRegenInput(false); onRegenerate(selected.key); }}
+                  >
+                    지침 없이 재생성
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => { setShowRegenInput(false); onRegenerate(selected.key, regenInstruction || undefined); }}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-1" />재생성
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* 하이라이트 */}
             {selected.highlights.length > 0 && (

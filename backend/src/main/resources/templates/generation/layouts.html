@@ -53,7 +53,7 @@
         <div th:each="step,iter : ${section.layoutData()['steps']}" class="process-step">
             <div class="step-number" th:text="${iter.index + 1}"></div>
             <div class="step-label" th:text="${step['label'] ?: ''}"></div>
-            <div class="step-desc" th:text="${step['description'] ?: ''}"></div>
+            <div class="step-desc" th:utext="${step['description'] ?: ''}"></div>
             <div th:if="${!iter.last}" class="step-arrow">→</div>
         </div>
     </div>
@@ -66,7 +66,7 @@
         <div th:each="card : ${section.layoutData()['cards']}" class="kpi-card">
             <div class="kpi-value" th:text="${card['value'] ?: ''}"></div>
             <div class="kpi-label" th:text="${card['label'] ?: ''}"></div>
-            <div class="kpi-desc" th:text="${card['description'] ?: ''}"></div>
+            <div class="kpi-desc" th:utext="${card['description'] ?: ''}"></div>
         </div>
     </div>
 </div>
@@ -91,8 +91,8 @@
         </div>
         <div class="text-image-visual" th:if="${section.layoutData() != null}">
             <div class="image-placeholder">
-                <div class="placeholder-icon">📊</div>
-                <p class="placeholder-text" th:text="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
+                <div class="placeholder-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 16V12"/><path d="M12 16V8"/><path d="M16 16v-5"/></svg></div>
+                <p class="placeholder-text" th:utext="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
             </div>
             <p class="image-caption" th:text="${section.layoutData()['imageCaption'] ?: ''}"></p>
         </div>
@@ -107,8 +107,8 @@
 <div th:fragment="IMAGE_FULL(section)" class="layout-image-full">
     <div class="image-full-container" th:if="${section.layoutData() != null}">
         <div class="image-placeholder image-placeholder-full">
-            <div class="placeholder-icon">📊</div>
-            <p class="placeholder-text" th:text="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
+            <div class="placeholder-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 16V12"/><path d="M12 16V8"/><path d="M16 16v-5"/></svg></div>
+            <p class="placeholder-text" th:utext="${section.layoutData()['imagePlaceholder'] ?: '다이어그램'}"></p>
         </div>
         <p class="image-caption" th:text="${section.layoutData()['imageCaption'] ?: ''}"></p>
     </div>

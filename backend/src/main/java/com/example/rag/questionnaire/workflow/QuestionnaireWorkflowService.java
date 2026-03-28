@@ -161,8 +161,9 @@ public class QuestionnaireWorkflowService {
 
             // ── Phase 2: GENERATING — 페르소나별 질문 생성 ──
             updateStatus(job, QuestionnaireStatus.GENERATING);
+            boolean proposalProvided = !proposalDocIds.isEmpty();
             List<PersonaQna> allQna = generateForAllPersonas(
-                    job, personas, documentAnalysis, refDocIds, includeWebSearch, questionCount);
+                    job, personas, documentAnalysis, refDocIds, includeWebSearch, questionCount, proposalProvided);
 
             job.setGeneratedQna(toJson(allQna));
             jobRepository.save(job);
@@ -227,7 +228,8 @@ public class QuestionnaireWorkflowService {
     @SuppressWarnings("java:S107")
     private List<PersonaQna> generateForAllPersonas(QuestionnaireJob job, List<Persona> personas,
                                                       String documentAnalysis, List<UUID> refDocIds,
-                                                      boolean includeWebSearch, int questionCount) {
+                                                      boolean includeWebSearch, int questionCount,
+                                                      boolean proposalProvided) {
         GapMatrix gapMatrixForPersona = GapMatrix.fromMarkdown(documentAnalysis);
         List<PersonaQna> allQna = new ArrayList<>();
 
@@ -261,7 +263,7 @@ public class QuestionnaireWorkflowService {
             emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.GENERATING,
                     persona.getName() + " — 질문/답변 생성 중..."));
             PersonaQna qna = generateWithRetry(persona, personaAnalysis, refContext, webContext,
-                    job.getUserInput(), questionCount);
+                    job.getUserInput(), questionCount, proposalProvided);
             allQna.add(qna);
 
             log.info("Questionnaire job {} - persona {}/{} complete: {} ({} questions)",
@@ -272,11 +274,12 @@ public class QuestionnaireWorkflowService {
 
     private PersonaQna generateWithRetry(Persona persona, String documentAnalysis,
                                           List<String> refContext, List<String> webContext,
-                                          String userInput, int questionCount) {
+                                          String userInput, int questionCount,
+                                          boolean proposalProvided) {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 return generator.generateForPersona(persona, documentAnalysis, refContext,
-                        webContext, userInput, questionCount);
+                        webContext, userInput, questionCount, proposalProvided);
             } catch (Exception e) {
                 if (attempt == MAX_RETRIES) {
                     throw e;

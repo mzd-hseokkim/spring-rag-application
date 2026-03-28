@@ -70,6 +70,14 @@ public class GenerationController {
     }
 
     /**
+     * 위자드 Step 3: 미배치 요구사항을 위한 새 목차 섹션 자동 생성
+     */
+    @PostMapping("/{id}/generate-unmapped-sections")
+    public GenerationResponse generateUnmappedSections(@PathVariable UUID id) {
+        return generationService.generateSectionsForUnmapped(id);
+    }
+
+    /**
      * 위자드 Step 4: 섹션 생성 시작
      */
     @PostMapping("/{id}/generate-sections")
@@ -102,7 +110,8 @@ public class GenerationController {
     public void regenerateSection(@PathVariable UUID id, @PathVariable String key,
                                    @RequestBody GenerateSectionsRequest request) {
         List<UUID> refDocIds = request.referenceDocumentIds() != null ? request.referenceDocumentIds() : List.of();
-        generationService.startSingleSectionRegeneration(id, key, refDocIds, request.includeWebSearch());
+        String instruction = request.userInstruction() != null ? request.userInstruction() : "";
+        generationService.startSingleSectionRegeneration(id, key, refDocIds, request.includeWebSearch(), instruction);
     }
 
     /**
@@ -115,7 +124,7 @@ public class GenerationController {
     }
 
     record AnalyzeRequest(java.util.List<UUID> customerDocumentIds) {}
-    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch, java.util.List<String> sectionKeys, boolean forceRegenerate) {}
+    record GenerateSectionsRequest(java.util.List<UUID> referenceDocumentIds, boolean includeWebSearch, java.util.List<String> sectionKeys, boolean forceRegenerate, String userInstruction) {}
 
     @GetMapping("/{id}")
     public GenerationResponse get(@PathVariable UUID id) {

@@ -3,6 +3,7 @@ package com.example.rag.generation.dto;
 import com.example.rag.generation.GenerationStatus;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public record GenerationResponse(
@@ -22,6 +23,10 @@ public record GenerationResponse(
         boolean includeWebSearch,
         String outputFilePath,
         String errorMessage,
+        List<DocItem> customerDocuments,
+        List<DocItem> referenceDocuments,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
-) {}
+) {
+    public record DocItem(UUID id, String filename, int chunkCount) {}
+}

@@ -43,6 +43,98 @@ public class RequirementMapper {
         this.objectMapper = objectMapper;
     }
 
+    public record UnmappedSectionsResult(List<OutlineNode> newSections, Map<String, List<String>> newMapping) {}
+
+    /**
+     * 미배치 요구사항을 위한 새 목차 섹션을 생성한다.
+     */
+    public UnmappedSectionsResult generateSectionsForUnmapped(List<OutlineNode> outline, List<Requirement> unmapped) {
+        String outlineText = flattenOutline(outline);
+
+        // 기존 목차의 최대 top-level key 계산
+        int maxTopKey = outline.stream()
+                .mapToInt(n -> {
+                    try { return Integer.parseInt(n.key()); } catch (NumberFormatException e) { return 0; }
+                })
+                .max().orElse(0);
+        int nextTopKey = maxTopKey + 1;
+
+        // 요구사항 텍스트 구성
+        StringBuilder reqText = new StringBuilder();
+        for (Requirement r : unmapped) {
+            reqText.append("- ").append(r.id()).append(" [").append(r.importance()).append("]: ")
+                    .append(r.item()).append(" — ").append(r.description()).append("\n");
+        }
+
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+
+        String prompt = """
+                다음은 제안서 목차와 미배치 요구사항 목록입니다.
+                미배치 요구사항들을 수용할 수 있는 **새로운 목차 섹션**을 생성하세요.
+
+                ## 현재 제안서 목차
+                %s
+
+                ## 미배치 요구사항 (%d개)
+                %s
+
+                ## 규칙
+                1. 기존 목차와 **중복되지 않는** 새로운 섹션만 생성하세요
+                2. 의미적으로 유사한 요구사항끼리 그룹화하여 하나의 섹션에 배치하세요
+                3. 섹션 key는 기존 목차의 마지막 번호 다음부터 부여 (시작 번호: %d)
+                4. **계층 구조는 최대 3단계** (대분류 > 중분류 > 소분류, 예: "%d", "%d.1", "%d.1.1")
+                5. 요구사항이 5개 이상인 그룹은 반드시 중분류/소분류로 세분화하세요
+                6. **리프 노드(최하위 항목)에만 요구사항을 매핑**하세요 — children이 있는 노드에는 매핑하지 마세요
+                7. 모든 미배치 요구사항을 빠짐없이 배치하세요
+                8. 제목은 구체적이고 실질적인 내용을 담아야 합니다 (예: "보안 요구사항" → "데이터 암호화 및 접근 제어")
+
+                ## 출력 형식
+                반드시 JSON만 응답:
+                {"sections": [{"key":"...", "title":"...", "description":"...", "children":[...]}], "mapping": {"key": ["REQ-ID", ...]}}
+                """.formatted(outlineText, unmapped.size(), reqText.toString(),
+                        nextTopKey, nextTopKey, nextTopKey, nextTopKey);
+
+        String content = client.prompt().user(prompt).call().content();
+
+        log.info("Generated sections for {} unmapped requirements", unmapped.size());
+        return parseUnmappedResult(content);
+    }
+
+    private UnmappedSectionsResult parseUnmappedResult(String content) {
+        if (content == null || content.isBlank()) return new UnmappedSectionsResult(List.of(), Map.of());
+        try {
+            String json = content.trim();
+            if (json.startsWith("```")) {
+                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+            }
+            int objStart = json.indexOf('{');
+            int objEnd = json.lastIndexOf('}');
+            if (objStart >= 0 && objEnd > objStart) {
+                json = json.substring(objStart, objEnd + 1);
+            }
+            var tree = objectMapper.readTree(json);
+
+            List<OutlineNode> sections = List.of();
+            if (tree.has("sections")) {
+                sections = objectMapper.readValue(tree.get("sections").toString(),
+                        new TypeReference<List<OutlineNode>>() {});
+            }
+
+            Map<String, List<String>> mapping = Map.of();
+            if (tree.has("mapping")) {
+                mapping = objectMapper.readValue(tree.get("mapping").toString(), MAPPING_TYPE);
+            }
+
+            log.info("Parsed unmapped sections result: {} new sections, {} mapping keys",
+                    sections.size(), mapping.size());
+            return new UnmappedSectionsResult(sections, mapping);
+        } catch (Exception e) {
+            log.warn("Failed to parse unmapped sections result: {} | preview: {}",
+                    e.getMessage(), content.substring(0, Math.min(200, content.length())));
+            return new UnmappedSectionsResult(List.of(), Map.of());
+        }
+    }
+
     /**
      * 요구사항을 목차에 매핑한다.
      * 요구사항이 많으면 배치로 분할하여 병렬 매핑 후 합산.

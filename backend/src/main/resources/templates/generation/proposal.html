@@ -32,7 +32,7 @@
             font-family: var(--font-sans);
             color: var(--color-text);
             background: var(--color-bg);
-            line-height: 1.8;
+            line-height: 1.6;
             font-size: 15px;
             max-width: 80%;
             margin: 0 auto;
@@ -105,6 +105,56 @@
         }
         .toc a:hover { color: var(--color-accent); }
 
+        /* ── Chapter Divider (간지) ── */
+        .chapter-divider {
+            text-align: center;
+            padding: 60px 40px;
+            margin-bottom: 48px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+            color: #ffffff;
+            border-radius: var(--radius);
+        }
+        .chapter-divider .chapter-number {
+            font-size: 1rem;
+            font-weight: 600;
+            opacity: 0.7;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 12px;
+        }
+        .chapter-divider h2 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 28px;
+            letter-spacing: -0.02em;
+        }
+        .chapter-divider .chapter-sub-items {
+            list-style: none;
+            text-align: left;
+            max-width: 500px;
+            margin: 0 auto;
+            border-top: 1px solid rgba(255,255,255,0.25);
+            padding-top: 20px;
+        }
+        .chapter-divider .chapter-sub-items li {
+            padding: 6px 0;
+            font-size: 0.95rem;
+            opacity: 0.9;
+        }
+        .chapter-divider .chapter-sub-items li .sub-key {
+            font-weight: 600;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+
+        /* ── Section Breadcrumb ── */
+        .section-breadcrumb {
+            font-size: 0.8rem;
+            color: var(--color-text-secondary);
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+        }
+
         /* ── Sections ── */
         .section {
             margin-bottom: 48px;
@@ -146,13 +196,12 @@
         }
 
         /* ── Section Body (Markdown rendered) ── */
-        .section, .section-body, .compare-col, .step-desc, .kpi-desc, .placeholder-text,
-        .governing-message, .visual-guide { white-space: pre-line; }
-        .section-body h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 10px; color: var(--color-primary-light); }
-        .section-body h4 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 8px; }
-        .section-body p { margin-bottom: 14px; }
-        .section-body ul, .section-body ol { margin: 10px 0 14px 24px; }
-        .section-body li { margin-bottom: 4px; }
+        .step-desc, .kpi-desc, .placeholder-text { white-space: pre-line; }
+        .section-body h3 { font-size: 1.15rem; font-weight: 600; margin: 16px 0 6px; color: var(--color-primary-light); }
+        .section-body h4 { font-size: 1.05rem; font-weight: 600; margin: 12px 0 4px; }
+        .section-body p { margin-bottom: 8px; }
+        .section-body ul, .section-body ol { margin: 6px 0 8px 24px; }
+        .section-body li { margin-bottom: 2px; }
         .section-body code {
             background: var(--color-bg-subtle);
             padding: 2px 6px;
@@ -365,7 +414,10 @@
             text-align: center;
         }
         .image-placeholder-full { min-height: 300px; }
-        .placeholder-icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.5; }
+        .placeholder-icon {
+            width: 48px; height: 48px; margin: 0 auto 12px; opacity: 0.4;
+            stroke: var(--color-primary); stroke-width: 1.5; fill: none;
+        }
         .placeholder-text {
             font-size: 0.85rem;
             color: var(--color-text-secondary);
@@ -384,6 +436,7 @@
         @media print {
             body { max-width: none; padding: 0; }
             .cover-page { page-break-after: always; }
+            .chapter-divider { page-break-before: always; page-break-after: always; }
             .section { page-break-inside: avoid; }
             .toc { page-break-after: always; }
         }
@@ -405,25 +458,44 @@
     <div class="toc">
         <h2>목차</h2>
         <ol>
-            <li th:each="section : ${sections}">
-                <a th:text="${section.title()}" th:href="'#' + ${section.key()}"></a>
+            <li th:each="section : ${tocSections}">
+                <a th:text="${section.heading()}" th:href="'#' + ${section.key()}"></a>
             </li>
         </ol>
     </div>
 
-    <!-- 본문 섹션들 (레이아웃별 분기) -->
-    <div th:each="section : ${sections}" class="section" th:id="${section.key()}">
-        <h2 th:text="${section.title()}">섹션 제목</h2>
-        <p th:if="${section.governingMessage() != null and !section.governingMessage().isEmpty()}"
-           class="governing-message" th:text="${section.governingMessage()}"></p>
-
-        <div th:insert="~{generation/layouts :: ${section.fragmentName()}(${section})}"></div>
-
-        <div th:if="${section.visualGuide() != null and !section.visualGuide().isEmpty()}" class="visual-guide">
-            <span class="visual-guide-label">📌 시각 요소 가이드</span>
-            <span th:text="${section.visualGuide()}"></span>
+    <!-- 본문: 장(chapter)별 간지 + 섹션들 -->
+    <th:block th:each="chapter : ${chapters}">
+        <!-- 간지 -->
+        <div class="chapter-divider" th:id="${chapter.key()}">
+            <div class="chapter-number" th:text="'Chapter ' + ${chapter.key()}">Chapter 1</div>
+            <h2 th:text="${chapter.title()}">장 제목</h2>
+            <ul th:if="${!chapter.subItems().isEmpty()}" class="chapter-sub-items">
+                <li th:each="sub : ${chapter.subItems()}">
+                    <span class="sub-key" th:text="${sub.key()}">1.1</span>
+                    <span th:text="${sub.title()}">하위 제목</span>
+                </li>
+            </ul>
         </div>
-    </div>
+
+        <!-- 이 장에 속하는 섹션들 -->
+        <th:block th:each="section : ${sections}" th:if="${section.key().startsWith(chapter.key() + '.')}">
+            <div class="section" th:id="${section.key()}">
+                <div th:if="${section.breadcrumb() != null and !section.breadcrumb().isEmpty()}"
+                     class="section-breadcrumb" th:text="${section.breadcrumb()}"></div>
+                <h2 th:text="${section.title()}">섹션 제목</h2>
+                <p th:if="${section.governingMessage() != null and !section.governingMessage().isEmpty()}"
+                   class="governing-message" th:text="${section.governingMessage()}"></p>
+
+                <div th:insert="~{generation/layouts :: ${section.fragmentName()}(${section})}"></div>
+
+                <div th:if="${section.visualGuide() != null and !section.visualGuide().isEmpty()}" class="visual-guide">
+                    <span class="visual-guide-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:4px"><path d="M15 4.5l-4 4L5 11l-.5 5.5L10 16l2.5-6 4-4"/><path d="M9 15l-3 3"/><circle cx="17.5" cy="6.5" r="2.5"/></svg>시각 요소 가이드</span>
+                    <span th:text="${section.visualGuide()}"></span>
+                </div>
+            </div>
+        </th:block>
+    </th:block>
 
     <!-- 참고 출처 -->
     <div th:if="${!allReferences.isEmpty()}" class="references">

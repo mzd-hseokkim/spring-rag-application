@@ -15,7 +15,8 @@ public record SectionViewModel(
         String layoutType,
         Map<String, Object> layoutData,
         String governingMessage,
-        String visualGuide
+        String visualGuide,
+        String breadcrumb
 ) {
     private static final java.util.Set<String> VALID_LAYOUTS = java.util.Set.of(
             "TEXT_FULL", "TEXT_TABLE", "COMPARE_2COL", "PROCESS_HORIZONTAL",

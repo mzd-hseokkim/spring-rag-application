@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import {
   Search, Brain, ListTree, FileText, PenLine, CheckCircle2,
@@ -33,13 +32,43 @@ const STEP_ICONS: Record<string, ReactNode> = {
 };
 
 export function MessageList({ messages, streaming }: Props) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [feedbacks, setFeedbacks] = useState<Record<number, 'up' | 'down'>>({});
   const [expandedSources, setExpandedSources] = useState<Record<number, boolean>>({});
+  const [markers, setMarkers] = useState<{ top: number; index: number; preview: string }[]>([]);
+
+  // 스트리밍 중 사용자가 스크롤을 올리지 않았으면 하단 고정
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !streaming) return;
+    if (Math.abs(el.scrollTop) < 50) {
+      el.scrollTop = 0;
+    }
+  }, [messages, streaming]);
+
+  // 질문 위치 마커 계산
+  const recalcMarkers = useCallback(() => {
+    const contentEl = contentRef.current;
+    if (!contentEl) return;
+    const totalHeight = contentEl.scrollHeight;
+    if (totalHeight === 0) { setMarkers([]); return; }
+    const els = contentEl.querySelectorAll<HTMLElement>('[data-user-msg]');
+    setMarkers(Array.from(els).map(el => ({
+      top: el.offsetTop / totalHeight,
+      index: Number(el.dataset.userMsg),
+      preview: el.textContent?.slice(0, 50) || '',
+    })));
+  }, []);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const contentEl = contentRef.current;
+    if (!contentEl) return;
+    requestAnimationFrame(recalcMarkers);
+    const ro = new ResizeObserver(recalcMarkers);
+    ro.observe(contentEl);
+    return () => ro.disconnect();
+  }, [messages, recalcMarkers]);
 
   const submitFeedback = async (index: number, rating: 'up' | 'down') => {
     setFeedbacks(prev => ({ ...prev, [index]: rating }));
@@ -80,17 +109,19 @@ export function MessageList({ messages, streaming }: Props) {
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col gap-4 p-4 w-full max-w-250 mx-auto">
-        {messages.map((msg, i) => {
-          const isUser = msg.role === 'user';
-          const isLastMsg = i === messages.length - 1;
+    <div className="relative h-full">
+      <div ref={scrollRef} className="h-full overflow-y-auto flex flex-col-reverse scrollbar-thin scrollbar-thumb-border">
+        <div ref={contentRef} className="relative flex flex-col gap-4 p-4 w-full max-w-250 mx-auto">
+          {messages.map((msg, i) => {
+            const isUser = msg.role === 'user';
+            const isLastMsg = i === messages.length - 1;
 
-          return (
-            <div
-              key={i}
-              className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-page-in`}
-            >
+            return (
+              <div
+                key={i}
+                {...(isUser ? { 'data-user-msg': i } : {})}
+                className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-page-in`}
+              >
               <div
                 className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed wrap-break-word ${
                   isUser
@@ -208,8 +239,27 @@ export function MessageList({ messages, streaming }: Props) {
             </div>
           );
         })}
-        <div ref={endRef} />
+        </div>
       </div>
-    </ScrollArea>
+
+      {/* 질문 위치 마커 스트립 — 스크롤바 왼쪽에 오버레이 */}
+      {markers.length > 1 && (
+        <div className="absolute right-5 top-1 bottom-1 w-2 pointer-events-none z-10">
+          {markers.map(({ top, index, preview }) => (
+            <button
+              key={index}
+              className="absolute left-0 w-2 h-2.5 -translate-y-1/2 rounded-sm bg-primary/40 hover:bg-primary hover:w-3 pointer-events-auto cursor-pointer transition-all duration-150"
+              style={{ top: `${top * 100}%` }}
+              title={preview}
+              onClick={() => {
+                contentRef.current
+                  ?.querySelector(`[data-user-msg="${index}"]`)
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { toast } from 'sonner';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, updateJobTitle, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, generateUnmappedSections, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, updateJobTitle, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { SectionEditor } from '@/components/generation/SectionEditor';
@@ -273,8 +274,6 @@ function StepIndicator({ current, maxReached, onStepClick, title, jobSettings }:
                           <li key={d.id} className="flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{d.filename}</li>
                         ))}
                       </ul>
-                    ) : title ? (
-                      <p>{title.replace(/ — 제안서.*$/, '')}</p>
                     ) : <p className="text-muted-foreground">없음</p>}
                   </div>
                   <div>
@@ -345,6 +344,9 @@ export function GeneratePage() {
   const [regeneratingKey, setRegeneratingKey] = useState<string | null>(null);
   const [checkedTopKeys, setCheckedTopKeys] = useState<Set<string>>(new Set());
 
+  // 미배치 목차 생성 결과 모달
+  const [unmappedResult, setUnmappedResult] = useState<{ key: string; title: string; reqIds: string[] }[] | null>(null);
+
   // Step 5 state
   const [rendering, setRendering] = useState(false);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -368,6 +370,14 @@ export function GeneratePage() {
 
     // 상태 복원
     setJobId(activeJob.id);
+    if (activeJob.customerDocuments?.length > 0) {
+      setCustomerDocs(activeJob.customerDocuments.map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount })));
+    }
+    if (activeJob.referenceDocuments?.length > 0) {
+      setRefDocs(activeJob.referenceDocuments.map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount })));
+    }
+    if (activeJob.templateId) setSelectedTemplateId(activeJob.templateId);
+    if (activeJob.userInput) setUserInput(activeJob.userInput);
     if (activeJob.outline) {
       try { setOutline(JSON.parse(activeJob.outline)); } catch { /* ignore */ }
     }
@@ -611,7 +621,9 @@ export function GeneratePage() {
         setAnalyzing(false);
       };
     } catch (e) {
-      setAnalyzeError(e instanceof Error ? e.message : '분석 실패');
+      const msg = e instanceof Error ? e.message : '분석 실패';
+      setAnalyzeError(msg);
+      toast.error('목차 추출 실패', { description: msg });
       setAnalyzing(false);
     }
   };
@@ -684,7 +696,9 @@ export function GeneratePage() {
         setMapping(false);
       };
     } catch (e) {
-      setMappingError(e instanceof Error ? e.message : '매핑 실패');
+      const msg = e instanceof Error ? e.message : '매핑 실패';
+      setMappingError(msg);
+      toast.error('요구사항 매핑 실패', { description: msg });
       setMapping(false);
     }
   };
@@ -769,7 +783,9 @@ export function GeneratePage() {
         setGeneratingIndex(-1); setGeneratingKey(null);
       };
     } catch (e) {
-      setGenerateError(e instanceof Error ? e.message : '생성 실패');
+      const msg = e instanceof Error ? e.message : '생성 실패';
+      setGenerateError(msg);
+      toast.error('섹션 생성 실패', { description: msg });
       setGenerating(false);
       setGeneratingIndex(-1); setGeneratingKey(null);
     }
@@ -779,12 +795,12 @@ export function GeneratePage() {
     setSections(prev => prev.map((s, i) => i === index ? updated : s));
   };
 
-  const handleRegenerateSection = async (sectionKey: string) => {
+  const handleRegenerateSection = async (sectionKey: string, userInstruction?: string) => {
     if (!jobId) return;
     setRegeneratingKey(sectionKey);
     try {
       const refIds = refDocs.length > 0 ? refDocs.map(d => d.id) : undefined;
-      await regenerateSection(jobId, sectionKey, refIds, includeWebSearch);
+      await regenerateSection(jobId, sectionKey, refIds, includeWebSearch, userInstruction);
 
       const token = localStorage.getItem('accessToken');
       const url = getStreamUrl(jobId) + (token ? `?token=${token}` : '');
@@ -864,7 +880,9 @@ export function GeneratePage() {
         setRendering(false);
       };
     } catch (e) {
-      setRenderError(e instanceof Error ? e.message : '렌더링 실패');
+      const msg = e instanceof Error ? e.message : '렌더링 실패';
+      setRenderError(msg);
+      toast.error('렌더링 실패', { description: msg });
       setRendering(false);
     }
   };
@@ -889,6 +907,13 @@ export function GeneratePage() {
     setMapping(false);
     setGenerating(false);
     setRendering(false);
+
+    // 문서 목록 복원
+    setCustomerDocs((job.customerDocuments ?? []).map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount })));
+    setRefDocs((job.referenceDocuments ?? []).map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount })));
+    setSelectedTemplateId(job.templateId || '');
+    setUserInput(job.userInput || '');
+    setIncludeWebSearch(job.includeWebSearch);
 
     // outline 복원
     if (job.outline) {
@@ -1000,9 +1025,13 @@ export function GeneratePage() {
             title={jobId ? (gen.jobs.find(j => j.id === jobId)?.title ?? null) : null}
             jobSettings={jobId ? (() => {
               const job = gen.jobs.find(j => j.id === jobId);
+              const cDocs = customerDocs.length > 0 ? customerDocs
+                : (job?.customerDocuments ?? []).map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount }));
+              const rDocs = refDocs.length > 0 ? refDocs
+                : (job?.referenceDocuments ?? []).map(d => ({ id: d.id, filename: d.filename, chunkCount: d.chunkCount }));
               return {
-                customerDocs,
-                refDocs,
+                customerDocs: cDocs,
+                refDocs: rDocs,
                 userInput: userInput || job?.userInput || '',
                 includeWebSearch: includeWebSearch || (job?.includeWebSearch ?? false),
                 templateName: gen.templates.find(t => t.id === (selectedTemplateId || job?.templateId))?.name || job?.templateName,
@@ -1163,6 +1192,49 @@ export function GeneratePage() {
                     requirements={requirements}
                     mapping={reqMapping}
                     onChange={setReqMapping}
+                    onGenerateUnmapped={jobId ? async () => {
+                      try {
+                        const prevKeys = new Set<string>();
+                        const collectKeys = (nodes: OutlineNode[]) => { for (const n of nodes) { prevKeys.add(n.key); collectKeys(n.children); } };
+                        collectKeys(outline);
+
+                        const updated = await generateUnmappedSections(jobId);
+
+                        let newOutline: OutlineNode[] = [];
+                        if (updated.outline) {
+                          try { newOutline = JSON.parse(updated.outline); setOutline(newOutline); } catch { /* ignore */ }
+                        }
+                        let newMapping: Record<string, string[]> = {};
+                        if (updated.requirementMapping) {
+                          try {
+                            const parsed = JSON.parse(updated.requirementMapping);
+                            setRequirements(parsed.requirements || []);
+                            newMapping = parsed.mapping || {};
+                            setReqMapping(newMapping);
+                          } catch { /* ignore */ }
+                        }
+
+                        // 새로 추가된 섹션 정보 수집
+                        const added: { key: string; title: string; reqIds: string[] }[] = [];
+                        const findNew = (nodes: OutlineNode[]) => {
+                          for (const n of nodes) {
+                            if (!prevKeys.has(n.key) && n.children.length === 0) {
+                              added.push({ key: n.key, title: n.title, reqIds: newMapping[n.key] || [] });
+                            }
+                            findNew(n.children);
+                          }
+                        };
+                        findNew(newOutline);
+
+                        if (added.length > 0) {
+                          setUnmappedResult(added);
+                        } else {
+                          toast.info('새로운 섹션이 생성되지 않았습니다.');
+                        }
+                      } catch (e) {
+                        toast.error('목차 자동 생성 실패', { description: e instanceof Error ? e.message : '서버 오류가 발생했습니다.' });
+                      }
+                    } : undefined}
                   />
                 )}
 
@@ -1338,6 +1410,41 @@ export function GeneratePage() {
           )}
         </div>
       </main>
+
+      {/* 미배치 목차 생성 결과 모달 */}
+      {unmappedResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setUnmappedResult(null)}>
+          <div className="bg-background rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="font-semibold flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                목차 {unmappedResult.length}개 섹션 추가 완료
+              </h3>
+              <button onClick={() => setUnmappedResult(null)} className="p-1 rounded hover:bg-muted cursor-pointer"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-4 space-y-3">
+              {unmappedResult.map(section => (
+                <div key={section.key} className="rounded-md border p-3">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{section.key}</span>
+                    <span className="text-sm font-medium">{section.title}</span>
+                  </div>
+                  {section.reqIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {section.reqIds.map(id => (
+                        <Badge key={id} variant="secondary" className="text-xs">{id}</Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t flex justify-end">
+              <Button onClick={() => setUnmappedResult(null)}>확인</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

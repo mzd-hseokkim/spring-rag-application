@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ChatView, type FileUploadStatus } from '@/components/chat/ChatView';
 import { DocumentUpload } from '@/components/document/DocumentUpload';
 import { DocumentList } from '@/components/document/DocumentList';
@@ -7,6 +6,7 @@ import { TagManager } from '@/components/document/TagManager';
 import { CollectionManager } from '@/components/document/CollectionManager';
 import { ConversationList } from '@/components/conversation/ConversationList';
 import { AppSidebar } from '@/components/layout/AppSidebar';
+import { DocumentSidebar } from '@/components/layout/DocumentSidebar';
 import { useDocuments } from '@/hooks/useDocuments';
 import { useModels } from '@/hooks/useModels';
 import { useChat } from '@/hooks/useChat';
@@ -24,7 +24,6 @@ export function MainPage() {
   }, [refreshConversations]);
   const chat = useChat(handleTitleGenerated);
   const [tagColRefreshKey, setTagColRefreshKey] = useState(0);
-  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('sidebar:tab') || 'conversations');
   const [uploadStatus, setUploadStatus] = useState<FileUploadStatus | null>(null);
   const bumpTagColKey = () => {
     setTagColRefreshKey(k => k + 1);
@@ -77,43 +76,18 @@ export function MainPage() {
     refreshConversations();
   };
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    localStorage.setItem('sidebar:tab', tab);
-  };
-
   return (
     <div className="flex h-screen bg-background">
       <AppSidebar>
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
-          <TabsList className="mx-3 mt-3 bg-sidebar-accent">
-            <TabsTrigger value="conversations" className="flex-1 text-xs text-sidebar-foreground/50 hover:text-sidebar-foreground! data-active:bg-sidebar-primary! data-active:text-sidebar-primary-foreground! data-active:hover:text-sidebar-primary-foreground!">
-              대화
-            </TabsTrigger>
-            <TabsTrigger value="documents" className="flex-1 text-xs text-sidebar-foreground/50 hover:text-sidebar-foreground! data-active:bg-sidebar-primary! data-active:text-sidebar-primary-foreground! data-active:hover:text-sidebar-primary-foreground!">
-              문서
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="conversations" className="flex-1 overflow-y-auto p-3 mt-0">
-            <ConversationList
-              conversations={conversations}
-              activeSessionId={chat.sessionId}
-              onSelect={handleSelectConversation}
-              onDelete={handleDeleteConversation}
-              onRename={rename}
-            />
-          </TabsContent>
-          <TabsContent value="documents" className="flex-1 overflow-y-auto p-3 space-y-3 mt-0">
-            <DocumentUpload onUpload={upload} uploading={uploading} isAdmin={isAdmin} />
-            <div className="space-y-3">
-              <TagManager onTagsChange={bumpTagColKey} />
-              <CollectionManager onCollectionsChange={bumpTagColKey} />
-            </div>
-            <div className="border-t border-sidebar-border pt-3">
-              <DocumentList documents={documents} onRefresh={refreshDocs} refreshKey={tagColRefreshKey} />
-            </div>
-          </TabsContent>
-        </Tabs>
+        <div className="flex-1 overflow-y-auto p-3">
+          <ConversationList
+            conversations={conversations}
+            activeSessionId={chat.sessionId}
+            onSelect={handleSelectConversation}
+            onDelete={handleDeleteConversation}
+            onRename={rename}
+          />
+        </div>
       </AppSidebar>
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -128,6 +102,17 @@ export function MainPage() {
           filterRefreshKey={tagColRefreshKey}
         />
       </main>
+
+      <DocumentSidebar>
+        <DocumentUpload onUpload={upload} uploading={uploading} isAdmin={isAdmin} />
+        <div className="space-y-3">
+          <TagManager onTagsChange={bumpTagColKey} />
+          <CollectionManager onCollectionsChange={bumpTagColKey} />
+        </div>
+        <div className="border-t border-sidebar-border pt-3">
+          <DocumentList documents={documents} onRefresh={refreshDocs} refreshKey={tagColRefreshKey} />
+        </div>
+      </DocumentSidebar>
     </div>
   );
 }
