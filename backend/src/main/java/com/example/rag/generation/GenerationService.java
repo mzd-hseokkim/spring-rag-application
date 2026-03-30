@@ -7,9 +7,16 @@ import com.example.rag.generation.dto.GenerationRequest;
 import com.example.rag.generation.dto.GenerationResponse;
 import com.example.rag.document.Document;
 import com.example.rag.document.DocumentRepository;
+import com.example.rag.generation.dto.OutlineNode;
+import com.example.rag.generation.renderer.MarkdownRenderer;
 import com.example.rag.generation.template.DocumentTemplate;
 import com.example.rag.generation.template.DocumentTemplateRepository;
+import com.example.rag.generation.workflow.DocumentOutline;
 import com.example.rag.generation.workflow.GenerationWorkflowService;
+import com.example.rag.generation.workflow.SectionContent;
+import com.example.rag.generation.workflow.SectionPlan;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -22,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -39,19 +47,25 @@ public class GenerationService {
     private final DocumentRepository documentRepository;
     private final AppUserRepository userRepository;
     private final GenerationWorkflowService workflowService;
+    private final MarkdownRenderer markdownRenderer;
+    private final ObjectMapper objectMapper;
 
     public GenerationService(GenerationJobRepository jobRepository,
                              GenerationJobDocumentRepository jobDocumentRepository,
                              DocumentTemplateRepository templateRepository,
                              DocumentRepository documentRepository,
                              AppUserRepository userRepository,
-                             GenerationWorkflowService workflowService) {
+                             GenerationWorkflowService workflowService,
+                             MarkdownRenderer markdownRenderer,
+                             ObjectMapper objectMapper) {
         this.jobRepository = jobRepository;
         this.jobDocumentRepository = jobDocumentRepository;
         this.templateRepository = templateRepository;
         this.documentRepository = documentRepository;
         this.userRepository = userRepository;
         this.workflowService = workflowService;
+        this.markdownRenderer = markdownRenderer;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -359,6 +373,53 @@ public class GenerationService {
     @Transactional
     public void deleteJob(UUID id) {
         jobRepository.deleteById(id);
+    }
+
+    public record MarkdownResult(String title, String markdown) {}
+
+    public MarkdownResult getMarkdownWithTitle(UUID jobId) {
+        GenerationJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(JOB_NOT_FOUND + jobId));
+        if (job.getOutline() == null || job.getGeneratedSections() == null) {
+            throw new IllegalStateException("Outline or sections not yet generated for job: " + jobId);
+        }
+        try {
+            List<OutlineNode> outlineNodes = objectMapper.readValue(
+                    job.getOutline(), new TypeReference<List<OutlineNode>>() {});
+            String docTitle = job.getTitle() != null && !job.getTitle().isBlank()
+                    ? job.getTitle() : "제안서";
+            List<SectionPlan> allPlans = new ArrayList<>();
+            flattenOutlineNodes(outlineNodes, allPlans);
+            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans);
+
+            List<SectionContent> sections = objectMapper.readValue(
+                    job.getGeneratedSections(), new TypeReference<List<SectionContent>>() {});
+            sections = sections.stream()
+                    .sorted(java.util.Comparator.comparing(SectionContent::key, GenerationService::compareKeys))
+                    .toList();
+            return new MarkdownResult(docTitle, markdownRenderer.render(outline, sections));
+        } catch (Exception e) {
+            throw new RagException("Failed to generate markdown", e);
+        }
+    }
+
+    private void flattenOutlineNodes(List<OutlineNode> nodes, List<SectionPlan> result) {
+        for (OutlineNode node : nodes) {
+            result.add(new SectionPlan(node.key(), node.title(), node.description(), List.of(), 0));
+            if (!node.children().isEmpty()) {
+                flattenOutlineNodes(node.children(), result);
+            }
+        }
+    }
+
+    private static int compareKeys(String a, String b) {
+        String[] pa = a.split("\\.");
+        String[] pb = b.split("\\.");
+        for (int i = 0; i < Math.min(pa.length, pb.length); i++) {
+            int cmp = Integer.compare(Integer.parseInt(pa[i]), Integer.parseInt(pb[i]));
+            if (cmp != 0) return cmp;
+        }
+        return Integer.compare(pa.length, pb.length);
     }
 
     private String buildTitle(List<UUID> customerDocIds) {

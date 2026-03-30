@@ -152,6 +152,16 @@ public class GenerationController {
                 .body(resource);
     }
 
+    @GetMapping(value = "/{id}/download-markdown", produces = "text/markdown; charset=UTF-8")
+    public ResponseEntity<String> downloadMarkdown(@PathVariable UUID id) {
+        var result = generationService.getMarkdownWithTitle(id);
+        String filename = result.title().replaceAll("[\\\\/:*?\"<>|]", "_") + ".md";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(filename, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20"))
+                .header(HttpHeaders.CONTENT_TYPE, "text/markdown; charset=UTF-8")
+                .body(result.markdown());
+    }
+
     @GetMapping(value = "/{id}/preview", produces = MediaType.TEXT_HTML_VALUE)
     public String preview(@PathVariable UUID id) {
         return generationService.getPreviewHtml(id);

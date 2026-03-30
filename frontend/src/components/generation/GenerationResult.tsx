@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { getDownloadUrl, getPreviewUrl } from '@/api/generation';
-import { Download, RotateCcw, ExternalLink } from 'lucide-react';
+import { getDownloadUrl, getPreviewUrl, getMarkdownDownloadUrl } from '@/api/generation';
+import { Download, RotateCcw, ExternalLink, FileText } from 'lucide-react';
 
 interface Props {
   jobId: string;
@@ -35,6 +35,22 @@ export function GenerationResult({ jobId, onRegenerate }: Props) {
     window.URL.revokeObjectURL(url);
   };
 
+  const handleMarkdownDownload = async () => {
+    const mdUrl = `${getMarkdownDownloadUrl(jobId)}?token=${token}`;
+    const res = await fetch(mdUrl);
+    if (!res.ok) return;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const filenameMatch = disposition.match(/filename\*=UTF-8''(.+)/);
+    const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : 'document.md';
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   const handleOpenPreview = () => {
     window.open(previewUrl, '_blank');
   };
@@ -51,7 +67,11 @@ export function GenerationResult({ jobId, onRegenerate }: Props) {
       <div className="flex gap-2">
         <Button onClick={handleDownload} size="sm">
           <Download className="h-4 w-4 mr-1.5" />
-          다운로드
+          HTML 다운로드
+        </Button>
+        <Button onClick={handleMarkdownDownload} size="sm" variant="outline">
+          <FileText className="h-4 w-4 mr-1.5" />
+          Markdown 다운로드
         </Button>
         <Button variant="outline" size="sm" onClick={handleOpenPreview}>
           <ExternalLink className="h-4 w-4 mr-1.5" />

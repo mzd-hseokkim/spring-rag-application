@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useGeneration } from '@/hooks/useGeneration';
 import { searchDocuments } from '@/api/client';
-import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, generateUnmappedSections, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, fetchJob, updateJobTitle, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
+import { startOutlineExtraction, saveOutline, startRequirementMapping, saveRequirementMapping, generateUnmappedSections, startSectionGeneration, startRendering, regenerateSection, clearSections, getStreamUrl, getDownloadUrl, getPreviewUrl, getMarkdownDownloadUrl, fetchJob, updateJobTitle, type OutlineNode, type GenerationJob, type GenerationProgressEvent } from '@/api/generation';
 import { OutlineEditor } from '@/components/generation/OutlineEditor';
 import { RequirementMapView } from '@/components/generation/RequirementMapView';
 import { SectionEditor } from '@/components/generation/SectionEditor';
@@ -1325,9 +1325,39 @@ export function GeneratePage() {
                       <CheckCircle2 className="h-4 w-4 mr-1.5" />선택 생성 ({checkedTopKeys.size})
                     </Button>
                   </div>
-                  <Button onClick={handleStartRendering} disabled={generating || sections.length === 0}>
-                    <ArrowRight className="h-4 w-4 mr-1.5" />렌더링 & 미리보기
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (!jobId) return;
+                        const token = localStorage.getItem('accessToken') || '';
+                        const url = `${getMarkdownDownloadUrl(jobId)}?token=${token}`;
+                        fetch(url)
+                          .then(res => {
+                            if (!res.ok) throw new Error('Download failed');
+                            const disposition = res.headers.get('Content-Disposition') || '';
+                            const filenameMatch = disposition.match(/filename\*=UTF-8''(.+)/);
+                            const fallbackTitle = gen.jobs.find(j => j.id === jobId)?.title || 'document';
+                            const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : `${fallbackTitle}.md`;
+                            return res.blob().then(blob => ({ blob, filename }));
+                          })
+                          .then(({ blob, filename }) => {
+                            const a = document.createElement('a');
+                            a.href = window.URL.createObjectURL(blob);
+                            a.download = filename;
+                            a.click();
+                            window.URL.revokeObjectURL(a.href);
+                          })
+                          .catch(() => toast.error('Markdown 다운로드에 실패했습니다.'));
+                      }}
+                      disabled={generating || sections.length === 0}
+                    >
+                      <Download className="h-4 w-4 mr-1.5" />Markdown 다운로드
+                    </Button>
+                    <Button onClick={handleStartRendering} disabled={generating || sections.length === 0}>
+                      <ArrowRight className="h-4 w-4 mr-1.5" />렌더링 & 미리보기
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

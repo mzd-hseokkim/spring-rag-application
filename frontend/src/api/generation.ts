@@ -247,3 +247,7 @@ export function getDownloadUrl(jobId: string): string {
 export function getPreviewUrl(jobId: string): string {
   return `/api/generations/${jobId}/preview`;
 }
+
+export function getMarkdownDownloadUrl(jobId: string): string {
+  return `/api/generations/${jobId}/download-markdown`;
+}

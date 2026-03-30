@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { ChatView, type FileUploadStatus } from '@/components/chat/ChatView';
 import { DocumentUpload } from '@/components/document/DocumentUpload';
 import { DocumentList } from '@/components/document/DocumentList';
+import { DocumentFilter } from '@/components/document/DocumentFilter';
 import { TagManager } from '@/components/document/TagManager';
 import { CollectionManager } from '@/components/document/CollectionManager';
 import { ConversationList } from '@/components/conversation/ConversationList';
@@ -25,6 +26,22 @@ export function MainPage() {
   const chat = useChat(handleTitleGenerated);
   const [tagColRefreshKey, setTagColRefreshKey] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<FileUploadStatus | null>(null);
+  const [docFilterTagIds, setDocFilterTagIds] = useState<Set<string>>(new Set());
+  const [docFilterCollectionIds, setDocFilterCollectionIds] = useState<Set<string>>(new Set());
+
+  const handleDocFilterChange = useCallback((tagIds: Set<string>, collectionIds: Set<string>) => {
+    setDocFilterTagIds(tagIds);
+    setDocFilterCollectionIds(collectionIds);
+  }, []);
+
+  const filteredDocuments = useMemo(() => {
+    if (docFilterTagIds.size === 0 && docFilterCollectionIds.size === 0) return documents;
+    return documents.filter(doc => {
+      const matchTag = docFilterTagIds.size === 0 || doc.tags?.some(t => docFilterTagIds.has(t.id));
+      const matchCol = docFilterCollectionIds.size === 0 || doc.collections?.some(c => docFilterCollectionIds.has(c.id));
+      return matchTag && matchCol;
+    });
+  }, [documents, docFilterTagIds, docFilterCollectionIds]);
   const bumpTagColKey = () => {
     setTagColRefreshKey(k => k + 1);
     refreshDocs();
@@ -109,8 +126,9 @@ export function MainPage() {
           <TagManager onTagsChange={bumpTagColKey} />
           <CollectionManager onCollectionsChange={bumpTagColKey} />
         </div>
-        <div className="border-t border-sidebar-border pt-3">
-          <DocumentList documents={documents} onRefresh={refreshDocs} refreshKey={tagColRefreshKey} />
+        <div className="border-t border-sidebar-border pt-3 space-y-2">
+          <DocumentFilter refreshKey={tagColRefreshKey} onFilterChange={handleDocFilterChange} />
+          <DocumentList documents={filteredDocuments} onRefresh={refreshDocs} refreshKey={tagColRefreshKey} />
         </div>
       </DocumentSidebar>
     </div>
