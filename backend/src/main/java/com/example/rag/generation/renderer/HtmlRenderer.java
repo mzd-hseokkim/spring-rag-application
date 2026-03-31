@@ -35,20 +35,17 @@ public class HtmlRenderer implements Renderer {
     @Override
     public String render(DocumentTemplate template, DocumentOutline outline,
                          List<SectionContent> sections, UUID userId, UUID jobId) {
-        // outline에서 depth별 제목 맵 구성
-        Map<String, String> depth1Titles = new LinkedHashMap<>();
-        Map<String, String> depth2Titles = new LinkedHashMap<>();
-        for (SectionPlan plan : outline.sections()) {
-            String[] parts = plan.key().split("\\.");
-            if (parts.length == 1) {
-                depth1Titles.put(plan.key(), plan.heading());
-            } else if (parts.length == 2) {
-                depth2Titles.put(plan.key(), plan.heading());
-            }
-        }
-        // 1 depth 목차만 필터 (간지 + TOC용)
-        List<SectionPlan> tocPlans = outline.sections().stream()
-                .filter(p -> !p.key().contains("."))
+        // OutlineNode 트리에서 depth별 제목 맵 구성
+        List<OutlineNode> outlineNodes = outline.outlineNodes() != null
+                ? outline.outlineNodes() : List.of();
+
+        // key → 조상 경로 맵 (breadcrumb용)
+        Map<String, List<String>> ancestorMap = new LinkedHashMap<>();
+        buildAncestorMap(outlineNodes, List.of(), ancestorMap);
+
+        // 1 depth = 트리의 루트 노드들 (TOC + 간지용)
+        List<SectionPlan> tocPlans = outlineNodes.stream()
+                .map(n -> new SectionPlan(n.key(), n.title(), n.description(), List.of(), 0))
                 .toList();
 
         // breadcrumb 계산
@@ -64,11 +61,11 @@ public class HtmlRenderer implements Renderer {
                         convertLayoutDataNewlines(s.layoutData()),
                         s.governingMessage() != null ? s.governingMessage() : "",
                         s.visualGuide() != null ? s.visualGuide() : "",
-                        buildBreadcrumb(s.key(), depth1Titles, depth2Titles)))
+                        buildBreadcrumb(s.key(), ancestorMap)))
                 .toList();
 
-        // chapters 구성 (간지용)
-        List<ChapterViewModel> chapters = buildChapters(tocPlans, depth2Titles);
+        // chapters 구성 (간지용): 1depth 노드 + 직계 2depth children
+        List<ChapterViewModel> chapters = buildChapters(outlineNodes);
 
         List<String> allReferences = sections.stream()
                 .flatMap(s -> s.references().stream())
@@ -78,10 +75,30 @@ public class HtmlRenderer implements Renderer {
                 .toList();
 
         Context ctx = new Context();
+        // sections를 outline 트리 순서로 정렬
+        List<String> leafOrder = new ArrayList<>();
+        collectLeafKeyOrder(outlineNodes, leafOrder);
+        Map<String, Integer> orderIndex = new HashMap<>();
+        for (int i = 0; i < leafOrder.size(); i++) orderIndex.put(leafOrder.get(i), i);
+        List<SectionViewModel> sortedViewModels = new ArrayList<>(viewModels);
+        sortedViewModels.sort((a, b) -> {
+            int ia = orderIndex.getOrDefault(a.key(), Integer.MAX_VALUE);
+            int ib = orderIndex.getOrDefault(b.key(), Integer.MAX_VALUE);
+            return Integer.compare(ia, ib);
+        });
+
+        // 내용이 있는 chapter만 필터 (간지)
+        java.util.Set<String> sectionKeySet = sortedViewModels.stream()
+                .map(SectionViewModel::key)
+                .collect(java.util.stream.Collectors.toSet());
+        List<ChapterViewModel> activeChapters = chapters.stream()
+                .filter(ch -> sectionKeySet.stream().anyMatch(sk -> sk.startsWith(ch.key() + ".") || sk.equals(ch.key())))
+                .toList();
+
         ctx.setVariable("outline", outline);
-        ctx.setVariable("sections", viewModels);
+        ctx.setVariable("sections", sortedViewModels);
         ctx.setVariable("tocSections", tocPlans);
-        ctx.setVariable("chapters", chapters);
+        ctx.setVariable("chapters", activeChapters);
         ctx.setVariable("allReferences", allReferences);
         ctx.setVariable("generatedAt", LocalDateTime.now());
 
@@ -102,43 +119,54 @@ public class HtmlRenderer implements Renderer {
         }
     }
 
-    /**
-     * 섹션 key에서 상위 경로 breadcrumb 문자열 생성.
-     * "1.2" → "I. 사업 이해 및 전략"
-     * "1.2.3" → "I. 사업 이해 및 전략 > 1.2 세부 제목"
-     */
-    private String buildBreadcrumb(String key, Map<String, String> depth1Titles, Map<String, String> depth2Titles) {
-        String[] parts = key.split("\\.");
-        if (parts.length < 2) return "";
-
-        String d1Key = parts[0];
-        String d1Title = depth1Titles.getOrDefault(d1Key, "");
-        if (d1Title.isEmpty()) return "";
-
-        if (parts.length == 2) {
-            return d1Title;
+    /** outline 트리의 leaf key를 트리 순서대로 수집 */
+    private void collectLeafKeyOrder(List<OutlineNode> nodes, List<String> result) {
+        for (OutlineNode node : nodes) {
+            if (node.children().isEmpty()) {
+                result.add(node.key());
+            } else {
+                collectLeafKeyOrder(node.children(), result);
+            }
         }
-        // 3 depth: "1.2.3" → depth1 > depth2
-        String d2Key = parts[0] + "." + parts[1];
-        String d2Title = depth2Titles.getOrDefault(d2Key, "");
-        if (d2Title.isEmpty()) return d1Title;
-        return d1Title + "  >  " + d2Title;
     }
 
     /**
-     * 1 depth 목차(SectionPlan) 기준으로 간지 ViewModel 목록을 구성한다.
-     * 각 chapter에는 해당 chapter에 속하는 2 depth 하위 항목 목록이 포함된다.
-     * outline의 depth2Titles에서 가져오므로, 2 depth가 leaf가 아니어도 정상 표시된다.
+     * OutlineNode 트리를 순회하여 각 노드의 key → 조상 "key. title" 리스트 맵을 구성.
+     * 예: "I.1.1.1" → ["I. 일반현황", "1. 제안사 일반현황", "I.1.1 하도급 범위"]
      */
-    private List<ChapterViewModel> buildChapters(List<SectionPlan> tocPlans, Map<String, String> depth2Titles) {
+    private void buildAncestorMap(List<OutlineNode> nodes, List<String> ancestors,
+                                   Map<String, List<String>> result) {
+        for (OutlineNode node : nodes) {
+            result.put(node.key(), ancestors);
+            if (!node.children().isEmpty()) {
+                List<String> childAncestors = new ArrayList<>(ancestors);
+                childAncestors.add(node.key() + ". " + node.title());
+                buildAncestorMap(node.children(), childAncestors, result);
+            }
+        }
+    }
+
+    /**
+     * 섹션 key의 조상 경로를 breadcrumb 문자열로 변환.
+     * 조상이 없으면 빈 문자열, 있으면 " > "로 연결.
+     */
+    private String buildBreadcrumb(String key, Map<String, List<String>> ancestorMap) {
+        List<String> ancestors = ancestorMap.get(key);
+        if (ancestors == null || ancestors.isEmpty()) return "";
+        return String.join("  >  ", ancestors);
+    }
+
+    /**
+     * OutlineNode 트리의 루트 노드(1depth) 기준으로 간지 ViewModel 목록을 구성한다.
+     * 각 chapter에는 직계 children(2depth) 항목 목록이 포함된다.
+     */
+    private List<ChapterViewModel> buildChapters(List<OutlineNode> outlineNodes) {
         List<ChapterViewModel> chapters = new ArrayList<>();
-        for (SectionPlan plan : tocPlans) {
-            String prefix = plan.key() + ".";
-            List<ChapterViewModel.SubItem> subItems = depth2Titles.entrySet().stream()
-                    .filter(e -> e.getKey().startsWith(prefix))
-                    .map(e -> new ChapterViewModel.SubItem(e.getKey(), e.getValue()))
+        for (OutlineNode node : outlineNodes) {
+            List<ChapterViewModel.SubItem> subItems = node.children().stream()
+                    .map(child -> new ChapterViewModel.SubItem(child.key(), child.title()))
                     .toList();
-            chapters.add(new ChapterViewModel(plan.key(), plan.heading(), subItems));
+            chapters.add(new ChapterViewModel(node.key(), node.title(), subItems));
         }
         return chapters;
     }

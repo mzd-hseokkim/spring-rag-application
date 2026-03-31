@@ -46,20 +46,14 @@ public class RequirementMapper {
     public record UnmappedSectionsResult(List<OutlineNode> newSections, Map<String, List<String>> newMapping) {}
 
     /**
-     * 미배치 요구사항을 위한 새 목차 섹션을 생성한다.
+     * 미배치 요구사항을 기존 목차의 적절한 위치에 leaf node로 배치한다.
+     * 새로운 top-level 섹션을 만들지 않고, 기존 목차 내에 하위 항목으로 추가.
+     * 반환: newSections는 빈 리스트, mapping에 새 leaf key → 요구사항 ID 매핑.
+     * outline 자체를 수정하므로, 호출 후 outline을 다시 저장해야 함.
      */
     public UnmappedSectionsResult generateSectionsForUnmapped(List<OutlineNode> outline, List<Requirement> unmapped) {
         String outlineText = flattenOutline(outline);
 
-        // 기존 목차의 최대 top-level key 계산
-        int maxTopKey = outline.stream()
-                .mapToInt(n -> {
-                    try { return Integer.parseInt(n.key()); } catch (NumberFormatException e) { return 0; }
-                })
-                .max().orElse(0);
-        int nextTopKey = maxTopKey + 1;
-
-        // 요구사항 텍스트 구성
         StringBuilder reqText = new StringBuilder();
         for (Requirement r : unmapped) {
             reqText.append("- ").append(r.id()).append(" [").append(r.importance()).append("]: ")
@@ -70,7 +64,8 @@ public class RequirementMapper {
 
         String prompt = """
                 다음은 제안서 목차와 미배치 요구사항 목록입니다.
-                미배치 요구사항들을 수용할 수 있는 **새로운 목차 섹션**을 생성하세요.
+                미배치 요구사항을 **기존 목차의 적절한 위치에 새로운 리프 노드로 추가**하세요.
+                새로운 대분류를 만들지 말고, 기존 목차 구조 안에 배치하세요.
 
                 ## 현재 제안서 목차
                 %s
@@ -79,25 +74,91 @@ public class RequirementMapper {
                 %s
 
                 ## 규칙
-                1. 기존 목차와 **중복되지 않는** 새로운 섹션만 생성하세요
-                2. 의미적으로 유사한 요구사항끼리 그룹화하여 하나의 섹션에 배치하세요
-                3. 섹션 key는 기존 목차의 마지막 번호 다음부터 부여 (시작 번호: %d)
-                4. **계층 구조는 최대 3단계** (대분류 > 중분류 > 소분류, 예: "%d", "%d.1", "%d.1.1")
-                5. 요구사항이 5개 이상인 그룹은 반드시 중분류/소분류로 세분화하세요
-                6. **리프 노드(최하위 항목)에만 요구사항을 매핑**하세요 — children이 있는 노드에는 매핑하지 마세요
-                7. 모든 미배치 요구사항을 빠짐없이 배치하세요
-                8. 제목은 구체적이고 실질적인 내용을 담아야 합니다 (예: "보안 요구사항" → "데이터 암호화 및 접근 제어")
+                1. 각 요구사항을 기존 목차에서 **가장 적합한 상위 항목** 아래에 새 리프 노드로 추가
+                2. 새 리프 노드의 key는 상위 항목의 key를 확장 (예: 상위가 "I.1.2"이고 마지막 자식이 "I.1.2.3"이면 → "I.1.2.4")
+                3. 의미적으로 유사한 요구사항은 같은 리프 노드에 그룹화
+                4. 제목은 구체적이고 실질적인 내용을 담아야 합니다
+                5. 모든 미배치 요구사항을 빠짐없이 배치하세요
+                6. **리프 노드에만 요구사항을 매핑** — children이 있는 노드에는 매핑하지 마세요
 
                 ## 출력 형식
-                반드시 JSON만 응답:
-                {"sections": [{"key":"...", "title":"...", "description":"...", "children":[...]}], "mapping": {"key": ["REQ-ID", ...]}}
-                """.formatted(outlineText, unmapped.size(), reqText.toString(),
-                        nextTopKey, nextTopKey, nextTopKey, nextTopKey);
+                반드시 JSON만 응답. parent_key는 새 리프를 추가할 기존 목차 항목의 key입니다.
+                {"new_leaves": [{"parent_key":"I.1.2", "key":"I.1.2.4", "title":"새 항목 제목", "description":"설명"}], "mapping": {"I.1.2.4": ["REQ-ID", ...]}}
+                """.formatted(outlineText, unmapped.size(), reqText.toString());
 
         String content = client.prompt().user(prompt).call().content();
 
-        log.info("Generated sections for {} unmapped requirements", unmapped.size());
-        return parseUnmappedResult(content);
+        log.info("Generated leaf nodes for {} unmapped requirements", unmapped.size());
+        return parseUnmappedLeafResult(content, outline);
+    }
+
+    private UnmappedSectionsResult parseUnmappedLeafResult(String content, List<OutlineNode> outline) {
+        if (content == null || content.isBlank()) return new UnmappedSectionsResult(List.of(), Map.of());
+        try {
+            String json = content.trim();
+            if (json.startsWith("```")) {
+                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+            }
+            int objStart = json.indexOf('{');
+            int objEnd = json.lastIndexOf('}');
+            if (objStart >= 0 && objEnd > objStart) {
+                json = json.substring(objStart, objEnd + 1);
+            }
+            var tree = objectMapper.readTree(json);
+
+            Map<String, List<String>> mapping = Map.of();
+            if (tree.has("mapping")) {
+                mapping = objectMapper.readValue(tree.get("mapping").toString(), MAPPING_TYPE);
+            }
+
+            // new_leaves를 outline 트리에 삽입
+            if (tree.has("new_leaves")) {
+                for (var leaf : tree.get("new_leaves")) {
+                    String parentKey = leaf.has("parent_key") ? leaf.get("parent_key").asText() : null;
+                    String key = leaf.get("key").asText();
+                    String title = leaf.get("title").asText();
+                    String desc = leaf.has("description") ? leaf.get("description").asText() : "";
+
+                    OutlineNode newLeaf = new OutlineNode(key, title, desc, List.of());
+                    if (parentKey != null) {
+                        insertLeafUnderParent(outline, parentKey, newLeaf);
+                    }
+                }
+            }
+
+            log.info("Parsed unmapped leaf result: {} mapping keys", mapping.size());
+            // outline이 in-place로 수정됨 → newSections는 빈 리스트
+            return new UnmappedSectionsResult(List.of(), mapping);
+        } catch (Exception e) {
+            log.warn("Failed to parse unmapped leaf result: {} | preview: {}",
+                    e.getMessage(), content.substring(0, Math.min(200, content.length())));
+            return new UnmappedSectionsResult(List.of(), Map.of());
+        }
+    }
+
+    /**
+     * outline 트리에서 parentKey에 해당하는 노드를 찾아 새 leaf를 children에 추가.
+     * OutlineNode가 record이므로 부모를 새 인스턴스로 교체해야 함.
+     */
+    private boolean insertLeafUnderParent(List<OutlineNode> nodes, String parentKey, OutlineNode newLeaf) {
+        for (int i = 0; i < nodes.size(); i++) {
+            OutlineNode node = nodes.get(i);
+            if (node.key().equals(parentKey)) {
+                List<OutlineNode> newChildren = new ArrayList<>(node.children());
+                newChildren.add(newLeaf);
+                nodes.set(i, new OutlineNode(node.key(), node.title(), node.description(), newChildren));
+                return true;
+            }
+            if (!node.children().isEmpty()) {
+                // children은 불변 리스트일 수 있으므로 mutable copy 필요
+                List<OutlineNode> mutableChildren = new ArrayList<>(node.children());
+                if (insertLeafUnderParent(mutableChildren, parentKey, newLeaf)) {
+                    nodes.set(i, new OutlineNode(node.key(), node.title(), node.description(), mutableChildren));
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private UnmappedSectionsResult parseUnmappedResult(String content) {

@@ -390,7 +390,7 @@ public class GenerationService {
                     ? job.getTitle() : "제안서";
             List<SectionPlan> allPlans = new ArrayList<>();
             flattenOutlineNodes(outlineNodes, allPlans);
-            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans);
+            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans, outlineNodes);
 
             List<SectionContent> sections = objectMapper.readValue(
                     job.getGeneratedSections(), new TypeReference<List<SectionContent>>() {});
@@ -413,13 +413,7 @@ public class GenerationService {
     }
 
     private static int compareKeys(String a, String b) {
-        String[] pa = a.split("\\.");
-        String[] pb = b.split("\\.");
-        for (int i = 0; i < Math.min(pa.length, pb.length); i++) {
-            int cmp = Integer.compare(Integer.parseInt(pa[i]), Integer.parseInt(pb[i]));
-            if (cmp != 0) return cmp;
-        }
-        return Integer.compare(pa.length, pb.length);
+        return com.example.rag.generation.workflow.OutlineUtils.compareKeys(a, b);
     }
 
     private String buildTitle(List<UUID> customerDocIds) {

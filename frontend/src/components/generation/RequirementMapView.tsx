@@ -204,7 +204,7 @@ type RightTab = 'section' | 'all';
 export function RequirementMapView({ outline: rawOutline, requirements, mapping, onChange, onGenerateUnmapped, readOnly }: RequirementMapViewProps) {
   const outline = useMemo(() => sortOutline(rawOutline), [rawOutline]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(outline.map(n => n.key)));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(outline.map(n => n.key)));  // top-level keys are unique
   const [rightTab, setRightTab] = useState<RightTab>('all');
   const [showUnmappedOnly, setShowUnmappedOnly] = useState(false);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
@@ -248,10 +248,10 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     return result;
   }, [outline]);
 
-  const toggleExpand = (key: string) => {
+  const toggleExpand = (pathId: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      next.has(pathId) ? next.delete(pathId) : next.add(pathId);
       return next;
     });
   };
@@ -292,8 +292,9 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     return (mapping[key] || []).length;
   };
 
-  const renderOutlineNode = (node: OutlineNode, depth: number) => {
-    const isExpanded = expanded.has(node.key);
+  const renderOutlineNode = (node: OutlineNode, depth: number, parentPath: string) => {
+    const pathId = parentPath ? `${parentPath}/${node.key}` : node.key;
+    const isExpanded = expanded.has(pathId);
     const hasChildren = node.children.length > 0;
     const count = getReqCount(node.key);
     const isSelected = selectedKey === node.key;
@@ -302,7 +303,7 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     const isDragOver = dragOverKey === node.key;
 
     return (
-      <div key={node.key}>
+      <div key={pathId}>
         <div
           className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md transition-colors ${
             isDragOver ? 'bg-primary/20 border border-primary border-dashed' :
@@ -314,12 +315,12 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
           onDrop={isLeaf ? (e) => handleDrop(e, node.key) : undefined}
         >
           {hasChildren ? (
-            <button onClick={(e) => { e.stopPropagation(); toggleExpand(node.key); }} className="p-0.5">
+            <button onClick={(e) => { e.stopPropagation(); toggleExpand(pathId); }} className="p-0.5">
               {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
             </button>
           ) : <span className="w-4.5" />}
 
-          <span className="text-xs text-muted-foreground font-mono w-8 shrink-0">{node.key}</span>
+          <span className="text-xs text-muted-foreground font-mono shrink-0 mr-1">{node.key}</span>
           <span className="text-sm flex-1 truncate">{node.title}</span>
           {isLeaf && count > 0 && (
             <Badge variant="secondary" className="text-xs">{count}개</Badge>
@@ -327,7 +328,7 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
           {isDragOver && <Plus className="h-3.5 w-3.5 text-primary shrink-0" />}
         </div>
 
-        {isExpanded && node.children.map(child => renderOutlineNode(child, depth + 1))}
+        {isExpanded && node.children.map(child => renderOutlineNode(child, depth + 1, pathId))}
       </div>
     );
   };
@@ -361,7 +362,7 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
       {/* 좌측: 목차 트리 */}
       <div className="border rounded-lg p-3 overflow-y-auto">
         <p className="text-xs text-muted-foreground mb-2 font-medium">목차 (클릭하여 요구사항 확인)</p>
-        {outline.map(node => renderOutlineNode(node, 0))}
+        {outline.map(node => renderOutlineNode(node, 0, ''))}
 
         {unmapped.length > 0 && (
           <div className="mt-3 pt-3 border-t">

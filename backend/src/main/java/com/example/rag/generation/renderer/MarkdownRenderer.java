@@ -1,14 +1,12 @@
 package com.example.rag.generation.renderer;
 
+import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.generation.workflow.ContentTable;
 import com.example.rag.generation.workflow.DocumentOutline;
 import com.example.rag.generation.workflow.SectionContent;
-import com.example.rag.generation.workflow.SectionPlan;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Component
@@ -16,6 +14,8 @@ public class MarkdownRenderer {
 
     public String render(DocumentOutline outline, List<SectionContent> sections) {
         var sb = new StringBuilder();
+        List<OutlineNode> outlineNodes = outline.outlineNodes() != null
+                ? outline.outlineNodes() : List.of();
 
         // 문서 제목
         sb.append("# ").append(outline.title()).append("\n\n");
@@ -23,122 +23,114 @@ public class MarkdownRenderer {
             sb.append(outline.summary()).append("\n\n");
         }
 
-        // 전체 목차
+        // 전체 목차 (outline 트리 순서)
         sb.append("---\n\n## 목차\n\n");
-        for (SectionPlan plan : outline.sections()) {
-            int depth = plan.key().split("\\.").length;
-            String indent = "  ".repeat(depth - 1);
-            sb.append(indent).append("- **").append(plan.key()).append(".** ").append(plan.heading()).append("\n");
-        }
+        renderToc(sb, outlineNodes, 0);
         sb.append("\n---\n\n");
 
-        // depth별 제목 맵 구성 (breadcrumb용)
-        Map<String, String> headingMap = new LinkedHashMap<>();
-        for (SectionPlan plan : outline.sections()) {
-            headingMap.put(plan.key(), plan.heading());
-        }
+        // key → 조상 breadcrumb 맵
+        Map<String, List<String>> ancestorMap = new LinkedHashMap<>();
+        buildAncestorMap(outlineNodes, List.of(), ancestorMap);
 
-        // 챕터 간지 구성 (1 depth → 하위 2 depth 목록)
-        Map<String, List<Map.Entry<String, String>>> chapterSubItems = new LinkedHashMap<>();
-        for (SectionPlan plan : outline.sections()) {
-            if (!plan.key().contains(".")) {
-                chapterSubItems.put(plan.key(), new java.util.ArrayList<>());
-            }
-        }
-        for (SectionPlan plan : outline.sections()) {
-            String[] parts = plan.key().split("\\.");
-            if (parts.length == 2) {
-                var list = chapterSubItems.get(parts[0]);
-                if (list != null) list.add(Map.entry(plan.key(), plan.heading()));
-            }
-        }
+        // section key → content 맵
+        Map<String, SectionContent> sectionMap = new LinkedHashMap<>();
+        for (SectionContent s : sections) sectionMap.put(s.key(), s);
 
-        // 섹션 본문
-        String lastChapterKey = null;
-        for (SectionContent section : sections) {
-            String[] keyParts = section.key().split("\\.");
-            int depth = keyParts.length;
-            String chapterKey = keyParts[0];
-
-            // 챕터 간지: 새로운 1 depth 챕터 시작 시 삽입
-            if (!chapterKey.equals(lastChapterKey)) {
-                lastChapterKey = chapterKey;
-                String chapterTitle = headingMap.getOrDefault(chapterKey, "");
-                sb.append("\n---\n\n");
-                sb.append("## ").append(chapterKey).append(". ").append(chapterTitle).append("\n\n");
-                var subItems = chapterSubItems.get(chapterKey);
-                if (subItems != null && !subItems.isEmpty()) {
-                    for (var sub : subItems) {
-                        sb.append("- **").append(sub.getKey()).append(".** ").append(sub.getValue()).append("\n");
-                    }
-                    sb.append("\n");
-                }
-            }
-
-            // --- 섹션 구분선 ---
-            sb.append("---\n\n");
-
-            // breadcrumb: 상위 경로 표시
-            String breadcrumb = buildBreadcrumb(section.key(), headingMap);
-            if (!breadcrumb.isEmpty()) {
-                sb.append("> ").append(breadcrumb).append("\n\n");
-            }
-
-            // 장표 번호 + 제목
-            String heading = "#".repeat(Math.min(depth + 1, 6));
-            sb.append(heading).append(" ").append(section.key()).append(". ").append(section.title()).append("\n\n");
-
-            // 본문 내용
-            if (section.content() != null && !section.content().isBlank()) {
-                sb.append(section.content()).append("\n\n");
-            }
-
-            // 하이라이트
-            if (section.highlights() != null && !section.highlights().isEmpty()) {
-                sb.append("**주요 포인트:**\n\n");
-                for (String highlight : section.highlights()) {
-                    sb.append("- ").append(highlight).append("\n");
-                }
-                sb.append("\n");
-            }
-
-            // 테이블
-            if (section.tables() != null && !section.tables().isEmpty()) {
-                for (ContentTable table : section.tables()) {
-                    renderTable(sb, table);
-                }
-            }
-
-            // 참조
-            if (section.references() != null && !section.references().isEmpty()) {
-                sb.append("**참조:**\n\n");
-                for (String ref : section.references()) {
-                    sb.append("- ").append(ref).append("\n");
-                }
-                sb.append("\n");
-            }
-        }
+        // outline 트리 순서대로 렌더링 (내용 없는 항목도 목차 제목으로 표시)
+        renderOutlineTree(sb, outlineNodes, sectionMap, ancestorMap, 1);
 
         return sb.toString();
     }
 
-    /**
-     * 섹션 key에서 상위 경로 breadcrumb 생성.
-     * "1.1.1" → "📂 1. 사업 이해 및 추진 전략 > 1.1. 사업 배경 및 필요성"
-     */
-    private String buildBreadcrumb(String key, Map<String, String> headingMap) {
-        String[] parts = key.split("\\.");
-        if (parts.length < 2) return "";
-
-        var sb = new StringBuilder();
-        for (int i = 1; i < parts.length; i++) {
-            String ancestorKey = String.join(".", java.util.Arrays.copyOfRange(parts, 0, i));
-            String title = headingMap.get(ancestorKey);
-            if (title == null) continue;
-            if (!sb.isEmpty()) sb.append(" > ");
-            sb.append("**").append(ancestorKey).append(".** ").append(title);
+    /** 목차를 outline 트리 구조대로 렌더링 */
+    private void renderToc(StringBuilder sb, List<OutlineNode> nodes, int depth) {
+        for (OutlineNode node : nodes) {
+            String indent = "  ".repeat(depth);
+            sb.append(indent).append("- **").append(node.key()).append(".** ").append(node.title()).append("\n");
+            if (!node.children().isEmpty()) {
+                renderToc(sb, node.children(), depth + 1);
+            }
         }
-        return sb.toString();
+    }
+
+    /** outline 트리를 DFS로 순회하며 본문 렌더링 */
+    private void renderOutlineTree(StringBuilder sb, List<OutlineNode> nodes,
+                                    Map<String, SectionContent> sectionMap,
+                                    Map<String, List<String>> ancestorMap, int headingLevel) {
+        for (OutlineNode node : nodes) {
+            boolean isLeaf = node.children().isEmpty();
+            String heading = "#".repeat(Math.min(headingLevel + 1, 6));
+
+            if (isLeaf) {
+                SectionContent section = sectionMap.get(node.key());
+                sb.append("---\n\n");
+
+                // breadcrumb
+                List<String> ancestors = ancestorMap.getOrDefault(node.key(), List.of());
+                if (!ancestors.isEmpty()) {
+                    sb.append("> ").append(String.join(" > ", ancestors)).append("\n\n");
+                }
+
+                sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
+
+                if (section != null) {
+                    renderSectionContent(sb, section);
+                } else {
+                    sb.append("*（내용 미생성）*\n\n");
+                }
+            } else {
+                // 비-leaf: 챕터/섹션 제목 표시
+                sb.append("\n---\n\n");
+                sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
+
+                // 1depth 노드: 하위 항목 목록 표시
+                if (headingLevel == 1) {
+                    for (OutlineNode child : node.children()) {
+                        sb.append("- **").append(child.key()).append(".** ").append(child.title()).append("\n");
+                    }
+                    sb.append("\n");
+                }
+
+                renderOutlineTree(sb, node.children(), sectionMap, ancestorMap, headingLevel + 1);
+            }
+        }
+    }
+
+    private void renderSectionContent(StringBuilder sb, SectionContent section) {
+        if (section.content() != null && !section.content().isBlank()) {
+            sb.append(section.content()).append("\n\n");
+        }
+        if (section.highlights() != null && !section.highlights().isEmpty()) {
+            sb.append("**주요 포인트:**\n\n");
+            for (String highlight : section.highlights()) {
+                sb.append("- ").append(highlight).append("\n");
+            }
+            sb.append("\n");
+        }
+        if (section.tables() != null && !section.tables().isEmpty()) {
+            for (ContentTable table : section.tables()) {
+                renderTable(sb, table);
+            }
+        }
+        if (section.references() != null && !section.references().isEmpty()) {
+            sb.append("**참조:**\n\n");
+            for (String ref : section.references()) {
+                sb.append("- ").append(ref).append("\n");
+            }
+            sb.append("\n");
+        }
+    }
+
+    private void buildAncestorMap(List<OutlineNode> nodes, List<String> ancestors,
+                                   Map<String, List<String>> result) {
+        for (OutlineNode node : nodes) {
+            result.put(node.key(), ancestors);
+            if (!node.children().isEmpty()) {
+                List<String> childAncestors = new ArrayList<>(ancestors);
+                childAncestors.add("**" + node.key() + ".** " + node.title());
+                buildAncestorMap(node.children(), childAncestors, result);
+            }
+        }
     }
 
     private void renderTable(StringBuilder sb, ContentTable table) {

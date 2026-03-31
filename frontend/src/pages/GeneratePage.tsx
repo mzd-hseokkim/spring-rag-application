@@ -34,6 +34,26 @@ function compareReqIds(a: string, b: string): number {
   return pa.num - pb.num;
 }
 
+/** pathId("I/1/1.1")로 outline 트리에서 해당 노드를 찾아 하위 leaf key를 수집 */
+function collectLeafKeysUnderPath(nodes: OutlineNode[], pathId: string): string[] {
+  const segments = pathId.split('/');
+  let current = nodes;
+  for (let i = 0; i < segments.length; i++) {
+    const node = current.find(n => n.key === segments[i]);
+    if (!node) return [];
+    if (i === segments.length - 1) {
+      return collectLeafKeysFromNode(node);
+    }
+    current = node.children;
+  }
+  return [];
+}
+
+function collectLeafKeysFromNode(node: OutlineNode): string[] {
+  if (node.children.length === 0) return [node.key];
+  return node.children.flatMap(collectLeafKeysFromNode);
+}
+
 // ─── Markdown 다운로드 유틸 ───
 
 function outlineToMarkdown(nodes: OutlineNode[], depth = 0): string {
@@ -759,6 +779,7 @@ export function GeneratePage() {
           setTotalSectionsCount(updated.totalSections);
           setGenerating(false);
           setGeneratingIndex(-1); setGeneratingKey(null);
+          setCheckedTopKeys(new Set());
           gen.loadJobs();
         });
       });
@@ -1017,7 +1038,7 @@ export function GeneratePage() {
 
       {/* 메인 위자드 영역 */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto py-8 px-6">
+        <div className="max-w-7xl mx-auto py-8 px-6">
           <StepIndicator
             current={wizardStep}
             maxReached={maxReachedStep}
@@ -1310,14 +1331,17 @@ export function GeneratePage() {
                     <Button
                       variant="outline"
                       onClick={() => {
-                        const keys = Array.from(checkedTopKeys);
-                        const hasExisting = sections.some(s => keys.some(k => s.key === k || s.key.startsWith(k + '.')));
+                        const pathIds = Array.from(checkedTopKeys);
+                        const leafKeys = outline
+                          ? [...new Set(pathIds.flatMap(p => collectLeafKeysUnderPath(outline, p)))]
+                          : pathIds;
+                        const hasExisting = sections.some(s => leafKeys.includes(s.key));
                         if (hasExisting) {
                           if (window.confirm('이미 생성된 상세 내용이 있습니다. 삭제하고 재생성하시겠습니까?')) {
-                            handleStartSectionGeneration(keys, true);
+                            handleStartSectionGeneration(leafKeys, true);
                           }
                         } else {
-                          handleStartSectionGeneration(keys);
+                          handleStartSectionGeneration(leafKeys);
                         }
                       }}
                       disabled={generating || checkedTopKeys.size === 0}

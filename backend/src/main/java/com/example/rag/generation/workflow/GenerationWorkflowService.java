@@ -173,6 +173,16 @@ public class GenerationWorkflowService {
             log.info("Generation job {} - loaded {} total chunks from {} customer documents",
                     jobId, customerChunks.size(), customerDocIds.size());
 
+            // Phase 1.5: 권장 목차 감지 (키워드 필터링 → LLM 추출)
+            emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "권장 목차를 확인하고 있습니다..."));
+            String recommendedOutline = outlineExtractor.detectRecommendedOutline(customerDocIds);
+            if (recommendedOutline != null) {
+                log.info("Generation job {} - recommended outline detected ({}chars)", jobId, recommendedOutline.length());
+                emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "발주처 권장 목차를 발견했습니다. 이를 기준으로 목차를 구성합니다."));
+            } else {
+                log.info("Generation job {} - no recommended outline found, using standard structure", jobId);
+            }
+
             // Phase 2: 요구사항 — 이미 추출된 것이 있으면 재사용, 없으면 추출
             List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
             if (!requirements.isEmpty()) {
@@ -218,7 +228,8 @@ public class GenerationWorkflowService {
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 반영하여 목차를 구성하고 있습니다..."));
             List<OutlineNode> outline = outlineExtractor.extract(customerChunks, job.getUserInput(),
                     requirementsSummary, requirements,
-                    msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)));
+                    msg -> emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
+                    recommendedOutline);
             job.setOutline(outlineExtractor.toJson(outline));
             job.setCurrentStep(2);
             job.setStepStatus(STEP_STATUS_COMPLETE);
@@ -336,17 +347,15 @@ public class GenerationWorkflowService {
             return;
         }
 
-        log.info("Job {} - generating sections for {} unmapped requirements", jobId, unmapped.size());
-        RequirementMapper.UnmappedSectionsResult result = requirementMapper.generateSectionsForUnmapped(outline, unmapped);
+        log.info("Job {} - generating leaf nodes for {} unmapped requirements", jobId, unmapped.size());
+        // outline은 mutable list로 전달 — generateSectionsForUnmapped가 트리에 직접 leaf를 삽입함
+        List<OutlineNode> updatedOutline = new ArrayList<>(outline);
+        RequirementMapper.UnmappedSectionsResult result = requirementMapper.generateSectionsForUnmapped(updatedOutline, unmapped);
 
-        if (result.newSections().isEmpty()) {
-            log.warn("Job {} - AI returned no new sections for unmapped requirements", jobId);
+        if (result.newMapping().isEmpty()) {
+            log.warn("Job {} - AI returned no mappings for unmapped requirements", jobId);
             return;
         }
-
-        // outline에 새 섹션 추가
-        List<OutlineNode> updatedOutline = new ArrayList<>(outline);
-        updatedOutline.addAll(result.newSections());
 
         // mapping에 새 매핑 추가
         for (var entry : result.newMapping().entrySet()) {
@@ -395,8 +404,8 @@ public class GenerationWorkflowService {
 
             // 리프 노드(최하위 목차) 수집 + 자연수 정렬
             List<LeafSection> leafSections = new ArrayList<>();
-            collectLeafSections(outline, mapping, leafSections);
-            leafSections.sort(java.util.Comparator.comparing(LeafSection::key, GenerationWorkflowService::compareKeys));
+            OutlineUtils.collectLeafSections(outline, mapping, leafSections);
+            leafSections.sort(java.util.Comparator.comparing(LeafSection::key, OutlineUtils::compareKeys));
 
             // 선택된 섹션만 필터링 (filterKeys가 비어있으면 전체)
             if (!filterKeys.isEmpty()) {
@@ -443,19 +452,19 @@ public class GenerationWorkflowService {
                 jobRepository.save(job);
 
                 // 이미 생성된 섹션은 스킵
-                if (existingKeys.contains(leaf.key)) {
-                    emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title + " (기존)", leaf.key));
+                if (existingKeys.contains(leaf.key())) {
+                    emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title() + " (기존)", leaf.key()));
                     continue;
                 }
 
-                emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title, leaf.key));
+                emitEvent(job, GenerationProgressEvent.progress(i + 1, leafSections.size(), leaf.title(), leaf.key()));
 
                 SectionContent content = generateLeafSection(leaf, reqMap, refDocIds, includeWebSearch, systemPrompt, sections, webSearchCache);
                 sections.add(content);
                 // 중간 저장 — 프론트엔드가 progress 이벤트마다 조회하여 완료된 섹션을 표시
                 job.setGeneratedSections(toJson(sections));
                 jobRepository.save(job);
-                log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title);
+                log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title());
             }
 
             job.setGeneratedSections(toJson(sections));
@@ -600,78 +609,39 @@ public class GenerationWorkflowService {
         return "[웹] " + summary;
     }
 
-    private record LeafSection(String key, String title, String description, List<String> requirementIds) {}
 
     private List<String> generateSearchQueries(LeafSection leaf, String reqText) {
         try {
             var client = contentGenerator.getModelClient();
             String prompt = promptLoader.load("generation-search-query.txt");
 
-            String desc = leaf.description != null ? leaf.description : "";
+            String desc = leaf.description() != null ? leaf.description() : "";
             String reqs = reqText.isBlank() ? "없음" : reqText;
 
             String content = client.prompt()
                     .user(u -> u.text(prompt)
-                            .param("title", leaf.title)
+                            .param("title", leaf.title())
                             .param("description", desc)
                             .param(FIELD_REQUIREMENTS, reqs))
                     .call()
                     .content();
 
             if (content == null || content.isBlank()) {
-                return List.of(leaf.title);
+                return List.of(leaf.title());
             }
             List<String> queries = java.util.Arrays.stream(content.trim().split("\n"))
                     .map(String::trim)
                     .filter(s -> !s.isEmpty() && !s.startsWith("#"))
                     .limit(1)
                     .toList();
-            return queries.isEmpty() ? List.of(leaf.title) : queries;
+            return queries.isEmpty() ? List.of(leaf.title()) : queries;
         } catch (Exception e) {
-            log.warn("Failed to generate search queries for '{}': {}", leaf.title, e.getMessage());
-            return List.of(leaf.title);
+            log.warn("Failed to generate search queries for '{}': {}", leaf.title(), e.getMessage());
+            return List.of(leaf.title());
         }
     }
 
-    /** "1.2.10" 같은 계층 번호를 자연수 순서로 비교 */
-    private static int compareKeys(String a, String b) {
-        String[] pa = a.split("\\.");
-        String[] pb = b.split("\\.");
-        int len = Math.max(pa.length, pb.length);
-        for (int i = 0; i < len; i++) {
-            int na = i < pa.length ? parseSegment(pa[i]) : -1;
-            int nb = i < pb.length ? parseSegment(pb[i]) : -1;
-            if (na != nb) return Integer.compare(na, nb);
-        }
-        return 0;
-    }
 
-    private static int parseSegment(String s) {
-        try { return Integer.parseInt(s.trim()); }
-        catch (NumberFormatException e) { return Integer.MAX_VALUE; }
-    }
-
-    private void collectLeafSections(List<OutlineNode> nodes, Map<String, List<String>> mapping, List<LeafSection> result) {
-        collectLeafSections(nodes, mapping, result, List.of());
-    }
-
-    private void collectLeafSections(List<OutlineNode> nodes, Map<String, List<String>> mapping,
-                                      List<LeafSection> result, List<String> inheritedReqIds) {
-        for (OutlineNode node : nodes) {
-            // 이 노드에 직접 매핑된 요구사항 + 부모에서 상속받은 요구사항
-            List<String> ownReqIds = mapping.getOrDefault(node.key(), List.of());
-            List<String> combined = new ArrayList<>(inheritedReqIds);
-            combined.addAll(ownReqIds);
-
-            if (node.children().isEmpty()) {
-                // 리프 노드 — 자신 + 상속받은 요구사항 모두 포함
-                result.add(new LeafSection(node.key(), node.title(), node.description(), combined));
-            } else {
-                // 중간 노드 — 자신의 요구사항을 자식에게 전달
-                collectLeafSections(node.children(), mapping, result, combined);
-            }
-        }
-    }
 
     /**
      * 위자드 Step 5: 생성된 섹션들을 HTML로 렌더링 (async)
@@ -693,8 +663,8 @@ public class GenerationWorkflowService {
             String docTitle = job.getTitle() != null && !job.getTitle().isBlank()
                     ? job.getTitle() : "제안서";
             List<SectionPlan> allPlans = new ArrayList<>();
-            flattenOutlineNodes(outlineNodes, allPlans);
-            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans);
+            OutlineUtils.flattenOutlineNodes(outlineNodes, allPlans);
+            DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans, outlineNodes);
 
             // 섹션 파싱 (key 기준 정렬)
             List<SectionContent> sections = parseSections(job.getGeneratedSections());
@@ -702,7 +672,7 @@ public class GenerationWorkflowService {
                 throw new IllegalStateException("Failed to parse generated sections");
             }
             sections = sections.stream()
-                    .sorted(java.util.Comparator.comparing(SectionContent::key, GenerationWorkflowService::compareKeys))
+                    .sorted(java.util.Comparator.comparing(SectionContent::key, OutlineUtils::compareKeys))
                     .toList();
 
             // HTML 렌더링
@@ -724,29 +694,6 @@ public class GenerationWorkflowService {
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
         }
-    }
-
-    private void flattenOutlineNodes(List<OutlineNode> nodes, List<SectionPlan> result) {
-        for (OutlineNode node : nodes) {
-            result.add(new SectionPlan(node.key(), node.title(), node.description(), List.of(), 0));
-            if (!node.children().isEmpty()) {
-                flattenOutlineNodes(node.children(), result);
-            }
-        }
-    }
-
-    private List<SectionPlan> buildSectionPlans(List<OutlineNode> nodes) {
-        List<SectionPlan> plans = new ArrayList<>();
-        for (OutlineNode node : nodes) {
-            if (node.children().isEmpty()) {
-                plans.add(new SectionPlan(node.key(), node.title(), node.description(), List.of(), 500));
-            } else {
-                for (OutlineNode child : node.children()) {
-                    plans.add(new SectionPlan(child.key(), child.title(), child.description(), List.of(), 500));
-                }
-            }
-        }
-        return plans;
     }
 
     private SectionContent generateWithRetry(SectionPlan plan, String systemPrompt,
@@ -834,7 +781,7 @@ public class GenerationWorkflowService {
                                                 List<UUID> refDocIds, boolean includeWebSearch,
                                                 String systemPrompt, List<SectionContent> sections,
                                                 Map<String, List<String>> webSearchCache) {
-        String reqText = leaf.requirementIds.stream()
+        String reqText = leaf.requirementIds().stream()
                 .map(reqMap::get)
                 .filter(java.util.Objects::nonNull)
                 .map(r -> "- [" + r.importance() + "] " + r.item() + ": " + r.description())
@@ -878,7 +825,7 @@ public class GenerationWorkflowService {
 
         SectionContent content = generateSectionWithRetry(leaf, reqText, systemPrompt, ragContext, webContext, sections);
         return new SectionContent(
-                leaf.key, content.title(), content.content(),
+                leaf.key(), content.title(), content.content(),
                 content.highlights(), content.tables(), content.references(),
                 content.layoutType(), content.layoutData(),
                 content.governingMessage(), content.visualGuide(), sources);
@@ -912,11 +859,11 @@ public class GenerationWorkflowService {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 return contentGenerator.generateSectionWithRequirements(
-                        leaf.title, leaf.description, reqText,
+                        leaf.title(), leaf.description(), reqText,
                         systemPrompt, ragContext, webContext, sections);
             } catch (Exception e) {
                 if (attempt == MAX_RETRIES) throw e;
-                log.warn("Section generation retry {}/{} for '{}': {}", attempt + 1, MAX_RETRIES, leaf.title, e.getMessage());
+                log.warn("Section generation retry {}/{} for '{}': {}", attempt + 1, MAX_RETRIES, leaf.title(), e.getMessage());
             }
         }
         throw new IllegalStateException("Unreachable");

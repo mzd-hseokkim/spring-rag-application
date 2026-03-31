@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -40,6 +40,14 @@ function collectLeafKeys(nodes: OutlineNode[]): string[] {
   return nodes.flatMap(n => n.children.length > 0 ? collectLeafKeys(n.children) : [n.key]);
 }
 
+/** non-leaf(children이 있는) 노드의 pathId 목록을 flat하게 수집 */
+function collectBranchPathIds(nodes: OutlineNode[], parentPath = ''): string[] {
+  return nodes.flatMap(n => {
+    const pathId = parentPath ? `${parentPath}/${n.key}` : n.key;
+    return n.children.length > 0 ? [pathId, ...collectBranchPathIds(n.children, pathId)] : [];
+  });
+}
+
 /** 리프 key의 순서 인덱스 맵 */
 function buildLeafIndexMap(nodes: OutlineNode[]): Map<string, number> {
   const keys = collectLeafKeys(nodes);
@@ -66,7 +74,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
   const [showRegenInput, setShowRegenInput] = useState(false);
   const [regenInstruction, setRegenInstruction] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    if (rawOutline) return new Set(rawOutline.map(n => n.key));
+    if (rawOutline) return new Set(rawOutline.map(n => n.key));  // top-level keys are unique
     return new Set<string>();
   });
 
@@ -91,19 +99,24 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
     return map;
   }, [sections, sectionKeys]);
 
-  const toggleExpand = (key: string) => {
+  const toggleExpand = (pathId: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      next.has(pathId) ? next.delete(pathId) : next.add(pathId);
       return next;
     });
   };
 
   const leafCount = outline ? collectLeafKeys(outline).length : (sectionKeys?.length || totalSections);
 
+  const contentRef = useRef<HTMLDivElement>(null);
   const selectedEntry = selectedKey ? sectionMap.get(selectedKey) : null;
   const selected = selectedEntry?.data ?? null;
   const selectedIndex = selectedEntry?.index ?? -1;
+
+  useEffect(() => {
+    contentRef.current?.scrollTo(0, 0);
+  }, [selectedKey]);
 
   /** 리프가 현재 생성 중인지 판별 (key 우선, index 폴백) */
   const isLeafGenerating = (nodeKey: string): boolean => {
@@ -129,9 +142,10 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
   };
 
   // 계층형 목차 렌더링
-  const renderOutlineNode = (node: OutlineNode, depth: number) => {
+  const renderOutlineNode = (node: OutlineNode, depth: number, parentPath: string) => {
+    const pathId = parentPath ? `${parentPath}/${node.key}` : node.key;
     const isLeaf = node.children.length === 0;
-    const isExpanded = expanded.has(node.key);
+    const isExpanded = expanded.has(pathId);
     const sec = sectionMap.get(node.key);
     const isComplete = !!sec;
     const isGenerating = isLeafGenerating(node.key);
@@ -143,7 +157,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
     const childProgress = !isLeaf ? getChildProgress(node) : null;
 
     return (
-      <div key={node.key}>
+      <div key={pathId}>
         <div
           className={`flex items-center gap-1.5 py-1 px-2 rounded text-sm transition-colors ${
             isLeaf ? 'cursor-pointer' : ''
@@ -157,20 +171,20 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
         >
           {!isLeaf ? (
             <>
-              {onCheckedChange && checkedKeys && depth === 0 && (
+              {onCheckedChange && checkedKeys && (
                 <input
                   type="checkbox"
-                  checked={checkedKeys.has(node.key)}
+                  checked={checkedKeys.has(pathId)}
                   onChange={(e) => {
                     e.stopPropagation();
                     const next = new Set(checkedKeys);
-                    next.has(node.key) ? next.delete(node.key) : next.add(node.key);
+                    next.has(pathId) ? next.delete(pathId) : next.add(pathId);
                     onCheckedChange(next);
                   }}
                   className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
                 />
               )}
-              <button onClick={(e) => { e.stopPropagation(); toggleExpand(node.key); }} className="p-0.5 shrink-0">
+              <button onClick={(e) => { e.stopPropagation(); toggleExpand(pathId); }} className="p-0.5 shrink-0">
                 {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               </button>
               {childGenerating && <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />}
@@ -183,7 +197,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
                 <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
             </>
           )}
-          <span className={`text-xs font-mono shrink-0 ${!isLeaf ? 'text-muted-foreground font-semibold' : 'text-muted-foreground'}`}>{node.key}</span>
+          <span className={`text-xs font-mono shrink-0 mr-1 ${!isLeaf ? 'text-muted-foreground font-semibold' : 'text-muted-foreground'}`}>{node.key}</span>
           <span className={`truncate ${!isLeaf ? 'font-semibold text-foreground' : ''}`}>
             {sec?.data.title || node.title}
           </span>
@@ -193,7 +207,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
             </span>
           )}
         </div>
-        {!isLeaf && isExpanded && node.children.map(child => renderOutlineNode(child, depth + 1))}
+        {!isLeaf && isExpanded && node.children.map(child => renderOutlineNode(child, depth + 1, pathId))}
       </div>
     );
   };
@@ -214,28 +228,32 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
   }, [outline, sectionKeys, sectionTitles, totalSections, sections]);
 
   return (
-    <div className="grid grid-cols-[260px_1fr] gap-4" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
+    <div className="grid grid-cols-[340px_1fr] gap-4" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
       {/* 좌측: 목차 계층 목록 */}
       <div className="border rounded-lg p-2 overflow-y-auto space-y-0.5">
         <div className="flex items-center gap-2 px-2 py-1">
-          {onCheckedChange && checkedKeys && outline && (
-            <input
-              type="checkbox"
-              checked={checkedKeys.size > 0 && outline.every(n => checkedKeys.has(n.key))}
-              ref={el => { if (el) el.indeterminate = checkedKeys.size > 0 && !outline.every(n => checkedKeys.has(n.key)); }}
-              onChange={() => {
-                const allKeys = new Set(outline.map(n => n.key));
-                onCheckedChange(checkedKeys.size === allKeys.size ? new Set() : allKeys);
-              }}
-              className="h-3.5 w-3.5 cursor-pointer accent-primary"
-            />
-          )}
+          {onCheckedChange && checkedKeys && outline && (() => {
+            const allBranchPathIds = collectBranchPathIds(outline);
+            const allChecked = allBranchPathIds.length > 0 && allBranchPathIds.every(k => checkedKeys.has(k));
+            const someChecked = checkedKeys.size > 0;
+            return (
+              <input
+                type="checkbox"
+                checked={allChecked}
+                ref={el => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                onChange={() => {
+                  onCheckedChange(allChecked ? new Set() : new Set(allBranchPathIds));
+                }}
+                className="h-3.5 w-3.5 cursor-pointer accent-primary"
+              />
+            );
+          })()}
           <span className="text-xs text-muted-foreground font-medium">
             목차 ({sections.length}/{leafCount})
           </span>
         </div>
         {outline ? (
-          outline.map(node => renderOutlineNode(node, 0))
+          outline.map(node => renderOutlineNode(node, 0, ''))
         ) : (
           slots?.map((slot) => {
             const sec = sectionMap.get(slot.key);
@@ -265,7 +283,7 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
       </div>
 
       {/* 우측: 선택된 섹션 편집 */}
-      <div className="border rounded-lg p-4 overflow-y-auto">
+      <div ref={contentRef} className="border rounded-lg p-4 overflow-y-auto">
         {!selected ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {generatingKey != null ? (

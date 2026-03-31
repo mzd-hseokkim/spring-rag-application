@@ -31,10 +31,10 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
   const outline = useMemo(() => sortOutline(rawOutline), [rawOutline]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(outline.map(n => n.key)));
 
-  const toggleExpand = (key: string) => {
+  const toggleExpand = (pathId: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      next.has(pathId) ? next.delete(pathId) : next.add(pathId);
       return next;
     });
   };
@@ -101,25 +101,26 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
       });
     };
     onChange(add(outline, parentKeys));
-    if (parentKeys.length > 0) setExpanded(prev => new Set([...prev, parentKeys[parentKeys.length - 1]]));
+    if (parentKeys.length > 0) setExpanded(prev => new Set([...prev, parentKeys.join('/')]));
   };
 
   const renderNode = (node: OutlineNode, path: string[], depth: number) => {
-    const isExpanded = expanded.has(node.key);
+    const pathId = path.join('/');
+    const isExpanded = expanded.has(pathId);
     const hasChildren = node.children.length > 0;
 
     return (
-      <div key={node.key} className="select-none">
+      <div key={pathId} className="select-none">
         <div className={`flex items-center gap-1 py-1.5 px-2 rounded-md hover:bg-accent/50 group ${depth > 0 ? 'ml-6' : ''}`}>
           {hasChildren ? (
-            <button onClick={() => toggleExpand(node.key)} className="p-0.5 cursor-pointer">
+            <button onClick={() => toggleExpand(pathId)} className="p-0.5 cursor-pointer">
               {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
             </button>
           ) : (
             <span className="w-4.5" />
           )}
 
-          <span className="text-xs text-muted-foreground font-mono w-8 shrink-0">{node.key}</span>
+          <span className="text-xs text-muted-foreground font-mono shrink-0 mr-1">{node.key}</span>
 
           {readOnly ? (
             <span className="text-sm flex-1">{node.title}</span>

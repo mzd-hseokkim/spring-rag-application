@@ -12,6 +12,9 @@ public interface DocumentChunkRepository extends JpaRepository<DocumentChunk, UU
 
     List<DocumentChunk> findByDocumentIdOrderByChunkIndex(UUID documentId);
 
+    List<DocumentChunk> findByDocumentIdAndChunkIndexBetweenOrderByChunkIndex(
+            UUID documentId, int fromIndex, int toIndex);
+
     @Modifying
     @Query(value = "UPDATE document_chunk SET embedding = cast(:embedding AS vector), " +
             "content_tsv = to_tsvector('simple', :content) WHERE id = :id", nativeQuery = true)
