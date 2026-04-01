@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import type { OutlineNode } from '@/api/generation';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { ChevronRight, ChevronDown, AlertCircle, List, FolderTree, Plus, X, Search, Wand2, Loader2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, AlertCircle, List, FolderTree, Plus, X, Search, Wand2, Loader2, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 
 /** 섹션별 배치 패널 — 배치된 요구사항 목록 + 추가/제거 */
 function SectionMappingPanel({ selectedKey, selectedReqs, unmapped, mapping, onChange, readOnly }: {
@@ -34,14 +34,23 @@ function SectionMappingPanel({ selectedKey, selectedReqs, unmapped, mapping, onC
     onChange(updated);
   };
 
-  // 추가 패널용 필터링된 미배치 요구사항
+  // 추가 패널용 필터링된 미배치 요구사항 — 현재 매핑에 이미 포함된 ID 제외
+  const allMappedInPanel = useMemo(() => {
+    const ids = new Set<string>();
+    for (const reqIds of Object.values(mapping)) {
+      for (const id of reqIds) ids.add(id);
+    }
+    return ids;
+  }, [mapping]);
+
   const filteredUnmapped = useMemo(() => {
-    if (!addSearch.trim()) return unmapped;
+    const base = unmapped.filter(r => !allMappedInPanel.has(r.id));
+    if (!addSearch.trim()) return base;
     const q = addSearch.toLowerCase();
-    return unmapped.filter(r =>
+    return base.filter(r =>
       r.id.toLowerCase().includes(q) || r.item.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)
     );
-  }, [unmapped, addSearch]);
+  }, [unmapped, mapping, addSearch, allMappedInPanel]);
 
   if (!selectedKey) {
     return <p className="text-sm text-muted-foreground py-8 text-center">좌측에서 목차 항목을 선택하세요.</p>;
@@ -209,6 +218,7 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
   const [showUnmappedOnly, setShowUnmappedOnly] = useState(false);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [generatingUnmapped, setGeneratingUnmapped] = useState(false);
+  const [outlineSearch, setOutlineSearch] = useState('');
   const allReqScrollRef = useRef<HTMLDivElement>(null);
   const prevReqCountRef = useRef(requirements.length);
 
@@ -248,6 +258,35 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     return result;
   }, [outline]);
 
+  // 목차 검색: 매칭되는 노드 key + 해당 노드의 상위 경로를 모두 수집
+  const outlineMatchKeys = useMemo(() => {
+    const q = outlineSearch.trim().toLowerCase();
+    if (!q) return null; // null = 필터링 없음
+    const matched = new Set<string>();
+    const collectMatches = (nodes: OutlineNode[], ancestorPathIds: string[]): boolean => {
+      let anyHit = false;
+      for (const node of nodes) {
+        const pathId = ancestorPathIds.length > 0
+          ? `${ancestorPathIds[ancestorPathIds.length - 1]}/${node.key}`
+          : node.key;
+        const hit = node.key.toLowerCase().includes(q) || node.title.toLowerCase().includes(q);
+        const childPathIds = [...ancestorPathIds, pathId];
+        let childHit = false;
+        if (node.children.length > 0) {
+          childHit = collectMatches(node.children, childPathIds);
+        }
+        if (hit || childHit) {
+          matched.add(pathId);
+          for (const a of ancestorPathIds) matched.add(a);
+          anyHit = true;
+        }
+      }
+      return anyHit;
+    };
+    collectMatches(outline, []);
+    return matched;
+  }, [outline, outlineSearch]);
+
   const toggleExpand = (pathId: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -255,6 +294,20 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
       return next;
     });
   };
+
+  const collectAllPaths = (nodes: OutlineNode[], parentPath = ''): string[] => {
+    const paths: string[] = [];
+    for (const n of nodes) {
+      const pathId = parentPath ? `${parentPath}/${n.key}` : n.key;
+      if (n.children.length > 0) {
+        paths.push(pathId);
+        paths.push(...collectAllPaths(n.children, pathId));
+      }
+    }
+    return paths;
+  };
+  const expandAll = () => setExpanded(new Set(collectAllPaths(outline)));
+  const collapseAll = () => setExpanded(new Set());
 
   // DnD: 요구사항을 목차에 드롭하여 배치
   const handleDragStart = (e: React.DragEvent, reqId: string) => {
@@ -289,12 +342,14 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
   };
 
   const getReqCount = (key: string): number => {
-    return (mapping[key] || []).length;
+    return (mapping[key] || []).filter(id => reqMap.has(id)).length;
   };
 
   const renderOutlineNode = (node: OutlineNode, depth: number, parentPath: string) => {
     const pathId = parentPath ? `${parentPath}/${node.key}` : node.key;
-    const isExpanded = expanded.has(pathId);
+    // 검색 중이면 매칭되지 않는 노드 숨김
+    if (outlineMatchKeys && !outlineMatchKeys.has(pathId)) return null;
+    const isExpanded = outlineMatchKeys ? true : expanded.has(pathId); // 검색 중이면 전부 펼침
     const hasChildren = node.children.length > 0;
     const count = getReqCount(node.key);
     const isSelected = selectedKey === node.key;
@@ -303,12 +358,12 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     const isDragOver = dragOverKey === node.key;
 
     return (
-      <div key={pathId}>
+      <div key={pathId} className={depth > 0 ? 'pl-5' : ''}>
         <div
           className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md transition-colors ${
             isDragOver ? 'bg-primary/20 border border-primary border-dashed' :
             isSelected ? 'bg-primary/10 border border-primary/30' : 'hover:bg-accent/50'
-          } ${isLeaf ? 'cursor-pointer' : ''} ${depth > 0 ? 'ml-5' : ''}`}
+          } ${isLeaf ? 'cursor-pointer' : ''}`}
           onClick={() => { if (isLeaf) { setSelectedKey(node.key); setRightTab('section'); } }}
           onDragOver={isLeaf ? (e) => handleDragOver(e, node.key, true) : undefined}
           onDragLeave={isLeaf ? handleDragLeave : undefined}
@@ -322,8 +377,9 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
 
           <span className="text-xs text-muted-foreground font-mono shrink-0 mr-1">{node.key}</span>
           <span className="text-sm flex-1 truncate">{node.title}</span>
-          {isLeaf && count > 0 && (
-            <Badge variant="secondary" className="text-xs">{count}개</Badge>
+          {isLeaf && (count > 0
+            ? <Badge variant="secondary" className="text-xs">{count}개</Badge>
+            : <span className="text-xs text-muted-foreground/60 italic">서술</span>
           )}
           {isDragOver && <Plus className="h-3.5 w-3.5 text-primary shrink-0" />}
         </div>
@@ -337,8 +393,8 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     ? sortRequirements((mapping[selectedKey] || []).map(id => reqMap.get(id)).filter(Boolean) as Requirement[])
     : [];
 
-  // 매핑되지 않은 요구사항
-  const allMappedIds = new Set(Object.values(mapping).flat());
+  // 매핑되지 않은 요구사항 (실제 존재하는 요구사항 ID만 매핑된 것으로 인정)
+  const allMappedIds = new Set(Object.values(mapping).flat().filter(id => reqMap.has(id)));
   const unmapped = sortRequirements(requirements.filter(r => !allMappedIds.has(r.id)));
 
   // 카테고리별 그룹 (각 그룹 내 ID순 정렬)
@@ -361,7 +417,29 @@ export function RequirementMapView({ outline: rawOutline, requirements, mapping,
     <div className="grid grid-cols-[1fr_1fr] gap-4" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
       {/* 좌측: 목차 트리 */}
       <div className="border rounded-lg p-3 overflow-y-auto">
-        <p className="text-xs text-muted-foreground mb-2 font-medium">목차 (클릭하여 요구사항 확인)</p>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-muted-foreground font-medium">목차 (클릭하여 요구사항 확인)</p>
+          <div className="flex items-center gap-0.5">
+            <button onClick={expandAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 열기">
+              <ChevronsUpDown className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={collapseAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 닫기">
+              <ChevronsDownUp className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="relative mb-2">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={outlineSearch} onChange={e => setOutlineSearch(e.target.value)}
+            placeholder="목차 검색..." className="h-7 text-xs pl-8"
+          />
+          {outlineSearch && (
+            <button onClick={() => setOutlineSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted cursor-pointer">
+              <X className="h-3 w-3 text-muted-foreground" />
+            </button>
+          )}
+        </div>
         {outline.map(node => renderOutlineNode(node, 0, ''))}
 
         {unmapped.length > 0 && (

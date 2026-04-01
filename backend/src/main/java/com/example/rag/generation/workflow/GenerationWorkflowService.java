@@ -1,6 +1,5 @@
 package com.example.rag.generation.workflow;
 
-import com.example.rag.common.RagException;
 import com.example.rag.document.DocumentChunk;
 import com.example.rag.document.DocumentChunkRepository;
 import com.example.rag.generation.GenerationEmitterManager;
@@ -15,10 +14,8 @@ import com.example.rag.questionnaire.workflow.Requirement;
 import com.example.rag.questionnaire.workflow.RequirementCacheService;
 import com.example.rag.questionnaire.workflow.RequirementExtractor;
 import com.example.rag.questionnaire.workflow.TavilySearchService;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.example.rag.search.ChunkSearchResult;
 import com.example.rag.search.SearchService;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +55,7 @@ public class GenerationWorkflowService {
     private final GenerationJobRepository jobRepository;
     private final GenerationEmitterManager emitterManager;
     private final ObjectMapper objectMapper;
+    private final GenerationDataParser dataParser;
 
     public GenerationWorkflowService(ContentGeneratorService contentGenerator,
                                      OutlineExtractor outlineExtractor,
@@ -71,7 +69,8 @@ public class GenerationWorkflowService {
                                      PromptLoader promptLoader,
                                      GenerationJobRepository jobRepository,
                                      GenerationEmitterManager emitterManager,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     GenerationDataParser dataParser) {
         this.contentGenerator = contentGenerator;
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
@@ -85,6 +84,7 @@ public class GenerationWorkflowService {
         this.jobRepository = jobRepository;
         this.emitterManager = emitterManager;
         this.objectMapper = objectMapper;
+        this.dataParser = dataParser;
     }
 
     @Async("ingestionExecutor")
@@ -106,7 +106,7 @@ public class GenerationWorkflowService {
             DocumentOutline outline = contentGenerator.generateOutline(
                     job.getUserInput(), systemPrompt, ragContext);
 
-            job.setOutline(toJson(outline));
+            job.setOutline(dataParser.toJson(outline));
             job.setTotalSections(outline.sections().size());
             jobRepository.save(job);
             log.info("Generation job {} - outline created with {} sections", job.getId(), outline.sections().size());
@@ -133,7 +133,7 @@ public class GenerationWorkflowService {
                 }
             }
 
-            job.setGeneratedSections(toJson(sections));
+            job.setGeneratedSections(dataParser.toJson(sections));
             jobRepository.save(job);
 
             // Phase 3: REVIEW — 향후 구현 (Plan 05)
@@ -184,7 +184,7 @@ public class GenerationWorkflowService {
             }
 
             // Phase 2: 요구사항 — 이미 추출된 것이 있으면 재사용, 없으면 추출
-            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+            List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
             if (!requirements.isEmpty()) {
                 log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
                 emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
@@ -211,7 +211,7 @@ public class GenerationWorkflowService {
                 var reqData = new java.util.LinkedHashMap<String, Object>();
                 reqData.put(FIELD_REQUIREMENTS, requirements);
                 reqData.put(FIELD_MAPPING, java.util.Map.of());
-                job.setRequirementMapping(toJson(reqData));
+                job.setRequirementMapping(dataParser.toJson(reqData));
             }
 
             log.info("Generation job {} - {} requirements for outline extraction", jobId, requirements.size());
@@ -265,7 +265,7 @@ public class GenerationWorkflowService {
             jobRepository.save(job);
 
             // Step 2에서 미리 추출된 요구사항이 있는지 확인
-            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
+            List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
             if (!requirements.isEmpty()) {
                 log.info("Generation job {} - reusing {} requirements from Step 2", jobId, requirements.size());
             }
@@ -305,7 +305,7 @@ public class GenerationWorkflowService {
             result.put(FIELD_REQUIREMENTS, requirements);
             result.put(FIELD_MAPPING, mapping);
 
-            job.setRequirementMapping(toJson(result));
+            job.setRequirementMapping(dataParser.toJson(result));
             job.setCurrentStep(3);
             job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.DRAFT);
@@ -332,8 +332,8 @@ public class GenerationWorkflowService {
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
 
         List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
-        List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
-        Map<String, List<String>> mapping = new java.util.LinkedHashMap<>(parseMappingFromJson(job.getRequirementMapping()));
+        List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
+        Map<String, List<String>> mapping = new java.util.LinkedHashMap<>(dataParser.parseMappingFromJson(job.getRequirementMapping()));
 
         // 미배치 요구사항 수집
         java.util.Set<String> mappedIds = new java.util.HashSet<>();
@@ -363,15 +363,15 @@ public class GenerationWorkflowService {
         }
 
         // 저장
-        job.setOutline(toJson(updatedOutline));
+        job.setOutline(dataParser.toJson(updatedOutline));
         var mappingResult = new java.util.LinkedHashMap<String, Object>();
         mappingResult.put(FIELD_REQUIREMENTS, requirements);
         mappingResult.put(FIELD_MAPPING, mapping);
-        job.setRequirementMapping(toJson(mappingResult));
+        job.setRequirementMapping(dataParser.toJson(mappingResult));
         jobRepository.save(job);
 
-        log.info("Job {} - added {} new sections, {} new mapping keys",
-                jobId, result.newSections().size(), result.newMapping().size());
+        log.info("Job {} - added {} new mapping keys for {} unmapped requirements",
+                jobId, result.newMapping().size(), unmapped.size());
     }
 
     /**
@@ -396,8 +396,8 @@ public class GenerationWorkflowService {
             List<OutlineNode> outline = outlineExtractor.fromJson(job.getOutline());
 
             // 요구사항 매핑 파싱
-            List<Requirement> requirements = parseRequirementsFromMapping(job.getRequirementMapping());
-            Map<String, List<String>> mapping = parseMappingFromJson(job.getRequirementMapping());
+            List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
+            Map<String, List<String>> mapping = dataParser.parseMappingFromJson(job.getRequirementMapping());
 
             Map<String, Requirement> reqMap = new java.util.HashMap<>();
             for (Requirement r : requirements) reqMap.put(r.id(), r);
@@ -427,7 +427,7 @@ public class GenerationWorkflowService {
             // 기존에 생성된 섹션이 있으면 복원 (이어서 생성)
             List<SectionContent> sections = new ArrayList<>();
             java.util.Set<String> existingKeys = new java.util.HashSet<>();
-            List<SectionContent> existing = parseSections(job.getGeneratedSections());
+            List<SectionContent> existing = dataParser.parseSections(job.getGeneratedSections());
             if (!existing.isEmpty()) {
                 // forceRegenerate이면 선택된 섹션의 기존 결과를 제거
                 if (forceRegenerate && !filterKeys.isEmpty()) {
@@ -462,12 +462,12 @@ public class GenerationWorkflowService {
                 SectionContent content = generateLeafSection(leaf, reqMap, refDocIds, includeWebSearch, systemPrompt, sections, webSearchCache);
                 sections.add(content);
                 // 중간 저장 — 프론트엔드가 progress 이벤트마다 조회하여 완료된 섹션을 표시
-                job.setGeneratedSections(toJson(sections));
+                job.setGeneratedSections(dataParser.toJson(sections));
                 jobRepository.save(job);
                 log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title());
             }
 
-            job.setGeneratedSections(toJson(sections));
+            job.setGeneratedSections(dataParser.toJson(sections));
             job.setCurrentStep(4);
             job.setStepStatus(STEP_STATUS_COMPLETE);
             job.setStatus(GenerationStatus.READY);
@@ -497,7 +497,7 @@ public class GenerationWorkflowService {
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.GENERATING, sectionKey + " 섹션을 재생성하고 있습니다..."));
 
             // 기존 섹션 목록 파싱
-            List<SectionContent> parsed = parseSections(job.getGeneratedSections());
+            List<SectionContent> parsed = dataParser.parseSections(job.getGeneratedSections());
             if (parsed.isEmpty()) {
                 throw new IllegalStateException("Failed to parse existing sections");
             }
@@ -565,7 +565,7 @@ public class GenerationWorkflowService {
                     regenerated.governingMessage(), regenerated.visualGuide(), sources);
 
             sections.set(targetIndex, regenerated);
-            job.setGeneratedSections(toJson(sections));
+            job.setGeneratedSections(dataParser.toJson(sections));
             jobRepository.save(job);
 
             emitEvent(job, GenerationProgressEvent.complete("section-regenerated"));
@@ -667,7 +667,7 @@ public class GenerationWorkflowService {
             DocumentOutline outline = new DocumentOutline(docTitle, "", allPlans, outlineNodes);
 
             // 섹션 파싱 (key 기준 정렬)
-            List<SectionContent> sections = parseSections(job.getGeneratedSections());
+            List<SectionContent> sections = dataParser.parseSections(job.getGeneratedSections());
             if (sections.isEmpty()) {
                 throw new IllegalStateException("Failed to parse generated sections");
             }
@@ -835,8 +835,8 @@ public class GenerationWorkflowService {
      * 특정 섹션에 매핑된 요구사항을 텍스트로 변환 — 중첩 try 방지를 위해 분리.
      */
     private String buildRequirementTextForSection(String requirementMappingJson, String sectionKey) {
-        List<Requirement> reqList = parseRequirementsFromMapping(requirementMappingJson);
-        Map<String, List<String>> mapping = parseMappingFromJson(requirementMappingJson);
+        List<Requirement> reqList = dataParser.parseRequirementsFromMapping(requirementMappingJson);
+        Map<String, List<String>> mapping = dataParser.parseMappingFromJson(requirementMappingJson);
         if (reqList.isEmpty()) return "";
 
         Map<String, Requirement> reqMap = new java.util.HashMap<>();
@@ -858,8 +858,11 @@ public class GenerationWorkflowService {
                                                      List<SectionContent> sections) {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
+                String heading = leaf.parentPath().isEmpty()
+                        ? leaf.title()
+                        : leaf.parentPath() + " > " + leaf.title();
                 return contentGenerator.generateSectionWithRequirements(
-                        leaf.title(), leaf.description(), reqText,
+                        heading, leaf.description(), reqText,
                         systemPrompt, ragContext, webContext, sections);
             } catch (Exception e) {
                 if (attempt == MAX_RETRIES) throw e;
@@ -867,54 +870,6 @@ public class GenerationWorkflowService {
             }
         }
         throw new IllegalStateException("Unreachable");
-    }
-
-    /**
-     * JSON에서 요구사항 목록을 파싱 — 중첩 try 방지를 위해 분리.
-     */
-    private List<Requirement> parseRequirementsFromMapping(String requirementMappingJson) {
-        if (requirementMappingJson == null) return List.of();
-        try {
-            var parsed = objectMapper.readTree(requirementMappingJson);
-            if (parsed.has(FIELD_REQUIREMENTS) && parsed.get(FIELD_REQUIREMENTS).size() > 0) {
-                return objectMapper.readValue(
-                        parsed.get(FIELD_REQUIREMENTS).toString(),
-                        new TypeReference<List<Requirement>>() {});
-            }
-        } catch (Exception e) {
-            log.warn("Failed to parse existing requirements: {}", e.getMessage());
-        }
-        return List.of();
-    }
-
-    /**
-     * JSON에서 요구사항 매핑(mapping)을 파싱 — 중첩 try 방지를 위해 분리.
-     */
-    private Map<String, List<String>> parseMappingFromJson(String requirementMappingJson) {
-        if (requirementMappingJson == null) return Map.of();
-        try {
-            var parsed = objectMapper.readTree(requirementMappingJson);
-            return objectMapper.readValue(
-                    parsed.get(FIELD_MAPPING).toString(),
-                    new TypeReference<Map<String, List<String>>>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse requirement mapping: {}", e.getMessage());
-        }
-        return Map.of();
-    }
-
-    /**
-     * JSON에서 기존 섹션 목록을 파싱 — 중첩 try 방지를 위해 분리.
-     */
-    private List<SectionContent> parseSections(String sectionsJson) {
-        if (sectionsJson == null) return List.of();
-        try {
-            return objectMapper.readValue(sectionsJson,
-                    new com.fasterxml.jackson.core.type.TypeReference<List<SectionContent>>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse sections JSON: {}", e.getMessage());
-        }
-        return List.of();
     }
 
     /**
@@ -929,13 +884,5 @@ public class GenerationWorkflowService {
             }
         }
         return customerChunks;
-    }
-
-    private String toJson(Object obj) {
-        try {
-            return objectMapper.writeValueAsString(obj);
-        } catch (JsonProcessingException e) {
-            throw new RagException("Failed to serialize to JSON", e);
-        }
     }
 }

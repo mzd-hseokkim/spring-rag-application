@@ -47,93 +47,175 @@ public class RequirementMapper {
 
     /**
      * 미배치 요구사항을 기존 목차의 적절한 위치에 leaf node로 배치한다.
-     * 새로운 top-level 섹션을 만들지 않고, 기존 목차 내에 하위 항목으로 추가.
-     * 반환: newSections는 빈 리스트, mapping에 새 leaf key → 요구사항 ID 매핑.
+     *
+     * 2단계 처리:
+     * 1단계 - LLM에게 각 요구사항을 어떤 상위 섹션에 넣을지만 질문 (단순 매핑)
+     * 2단계 - 코드에서 그룹핑 → leaf 노드 생성 → outline 삽입 + mapping 구성
+     *
      * outline 자체를 수정하므로, 호출 후 outline을 다시 저장해야 함.
      */
     public UnmappedSectionsResult generateSectionsForUnmapped(List<OutlineNode> outline, List<Requirement> unmapped) {
         String outlineText = flattenOutline(outline);
 
-        StringBuilder reqText = new StringBuilder();
+        // 요구사항 ID 목록을 명확하게 구성
+        StringBuilder reqList = new StringBuilder();
         for (Requirement r : unmapped) {
-            reqText.append("- ").append(r.id()).append(" [").append(r.importance()).append("]: ")
-                    .append(r.item()).append(" — ").append(r.description()).append("\n");
+            reqList.append(r.id()).append(": ").append(r.item()).append("\n");
         }
 
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
 
+        // 1단계: LLM에게 요구사항 → 상위섹션 배정만 요청 (단순한 JSON)
         String prompt = """
                 다음은 제안서 목차와 미배치 요구사항 목록입니다.
-                미배치 요구사항을 **기존 목차의 적절한 위치에 새로운 리프 노드로 추가**하세요.
-                새로운 대분류를 만들지 말고, 기존 목차 구조 안에 배치하세요.
+                각 요구사항을 가장 적합한 목차 항목에 배정하세요.
 
-                ## 현재 제안서 목차
+                ## 제안서 목차
                 %s
 
                 ## 미배치 요구사항 (%d개)
                 %s
 
                 ## 규칙
-                1. 각 요구사항을 기존 목차에서 **가장 적합한 상위 항목** 아래에 새 리프 노드로 추가
-                2. 새 리프 노드의 key는 상위 항목의 key를 확장 (예: 상위가 "I.1.2"이고 마지막 자식이 "I.1.2.3"이면 → "I.1.2.4")
-                3. 의미적으로 유사한 요구사항은 같은 리프 노드에 그룹화
-                4. 제목은 구체적이고 실질적인 내용을 담아야 합니다
-                5. 모든 미배치 요구사항을 빠짐없이 배치하세요
-                6. **리프 노드에만 요구사항을 매핑** — children이 있는 노드에는 매핑하지 마세요
+                1. 각 요구사항 ID를 위 목차의 key에 배정하세요
+                2. 의미적으로 유사한 요구사항은 같은 목차 항목에 배정하세요
+                3. 모든 요구사항을 빠짐없이 배정하세요
+                4. 완벽히 일치하지 않더라도 가장 유사한 항목에 배정하세요
 
-                ## 출력 형식
-                반드시 JSON만 응답. parent_key는 새 리프를 추가할 기존 목차 항목의 key입니다.
-                {"new_leaves": [{"parent_key":"I.1.2", "key":"I.1.2.4", "title":"새 항목 제목", "description":"설명"}], "mapping": {"I.1.2.4": ["REQ-ID", ...]}}
-                """.formatted(outlineText, unmapped.size(), reqText.toString());
+                ## 출력 형식 (반드시 JSON만 응답)
+                {"목차key": ["요구사항id", ...], ...}
+                """.formatted(outlineText, unmapped.size(), reqList.toString());
 
         String content = client.prompt().user(prompt).call().content();
+        log.info("Unmapped assignment LLM response length: {}", content != null ? content.length() : 0);
 
-        log.info("Generated leaf nodes for {} unmapped requirements", unmapped.size());
-        return parseUnmappedLeafResult(content, outline);
-    }
-
-    private UnmappedSectionsResult parseUnmappedLeafResult(String content, List<OutlineNode> outline) {
-        if (content == null || content.isBlank()) return new UnmappedSectionsResult(List.of(), Map.of());
-        try {
-            String json = content.trim();
-            if (json.startsWith("```")) {
-                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
-            }
-            int objStart = json.indexOf('{');
-            int objEnd = json.lastIndexOf('}');
-            if (objStart >= 0 && objEnd > objStart) {
-                json = json.substring(objStart, objEnd + 1);
-            }
-            var tree = objectMapper.readTree(json);
-
-            Map<String, List<String>> mapping = Map.of();
-            if (tree.has("mapping")) {
-                mapping = objectMapper.readValue(tree.get("mapping").toString(), MAPPING_TYPE);
-            }
-
-            // new_leaves를 outline 트리에 삽입
-            if (tree.has("new_leaves")) {
-                for (var leaf : tree.get("new_leaves")) {
-                    String parentKey = leaf.has("parent_key") ? leaf.get("parent_key").asText() : null;
-                    String key = leaf.get("key").asText();
-                    String title = leaf.get("title").asText();
-                    String desc = leaf.has("description") ? leaf.get("description").asText() : "";
-
-                    OutlineNode newLeaf = new OutlineNode(key, title, desc, List.of());
-                    if (parentKey != null) {
-                        insertLeafUnderParent(outline, parentKey, newLeaf);
-                    }
-                }
-            }
-
-            log.info("Parsed unmapped leaf result: {} mapping keys", mapping.size());
-            // outline이 in-place로 수정됨 → newSections는 빈 리스트
-            return new UnmappedSectionsResult(List.of(), mapping);
-        } catch (Exception e) {
-            log.warn("Failed to parse unmapped leaf result: {} | preview: {}",
-                    e.getMessage(), content.substring(0, Math.min(200, content.length())));
+        // LLM 응답 파싱: { "섹션key": ["요구사항id", ...] }
+        Map<String, List<String>> assignment = parseMapping(content);
+        if (assignment.isEmpty()) {
+            log.warn("LLM returned empty assignment for {} unmapped requirements", unmapped.size());
             return new UnmappedSectionsResult(List.of(), Map.of());
         }
+
+        // 유효한 요구사항 ID만 필터링
+        java.util.Set<String> validReqIds = unmapped.stream()
+                .map(Requirement::id).collect(java.util.stream.Collectors.toSet());
+        Map<String, Requirement> reqById = new HashMap<>();
+        for (Requirement r : unmapped) reqById.put(r.id(), r);
+
+        // 기존 outline key 수집
+        java.util.Set<String> existingKeys = new java.util.HashSet<>();
+        collectAllKeys(outline, existingKeys);
+
+        // 2단계: targetKey 기준으로 그룹핑 (같은 부모에 배정된 요구사항을 하나의 leaf로 합침)
+        Map<String, List<String>> groupedByTarget = new java.util.LinkedHashMap<>();
+        for (var entry : assignment.entrySet()) {
+            String sectionKey = entry.getKey();
+            List<String> reqIds = entry.getValue().stream()
+                    .filter(validReqIds::contains)
+                    .toList();
+            if (reqIds.isEmpty()) continue;
+
+            String targetKey = existingKeys.contains(sectionKey) ? sectionKey : findClosestParentKey(sectionKey, existingKeys);
+            if (targetKey == null) {
+                log.warn("Section key '{}' not found in outline, skipping {} requirements", sectionKey, reqIds.size());
+                continue;
+            }
+
+            groupedByTarget.computeIfAbsent(targetKey, k -> new ArrayList<>()).addAll(reqIds);
+        }
+
+        // 3단계: 그룹별로 leaf 노드 생성 + outline 삽입 + mapping 구성
+        Map<String, List<String>> newMapping = new HashMap<>();
+        int assignedCount = 0;
+
+        for (var entry : groupedByTarget.entrySet()) {
+            String targetKey = entry.getKey();
+            List<String> reqIds = entry.getValue().stream().distinct().toList();
+
+            String leafTitle = buildLeafTitle(reqIds, reqById);
+            String leafDesc = reqIds.stream()
+                    .map(id -> reqById.containsKey(id) ? reqById.get(id).item() : id)
+                    .collect(java.util.stream.Collectors.joining(", "));
+
+            String leafKey = generateNextChildKey(outline, targetKey, existingKeys);
+
+            OutlineNode newLeaf = new OutlineNode(leafKey, leafTitle, leafDesc, List.of());
+            boolean inserted = insertLeafUnderParent(outline, targetKey, newLeaf);
+            if (inserted) {
+                existingKeys.add(leafKey);
+                newMapping.put(leafKey, new ArrayList<>(reqIds));
+                assignedCount += reqIds.size();
+                log.info("Created leaf '{}' under '{}' with {} requirements: {}",
+                        leafKey, targetKey, reqIds.size(), reqIds);
+            } else {
+                log.warn("Failed to insert leaf under '{}' for requirements: {}", targetKey, reqIds);
+            }
+        }
+
+        log.info("Unmapped processing complete: {}/{} requirements assigned to {} new leaves",
+                assignedCount, unmapped.size(), newMapping.size());
+        return new UnmappedSectionsResult(List.of(), newMapping);
+    }
+
+    /**
+     * 요구사항 목록에서 대표적인 leaf 제목을 생성.
+     */
+    private String buildLeafTitle(List<String> reqIds, Map<String, Requirement> reqById) {
+        if (reqIds.size() == 1) {
+            Requirement r = reqById.get(reqIds.get(0));
+            return r != null ? r.item() : reqIds.get(0);
+        }
+        // 여러 요구사항이면 첫 번째 item 기반
+        Requirement first = reqById.get(reqIds.get(0));
+        String base = first != null ? first.item() : reqIds.get(0);
+        if (base.length() > 30) base = base.substring(0, 30);
+        return base + " 외 " + (reqIds.size() - 1) + "건";
+    }
+
+    /**
+     * targetKey 아래에 새 자식 key를 생성. 기존 자식 중 마지막 번호 + 1.
+     */
+    private String generateNextChildKey(List<OutlineNode> outline, String targetKey,
+                                         java.util.Set<String> existingKeys) {
+        String prefix = targetKey + ".";
+        int maxNum = 0;
+        for (String key : existingKeys) {
+            if (key.startsWith(prefix)) {
+                String suffix = key.substring(prefix.length());
+                // 직접 자식만 (예: "1.2.3"의 자식 "1.2.3.X"만, "1.2.3.X.Y"는 제외)
+                if (!suffix.contains(".")) {
+                    try {
+                        maxNum = Math.max(maxNum, Integer.parseInt(suffix));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+        return prefix + (maxNum + 1);
+    }
+
+    private void collectAllKeys(List<OutlineNode> nodes, java.util.Set<String> keys) {
+        for (OutlineNode node : nodes) {
+            keys.add(node.key());
+            if (!node.children().isEmpty()) {
+                collectAllKeys(node.children(), keys);
+            }
+        }
+    }
+
+    /**
+     * parentKey의 접두어를 순차적으로 줄여가며 existingKeys에서 매칭되는 key를 찾는다.
+     */
+    private String findClosestParentKey(String parentKey, java.util.Set<String> existingKeys) {
+        String candidate = parentKey;
+        while (candidate.contains(".")) {
+            candidate = candidate.substring(0, candidate.lastIndexOf('.'));
+            if (existingKeys.contains(candidate)) {
+                return candidate;
+            }
+        }
+        // 최상위도 검색
+        if (existingKeys.contains(candidate)) return candidate;
+        return null;
     }
 
     /**
@@ -238,6 +320,22 @@ public class RequirementMapper {
             log.info("After force-mapping round {}: {} still unmapped out of {}", round, unmapped.size(), requirements.size());
         }
 
+        // LLM이 반환한 요구사항 ID를 실제 ID와 대조하여 유효하지 않은 것 제거
+        java.util.Set<String> validIds = requirements.stream()
+                .map(Requirement::id).collect(java.util.stream.Collectors.toSet());
+        int invalidCount = 0;
+        for (var entry : mergedMapping.entrySet()) {
+            List<String> ids = entry.getValue();
+            int before = ids.size();
+            ids.removeIf(id -> !validIds.contains(id));
+            invalidCount += before - ids.size();
+        }
+        // 빈 리스트가 된 key 제거
+        mergedMapping.entrySet().removeIf(e -> e.getValue().isEmpty());
+        if (invalidCount > 0) {
+            log.warn("Removed {} invalid requirement IDs from mapping (LLM returned non-existent IDs)", invalidCount);
+        }
+
         log.info("Requirement mapping complete: {} outline keys, {} total assignments",
                 mergedMapping.size(), mergedMapping.values().stream().mapToInt(List::size).sum());
         return mergedMapping;
@@ -325,13 +423,18 @@ public class RequirementMapper {
 
         StringBuilder reqText = new StringBuilder();
         for (Requirement r : requirements) {
-            reqText.append("- ").append(r.id()).append(": ").append(r.item()).append("\n");
+            reqText.append("- ").append(r.id()).append(": ").append(r.item());
+            if (r.description() != null && !r.description().isBlank()) {
+                reqText.append(" — ").append(r.description());
+            }
+            reqText.append("\n");
         }
 
         String forcePrompt = """
                 다음 요구사항들이 아직 목차에 배치되지 않았습니다.
                 각 요구사항을 **반드시** 가장 적합한 목차 항목에 배치하세요.
                 완벽히 일치하지 않더라도 **가장 유사한 항목**에 배치해야 합니다. 누락은 절대 불가합니다.
+                요구사항이 일반적/포괄적이면 해당 주제를 다루는 리프 노드에 배치하세요. [상위경로]를 참고하면 리프의 맥락을 알 수 있습니다.
 
                 ## 제안서 목차 (★매핑대상 = 리프 노드)
                 %s
@@ -341,6 +444,7 @@ public class RequirementMapper {
 
                 ## 출력 규칙
                 - ★매핑대상 표시가 있는 리프 노드 key만 사용
+                - 각 요구사항은 관련된 여러 리프에 배치 가능 (상위 항목 맥락이 다르면 양쪽 모두 배치)
                 - **%d개 요구사항 전부** 빠짐없이 배치 (누락 시 실패로 간주)
                 - 반드시 JSON만 응답: {"목차key": ["요구사항id", ...]}
                 """.formatted(outlineText, requirements.size(), reqText.toString(), requirements.size());
@@ -356,12 +460,15 @@ public class RequirementMapper {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
         String prompt = promptLoader.load("generation-map-requirements.txt");
 
-        // 간결한 형태로 변환 (id + item만 — description 생략으로 토큰 절약)
         StringBuilder reqJson = new StringBuilder("[\n");
         for (int i = 0; i < requirements.size(); i++) {
             Requirement r = requirements.get(i);
             if (i > 0) reqJson.append(",\n");
-            reqJson.append("  {\"id\":\"").append(r.id()).append("\", \"item\":\"").append(r.item().replace("\"", "'")).append("\"}");
+            reqJson.append("  {\"id\":\"").append(r.id())
+                    .append("\", \"item\":\"").append(r.item().replace("\"", "'"))
+                    .append("\", \"desc\":\"").append(
+                            r.description() != null ? r.description().replace("\"", "'") : "")
+                    .append("\"}");
         }
         reqJson.append("\n]");
 
@@ -394,20 +501,24 @@ public class RequirementMapper {
 
     private String flattenOutline(List<OutlineNode> nodes) {
         StringBuilder sb = new StringBuilder();
-        flattenOutlineRecursive(nodes, sb, 0);
+        flattenOutlineRecursive(nodes, sb, 0, "");
         return sb.toString().trim();
     }
 
-    private void flattenOutlineRecursive(List<OutlineNode> nodes, StringBuilder sb, int depth) {
+    private void flattenOutlineRecursive(List<OutlineNode> nodes, StringBuilder sb, int depth, String parentPath) {
         for (OutlineNode node : nodes) {
             boolean isLeaf = node.children().isEmpty();
             sb.append("  ".repeat(depth)).append(node.key()).append(". ").append(node.title());
             if (isLeaf) {
                 sb.append("  ★매핑대상");
+                if (!parentPath.isEmpty()) {
+                    sb.append(" [").append(parentPath).append("]");
+                }
             }
             sb.append("\n");
             if (!isLeaf) {
-                flattenOutlineRecursive(node.children(), sb, depth + 1);
+                String childPath = parentPath.isEmpty() ? node.title() : parentPath + " > " + node.title();
+                flattenOutlineRecursive(node.children(), sb, depth + 1, childPath);
             }
         }
     }

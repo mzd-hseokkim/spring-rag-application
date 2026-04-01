@@ -30,20 +30,22 @@ public final class OutlineUtils {
 
     public static void collectLeafSections(List<OutlineNode> nodes, Map<String, List<String>> mapping,
                                            List<LeafSection> result) {
-        collectLeafSections(nodes, mapping, result, List.of());
+        collectLeafSections(nodes, mapping, result, List.of(), "");
     }
 
     public static void collectLeafSections(List<OutlineNode> nodes, Map<String, List<String>> mapping,
-                                           List<LeafSection> result, List<String> inheritedReqIds) {
+                                           List<LeafSection> result, List<String> inheritedReqIds,
+                                           String parentPath) {
         for (OutlineNode node : nodes) {
             List<String> ownReqIds = mapping.getOrDefault(node.key(), List.of());
             List<String> combined = new ArrayList<>(inheritedReqIds);
             combined.addAll(ownReqIds);
 
             if (node.children().isEmpty()) {
-                result.add(new LeafSection(node.key(), node.title(), node.description(), combined));
+                result.add(new LeafSection(node.key(), node.title(), node.description(), combined, parentPath));
             } else {
-                collectLeafSections(node.children(), mapping, result, combined);
+                String childPath = parentPath.isEmpty() ? node.title() : parentPath + " > " + node.title();
+                collectLeafSections(node.children(), mapping, result, combined, childPath);
             }
         }
     }

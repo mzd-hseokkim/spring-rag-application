@@ -262,7 +262,8 @@ public class OutlineExtractor {
 
         // 트리 전체에서 leaf 노드와 full path 수집
         java.util.Map<String, OutlineNode> leafByPath = new java.util.LinkedHashMap<>();
-        collectLeaves(topLevel, "", leafByPath);
+        java.util.Map<String, String> leafTitlePaths = new java.util.HashMap<>();
+        collectLeaves(topLevel, "", leafByPath, "", leafTitlePaths);
         log.info("{} leaf nodes need LLM expansion for sub-sections", leafByPath.size());
 
         if (leafByPath.isEmpty()) {
@@ -289,11 +290,12 @@ public class OutlineExtractor {
         for (var entry : leafByPath.entrySet()) {
             String fullPath = entry.getKey();
             OutlineNode leaf = entry.getValue();
+            String titlePath = leafTitlePaths.getOrDefault(fullPath, "");
             futures.add(CompletableFuture.runAsync(() -> {
                 try {
                     sem.acquire();
                     try {
-                        OutlineNode expanded = expandSection(client, leaf, reqSuggestions, fullPath);
+                        OutlineNode expanded = expandSection(client, leaf, reqSuggestions, fullPath, titlePath);
                         expandedChildren.put(fullPath, expanded.children());
                     } finally {
                         sem.release();
@@ -312,16 +314,27 @@ public class OutlineExtractor {
 
     /**
      * 트리를 순회하여 leaf 노드와 그 full path를 수집.
-     * full path 예: "I.1", "II.3" (부모key.자신key)
+     * 자식 key가 이미 부모 key를 접두어로 포함하면 그대로 사용 (중복 방지).
      */
     private void collectLeaves(List<OutlineNode> nodes, String parentPath,
                                 java.util.Map<String, OutlineNode> leafByPath) {
+        collectLeaves(nodes, parentPath, leafByPath, "", null);
+    }
+
+    private void collectLeaves(List<OutlineNode> nodes, String parentPath,
+                                java.util.Map<String, OutlineNode> leafByPath,
+                                String parentTitlePath,
+                                java.util.Map<String, String> titlePaths) {
         for (OutlineNode node : nodes) {
-            String fullPath = parentPath.isEmpty() ? node.key() : parentPath + "." + node.key();
+            String fullPath = buildFullPath(parentPath, node.key());
             if (node.children().isEmpty()) {
                 leafByPath.put(fullPath, node);
+                if (titlePaths != null) {
+                    titlePaths.put(fullPath, parentTitlePath);
+                }
             } else {
-                collectLeaves(node.children(), fullPath, leafByPath);
+                String titlePath = parentTitlePath.isEmpty() ? node.title() : parentTitlePath + " > " + node.title();
+                collectLeaves(node.children(), fullPath, leafByPath, titlePath, titlePaths);
             }
         }
     }
@@ -330,7 +343,7 @@ public class OutlineExtractor {
                                                    java.util.Map<String, List<OutlineNode>> expandedChildren) {
         List<OutlineNode> result = new ArrayList<>();
         for (OutlineNode node : nodes) {
-            String fullPath = parentPath.isEmpty() ? node.key() : parentPath + "." + node.key();
+            String fullPath = buildFullPath(parentPath, node.key());
             if (node.children().isEmpty()) {
                 // leaf → 확장된 children 붙이기
                 List<OutlineNode> newChildren = expandedChildren.getOrDefault(fullPath, List.of());
@@ -342,6 +355,16 @@ public class OutlineExtractor {
             }
         }
         return result;
+    }
+
+    /**
+     * 부모 경로와 자식 key를 결합하여 full path 생성.
+     * 자식 key가 이미 부모 경로를 포함하면 (예: 부모="I", 자식="I.1") 자식 key를 그대로 사용.
+     */
+    private String buildFullPath(String parentPath, String childKey) {
+        if (parentPath.isEmpty()) return childKey;
+        if (childKey.startsWith(parentPath + ".")) return childKey;
+        return parentPath + "." + childKey;
     }
 
 
@@ -393,16 +416,21 @@ public class OutlineExtractor {
         String topicsSection = """
                 ## 필수 포함 주제 (하나라도 빠지면 안 됩니다)
                 아래 주제들이 반드시 대분류에 포함되어야 합니다:
-                - 사업 이해/개요 (배경, 목적, 범위)
-                - 기술/시스템 아키텍처
-                - 주요 기능 구현
-                - 데이터 구축/관리
-                - 보안 및 컴플라이언스
-                - 프로젝트 관리/수행 방안
+                - 사업 이해/개요 (배경, 목적, 범위) — 사업 관점
+                - 추진 전략 (비전, 로드맵, 차별화, 기대효과) — 사업 관점
+                - 추진 체계 (조직, 협업, 의사결정, 위험관리) — 사업 관점
+                - 기술/시스템 아키텍처 — 기술 관점
+                - 주요 기능 구현 — 기술 관점
+                - 데이터 구축/관리 — 기술 관점
+                - 보안 및 컴플라이언스 — 기술 관점
+                - 수행 방안/프로젝트 관리 (방법론, 일정, 품질) — 사업 관점
                 - 투입 인력/조직
                 - 인수인계, 기술이전, 유지보수, 교육훈련
                 - 유사 수행 실적
                 위 주제 외에도 요구사항 분석에서 제안된 주제가 있으면 추가하세요.
+
+                ⚠️ 대분류 description에 해당 섹션이 "사업 관점"인지 "기술 관점"인지 명시하세요.
+                사업 관점 섹션의 하위에는 기술 구현 항목을 넣지 마세요.
                 """;
 
         // Pass 1: 대분류만 생성
@@ -469,10 +497,17 @@ public class OutlineExtractor {
      * keyPrefix가 없으면 topSection.key()를 사용.
      */
     private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions) {
-        return expandSection(client, topSection, suggestions, topSection.key());
+        return expandSection(client, topSection, suggestions, topSection.key(), "");
     }
 
-    private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions, String keyPrefix) {
+    private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions, String keyPrefix, String titlePath) {
+        String parentContext = titlePath.isEmpty() ? "" : """
+
+                ## ⚠️ 상위 맥락 (매우 중요!)
+                이 항목은 **"%s > %s"** 아래에 있습니다.
+                하위 목차는 반드시 이 상위 맥락의 주제 범위 안에서만 구성하세요.
+                상위 항목과 무관한 내용(사업 도메인의 일반 현황 등)을 하위에 넣지 마세요.
+                """.formatted(titlePath, topSection.title());
         String expandPrompt = """
                 다음 제안서 항목의 하위 목차(중분류, 소분류)를 구성하세요.
                 이 제안서는 **프레젠테이션형 문서**이므로 하나의 리프 항목 = 하나의 장표(슬라이드)입니다.
@@ -481,8 +516,22 @@ public class OutlineExtractor {
                 - key: %s
                 - title: %s
                 - description: %s
+                %s
+                ## ⚠️ 핵심 원칙: 섹션 성격에 맞는 관점으로 하위 항목을 구성하세요
+                - **사업/관리 섹션** (추진 전략, 추진 체계, 수행 방안, 프로젝트 관리, 사업이해 등)
+                  → 사업·프로젝트 관점의 하위 항목 (비전, 로드맵, 조직, 협업 체계, 위험관리 등)
+                  → 기술 구현 내용(AI 모델, 데이터 구축, 인프라 등)을 하위 항목으로 넣지 마세요.
+                  → 제목에 "전략"을 붙여도 내용이 기술 구현이면 잘못된 것입니다.
+                  → 요구사항 ID(SFR, NFR 등)를 description에 넣지 마세요.
+                - **기술/구현 섹션** (제안 시스템, 구현 방안, 시스템 아키텍처, 기술 구성 등)
+                  → 기술·구현 관점의 하위 항목 (기능, 아키텍처, 데이터 설계 등)
+                  → 요구사항 ID가 있으면 description에 포함하세요.
+
+                상위 항목의 제목과 맥락을 보고 이 섹션이 사업/관리인지 기술/구현인지 판단하세요.
 
                 ## 참고할 요구사항 분석 결과
+                아래는 전체 요구사항 목록입니다. **기술/구현 섹션일 때만** 관련 요구사항을 참고하세요.
+                사업/관리 섹션이면 요구사항 목록을 무시하고, 사업·프로젝트 관점으로만 하위 항목을 구성하세요.
                 %s
 
                 ## 출력 규칙
@@ -490,11 +539,10 @@ public class OutlineExtractor {
                 - 하위 항목 2~5개, 필요 시 그 아래 소분류 2~5개
                 - key는 "%s.1", "%s.1.1" 형식
                 - **구체적인 제목 사용 필수** ("기능 1" 같은 placeholder 금지)
-                - 요구사항 ID(SFR-001 등)가 있으면 description에 포함
                 - 반드시 JSON 배열로만 응답 (children 포함한 배열)
 
                 [{"key":"%s.1","title":"하위 제목","description":"설명","children":[]}]
-                """.formatted(keyPrefix, topSection.title(), topSection.description(),
+                """.formatted(keyPrefix, topSection.title(), topSection.description(), parentContext,
                 suggestions.length() > 8_000 ? suggestions.substring(0, 8_000) : suggestions,
                 keyPrefix, keyPrefix, keyPrefix);
 

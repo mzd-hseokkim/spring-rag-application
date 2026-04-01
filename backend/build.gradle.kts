@@ -60,3 +60,11 @@ tasks.withType<Test> {
 tasks.withType<JavaExec> {
     jvmArgs("-Dfile.encoding=UTF-8", "-Dconsole.encoding=UTF-8")
 }
+
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    jvmArgs(
+        "-Dfile.encoding=UTF-8",
+        "-Dconsole.encoding=UTF-8",
+        "-Dstdout.encoding=UTF-8"   // Java 17+ 전용
+    )
+}

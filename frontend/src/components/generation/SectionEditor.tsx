@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle2, Loader2, Circle, FileText, RefreshCw, ChevronRight, ChevronDown, X } from 'lucide-react';
+import { CheckCircle2, Loader2, Circle, FileText, RefreshCw, ChevronRight, ChevronDown, X, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 import { LinkifySource } from '@/components/ui/linkify-source';
 import type { OutlineNode } from '@/api/generation';
 
@@ -106,6 +106,20 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
       return next;
     });
   };
+
+  const collectAllPaths = (nodes: OutlineNode[], parentPath = ''): string[] => {
+    const paths: string[] = [];
+    for (const n of nodes) {
+      const pathId = parentPath ? `${parentPath}/${n.key}` : n.key;
+      if (n.children.length > 0) {
+        paths.push(pathId);
+        paths.push(...collectAllPaths(n.children, pathId));
+      }
+    }
+    return paths;
+  };
+  const expandAll = () => { if (outline) setExpanded(new Set(collectAllPaths(outline))); };
+  const collapseAll = () => setExpanded(new Set());
 
   const leafCount = outline ? collectLeafKeys(outline).length : (sectionKeys?.length || totalSections);
 
@@ -251,6 +265,16 @@ export function SectionEditor({ sections, outline: rawOutline, sectionTitles, se
           <span className="text-xs text-muted-foreground font-medium">
             목차 ({sections.length}/{leafCount})
           </span>
+          {outline && (
+            <div className="flex items-center gap-0.5 ml-auto">
+              <button onClick={expandAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 열기">
+                <ChevronsUpDown className="h-3 w-3" />
+              </button>
+              <button onClick={collapseAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 닫기">
+                <ChevronsDownUp className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
         {outline ? (
           outline.map(node => renderOutlineNode(node, 0, ''))

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import type { OutlineNode } from '@/api/generation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ChevronRight, ChevronDown, Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Plus, Trash2, ArrowUp, ArrowDown, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 
 /** "1.2.10" 같은 계층 번호를 자연수 순서로 비교 */
 function compareKeys(a: string, b: string): number {
@@ -38,6 +38,20 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
       return next;
     });
   };
+
+  const collectAllPaths = (nodes: OutlineNode[], parentPath: string[] = []): string[] => {
+    const paths: string[] = [];
+    for (const n of nodes) {
+      const path = [...parentPath, n.key];
+      if (n.children.length > 0) {
+        paths.push(path.join('/'));
+        paths.push(...collectAllPaths(n.children, path));
+      }
+    }
+    return paths;
+  };
+  const expandAll = () => setExpanded(new Set(collectAllPaths(outline)));
+  const collapseAll = () => setExpanded(new Set());
 
   const updateNode = (keys: string[], field: 'title' | 'description', value: string) => {
     const update = (nodes: OutlineNode[], path: string[]): OutlineNode[] => {
@@ -110,8 +124,8 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
     const hasChildren = node.children.length > 0;
 
     return (
-      <div key={pathId} className="select-none">
-        <div className={`flex items-center gap-1 py-1.5 px-2 rounded-md hover:bg-accent/50 group ${depth > 0 ? 'ml-6' : ''}`}>
+      <div key={pathId} className={`select-none ${depth > 0 ? 'pl-5' : ''}`}>
+        <div className="flex items-center gap-1 py-1.5 px-2 rounded-md hover:bg-accent/50 group">
           {hasChildren ? (
             <button onClick={() => toggleExpand(pathId)} className="p-0.5 cursor-pointer">
               {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -153,7 +167,7 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
         </div>
 
         {node.description && (
-          <p className={`text-xs text-muted-foreground px-2 pb-1 ${depth > 0 ? 'ml-6' : ''} ml-10`}>{node.description}</p>
+          <p className="text-xs text-muted-foreground px-2 pb-1 ml-10">{node.description}</p>
         )}
 
         {isExpanded && node.children.map(child =>
@@ -165,6 +179,14 @@ export function OutlineEditor({ outline: rawOutline, onChange, readOnly }: Outli
 
   return (
     <div className="flex flex-col" style={{ height: 'calc(100vh - 320px)', minHeight: '400px' }}>
+      <div className="flex items-center gap-0.5 mb-1 shrink-0">
+        <button onClick={expandAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 열기">
+          <ChevronsUpDown className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={collapseAll} className="p-1 rounded text-muted-foreground hover:bg-accent/50 cursor-pointer" title="모두 닫기">
+          <ChevronsDownUp className="h-3.5 w-3.5" />
+        </button>
+      </div>
       <div className="flex-1 overflow-y-auto space-y-1 pr-1">
         {outline.map(node => renderNode(node, [node.key], 0))}
       </div>

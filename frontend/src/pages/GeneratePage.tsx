@@ -743,6 +743,7 @@ export function GeneratePage() {
       setSections([]);
     }
     setGeneratingIndex(0);
+    setGeneratingKey(filterKeys?.[0] ?? null);
     setWizardStep(4);
     try {
       const job = gen.jobs.find(j => j.id === jobId);
@@ -1223,7 +1224,7 @@ export function GeneratePage() {
 
                         let newOutline: OutlineNode[] = [];
                         if (updated.outline) {
-                          try { newOutline = JSON.parse(updated.outline); setOutline(newOutline); } catch { /* ignore */ }
+                          try { newOutline = JSON.parse(updated.outline); setOutline(newOutline); } catch (e) { console.error('Failed to parse outline after unmapped generation', e); }
                         }
                         let newMapping: Record<string, string[]> = {};
                         if (updated.requirementMapping) {
@@ -1232,7 +1233,9 @@ export function GeneratePage() {
                             setRequirements(parsed.requirements || []);
                             newMapping = parsed.mapping || {};
                             setReqMapping(newMapping);
-                          } catch { /* ignore */ }
+                          } catch (e) { console.error('Failed to parse requirementMapping after unmapped generation', e); }
+                        } else {
+                          console.warn('generateUnmappedSections returned null requirementMapping');
                         }
 
                         // 새로 추가된 섹션 정보 수집
