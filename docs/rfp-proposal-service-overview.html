@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spring RAG Application — 서비스 소개</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Noto+Sans+KR:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F7F5FB;
+    --text: #111013;
+    --accent: #2B50D4;
+    --accent-dim: rgba(43,80,212,0.07);
+    --accent-mid: rgba(43,80,212,0.15);
+    --border: rgba(8,7,8,0.12);
+    --border-accent: rgba(43,80,212,0.35);
+    --text-dim: #6B6878;
+    --text-mid: #3D3A47;
+    --green: #156030;
+    --green-dim: rgba(21,96,48,0.07);
+    --green-border: rgba(21,96,48,0.28);
+    --amber: #6B3A0E;
+    --amber-dim: rgba(107,58,14,0.08);
+    --amber-border: rgba(107,58,14,0.28);
+    --purple: #5B21B6;
+    --purple-dim: rgba(91,33,182,0.07);
+    --purple-border: rgba(91,33,182,0.28);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--text); font-family: 'Noto Sans KR', sans-serif; overflow-x: hidden; font-size: 15px; line-height: 1.7; }
+
+  .progress-bar { position: fixed; top: 0; left: 0; height: 2px; background: var(--accent); z-index: 9999; box-shadow: 0 0 6px rgba(59,96,228,0.4); transition: width 0.1s linear; }
+
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 48px; }
+  section { padding: 88px 0; border-bottom: 1px solid var(--border); }
+
+  .section-header { display: flex; align-items: baseline; gap: 18px; margin-bottom: 56px; }
+  .section-num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); letter-spacing: 0.12em; }
+  .section-title { font-family: 'DM Serif Display', serif; font-size: clamp(28px, 3.5vw, 44px); line-height: 1.1; }
+
+  /* ── HERO ── */
+  .hero {
+    min-height: 100vh; display: flex; flex-direction: column; justify-content: center;
+    padding: 80px 48px 64px; border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 64px 64px; opacity: 0.45; pointer-events: none;
+  }
+  .hero-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-bottom: 28px; display: flex; gap: 28px; flex-wrap: wrap; opacity: 0; animation: fadeUp 0.7s 0.1s ease forwards; }
+  .hero-tag span::before { content: '▸ '; opacity: 0.5; }
+  .hero-title { font-family: 'DM Serif Display', serif; font-size: clamp(44px, 6.5vw, 88px); line-height: 1.0; letter-spacing: -0.02em; margin-bottom: 22px; opacity: 0; animation: fadeUp 0.7s 0.25s ease forwards; }
+  .hero-title em { font-style: italic; color: var(--accent); }
+  .hero-sub { font-size: 16px; color: var(--text-mid); max-width: 620px; line-height: 1.85; margin-bottom: 56px; opacity: 0; animation: fadeUp 0.7s 0.4s ease forwards; }
+
+  .hero-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); opacity: 0; animation: fadeUp 0.7s 0.55s ease forwards; }
+  .kpi { background: var(--bg); padding: 28px 24px; transition: background 0.25s; position: relative; }
+  .kpi:hover { background: var(--accent-dim); }
+  .kpi::after { content: ''; position: absolute; bottom: 0; left: 0; height: 2px; width: 0; background: var(--accent); transition: width 0.4s ease; }
+  .kpi:hover::after { width: 100%; }
+  .kpi-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+  .kpi-value { font-size: 30px; font-weight: 700; line-height: 1.1; margin-bottom: 4px; color: var(--accent); }
+  .kpi-note { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); line-height: 1.6; }
+
+  /* ── FEATURE GRID ── */
+  .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .feature-card { padding: 26px; border: 1px solid var(--border); transition: background 0.25s, border-color 0.25s; }
+  .feature-card:hover { background: var(--accent-dim); border-color: var(--border-accent); }
+  .feature-icon { font-size: 20px; margin-bottom: 12px; }
+  .feature-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+  .feature-text { font-size: 13px; color: var(--text-mid); line-height: 1.8; }
+  .feature-text strong { color: var(--text); }
+
+  /* ── WORKFLOW STEPS ── */
+  .flow-rows { display: flex; flex-direction: column; gap: 0; }
+  .flow-wrap { display: flex; align-items: stretch; gap: 0; }
+  .flow-step { flex: 1; min-width: 80px; display: flex; flex-direction: column; position: relative; }
+  .flow-step::after { content: '→'; position: absolute; right: 3px; top: 28px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); z-index: 1; }
+  .flow-step:last-child::after { display: none; }
+  .flow-box { padding: 18px 14px; border: 1px solid var(--border); margin-right: 20px; flex: 1; transition: background 0.25s, border-color 0.25s; cursor: default; position: relative; }
+  .flow-box:hover { background: var(--accent-dim); border-color: var(--border-accent); }
+  .flow-step:last-child .flow-box { margin-right: 0; }
+  .flow-box.featured { background: var(--accent-dim); border-color: var(--border-accent); }
+  .flow-box.done-box { background: var(--green-dim); border-color: var(--green-border); }
+  .flow-num { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); margin-bottom: 6px; }
+  .flow-cmd { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 500; margin-bottom: 6px; }
+  .flow-box.done-box .flow-cmd { color: var(--green); }
+  .flow-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .flow-out { font-size: 11px; color: var(--text-mid); line-height: 1.6; }
+
+  .flow-row-break { display: flex; align-items: center; margin: 10px 0; gap: 0; }
+  .flow-row-break-line { flex: 1; height: 1px; background: var(--border); }
+  .flow-row-break-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; color: var(--text-dim); padding: 0 14px; white-space: nowrap; }
+
+  /* ── SERVICE CARD (large) ── */
+  .service-card { padding: 36px; border: 1px solid var(--border); margin-bottom: 24px; transition: border-color 0.25s; }
+  .service-card:hover { border-color: var(--border-accent); }
+  .service-card-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+  .service-card-num { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; color: var(--accent); background: var(--accent-dim); border: 1px solid var(--border-accent); padding: 4px 10px; border-radius: 2px; }
+  .service-card-title { font-family: 'DM Serif Display', serif; font-size: clamp(22px, 2.5vw, 30px); line-height: 1.15; }
+  .service-card-desc { font-size: 14px; color: var(--text-mid); line-height: 1.85; margin-bottom: 24px; max-width: 640px; }
+
+  /* ── STRATEGY TABLE ── */
+  .strategy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .strategy-card { padding: 26px; border: 1px solid var(--border); }
+  .strategy-num { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+  .strategy-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; color: var(--accent); }
+  .strategy-text { font-size: 13px; color: var(--text-mid); line-height: 1.8; margin-bottom: 12px; }
+  .strategy-when { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); padding-top: 12px; border-top: 1px solid var(--border); line-height: 1.65; }
+  .strategy-when strong { color: var(--text); }
+
+  /* ── TECH STACK ── */
+  .tech-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .tech-card { padding: 24px; border: 1px solid var(--border); }
+  .tech-category { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; }
+  .tech-items { list-style: none; }
+  .tech-items li { font-size: 13px; color: var(--text-mid); padding: 6px 0; border-bottom: 1px solid rgba(8,7,8,0.06); display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; }
+  .tech-items li::before { content: '○'; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); flex-shrink: 0; margin-top: 2px; }
+  .tech-items li:last-child { border-bottom: none; }
+  .tech-items li strong { color: var(--text); }
+
+  .badge { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 7px; border-radius: 2px; letter-spacing: 0.05em; white-space: nowrap; }
+  .badge-blue  { background: var(--accent-mid); color: var(--accent); border: 1px solid var(--border-accent); }
+  .badge-green { background: var(--green-dim);  color: var(--green);  border: 1px solid var(--green-border); }
+  .badge-amber { background: var(--amber-dim);  color: var(--amber);  border: 1px solid var(--amber-border); }
+  .badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple-border); }
+
+  /* ── FOOTER ── */
+  footer { padding: 56px 0; }
+  .footer-inner { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 24px; }
+  .footer-meta { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); line-height: 2.0; }
+  .footer-brand { font-family: 'DM Serif Display', serif; font-size: 28px; color: rgba(8,7,8,0.07); }
+
+  @keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:none; } }
+  .reveal { opacity:0; transform:translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.visible { opacity:1; transform:none; }
+
+  @media (max-width: 900px) {
+    .container { padding: 0 24px; }
+    .hero { padding: 80px 24px 56px; }
+    .hero-kpis { grid-template-columns: 1fr 1fr; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .strategy-grid { grid-template-columns: 1fr; }
+    .tech-grid { grid-template-columns: 1fr; }
+    .flow-wrap { flex-wrap: wrap; }
+    .flow-step { min-width: 45%; }
+    .flow-step::after { display: none; }
+    .flow-box { margin-right: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar"></div>
+
+<!-- ─────────────── HERO ─────────────── -->
+<div class="hero container">
+  <div class="hero-tag">
+    <span>Spring AI + RAG</span>
+    <span>Document Generation</span>
+    <span>Intelligent Q&A</span>
+  </div>
+
+  <h1 class="hero-title">
+    문서를 이해하고,<br>
+    <em>생성하는 AI 플랫폼</em>
+  </h1>
+
+  <p class="hero-sub">
+    업로드된 문서를 벡터화하여 지능형 검색·응답을 제공하고,
+    RFP 분석 기반의 제안서 자동 생성과 예상 질의문 생성까지 —
+    제안 업무의 전 과정을 AI로 자동화하는 엔터프라이즈 플랫폼입니다.
+  </p>
+
+  <div class="hero-kpis">
+    <div class="kpi">
+      <div class="kpi-label">핵심 서비스</div>
+      <div class="kpi-value">3가지</div>
+      <div class="kpi-note">RAG 챗봇 · 문서 생성<br>질의문 생성</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">AI Framework</div>
+      <div class="kpi-value">Spring AI</div>
+      <div class="kpi-note">ChatClient 기반<br>멀티모델 지원</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">벡터 검색</div>
+      <div class="kpi-value">pgvector</div>
+      <div class="kpi-note">PostgreSQL 확장<br>임베딩 유사도 검색</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">실시간 응답</div>
+      <div class="kpi-value">SSE</div>
+      <div class="kpi-note">토큰 단위 스트리밍<br>실시간 진행 표시</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── SECTION 1: 서비스 개요 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">01</span>
+      <h2 class="section-title">서비스 구성</h2>
+    </div>
+
+    <p class="reveal" style="font-size:15px;color:var(--text-mid);line-height:1.8;margin-bottom:48px;max-width:640px;">
+      하나의 플랫폼에서 문서 기반 질의응답, 제안서 자동 생성, 예상 질의문 작성까지 —
+      제안 업무에 필요한 세 가지 핵심 기능을 통합 제공합니다.
+    </p>
+
+    <div class="strategy-grid reveal">
+      <div class="strategy-card" style="border-color:var(--border-accent);background:var(--accent-dim);">
+        <div class="strategy-num">Service 1</div>
+        <div class="strategy-title">RAG 챗봇</div>
+        <div class="strategy-text">업로드된 문서를 벡터 검색하여 근거 기반 답변을 실시간 스트리밍으로 제공합니다. 웹검색 폴백과 멀티스텝 추론을 지원합니다.</div>
+        <div class="strategy-when"><strong>핵심:</strong> 벡터 검색 + LLM 생성 + 소스 인용</div>
+      </div>
+      <div class="strategy-card" style="border-color:var(--green-border);background:var(--green-dim);">
+        <div class="strategy-num">Service 2</div>
+        <div class="strategy-title" style="color:var(--green);">제안서 생성</div>
+        <div class="strategy-text">고객 RFP를 분석하여 목차를 추출하고, 요구사항을 매핑한 뒤, 섹션별 콘텐츠를 자동 생성합니다. 5단계 위자드 방식입니다.</div>
+        <div class="strategy-when"><strong>핵심:</strong> RFP 분석 → 목차 → 매핑 → 생성 → 렌더링</div>
+      </div>
+      <div class="strategy-card" style="border-color:var(--purple-border);background:var(--purple-dim);">
+        <div class="strategy-num">Service 3</div>
+        <div class="strategy-title" style="color:var(--purple);">예상 질의문 생성</div>
+        <div class="strategy-text">고객 RFP와 제안서를 비교 분석하여 Gap을 식별하고, 평가위원 페르소나별 예상 질문과 답변을 자동 생성합니다.</div>
+        <div class="strategy-when"><strong>핵심:</strong> Gap 분석 + 페르소나 + Q&A 자동 생성</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 2: RAG 챗봇 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">02</span>
+      <h2 class="section-title">RAG 챗봇</h2>
+    </div>
+
+    <p class="reveal" style="font-size:15px;color:var(--text-mid);line-height:1.8;margin-bottom:36px;max-width:640px;">
+      사용자의 질문을 분석하고, 업로드된 문서에서 관련 내용을 벡터 검색하여
+      근거 있는 답변을 실시간으로 생성합니다. 복잡한 질문은 자동으로 분해하여
+      다단계 추론을 수행합니다.
+    </p>
+
+    <!-- Pipeline flow -->
+    <div class="flow-rows reveal">
+      <div class="flow-wrap">
+        <div class="flow-step">
+          <div class="flow-box featured">
+            <div class="flow-num">STAGE 1</div>
+            <div class="flow-cmd">Analyze</div>
+            <div class="flow-name">질문 분석</div>
+            <div class="flow-out">쿼리 압축 + 행동 결정<br>+ 하위 질문 분해</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">STAGE 2</div>
+            <div class="flow-cmd">Search</div>
+            <div class="flow-name">문서 검색</div>
+            <div class="flow-out">벡터 DB 유사도 검색<br>웹검색 자동 폴백</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">STAGE 3</div>
+            <div class="flow-cmd">Generate</div>
+            <div class="flow-name">답변 생성</div>
+            <div class="flow-out">문서 컨텍스트 기반<br>SSE 스트리밍 응답</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box done-box">
+            <div class="flow-num">OUTPUT</div>
+            <div class="flow-cmd" style="color:var(--green);">Response</div>
+            <div class="flow-name">응답 전달</div>
+            <div class="flow-out">마크다운 렌더링<br>소스 인용 표시</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Capabilities -->
+    <div class="feature-grid reveal" style="margin-top:36px;">
+      <div class="feature-card">
+        <div class="feature-icon">🔍</div>
+        <div class="feature-title">멀티스텝 추론</div>
+        <div class="feature-text">복잡한 질문을 <strong>하위 질문으로 자동 분해</strong>하여 반복 검색합니다. 단순 키워드 매칭이 아닌 의미 기반 추론을 수행합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <div class="feature-title">웹검색 폴백</div>
+        <div class="feature-text">내부 문서에서 충분한 답변을 찾지 못하면 <strong>Tavily 웹검색으로 자동 전환</strong>됩니다. 사용자가 직접 토글할 수도 있습니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📂</div>
+        <div class="feature-title">문서 필터링</div>
+        <div class="feature-text">Tag와 Collection 기반으로 <strong>검색 대상 문서를 선택</strong>할 수 있습니다. 특정 프로젝트나 분야의 문서만 대상으로 질의할 수 있습니다.</div>
+      </div>
+    </div>
+
+    <!-- Action types -->
+    <div class="reveal" style="margin-top:24px;padding:24px 28px;border:1px solid var(--border);background:rgba(8,7,8,0.02);">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;">분석 결과에 따른 자동 분기</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">DIRECT_ANSWER</div>
+          <div style="font-size:13px;color:var(--text-mid);">검색 없이 직접 답변 가능한 일반 질문</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">SEARCH</div>
+          <div style="font-size:13px;color:var(--text-mid);">벡터 DB에서 관련 문서 검색 후 답변 생성</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">WEB_SEARCH</div>
+          <div style="font-size:13px;color:var(--text-mid);">내부 문서 부족 시 웹검색으로 자동 전환</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">CLARIFY</div>
+          <div style="font-size:13px;color:var(--text-mid);">질문이 모호할 때 사용자에게 명확화 요청</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 3: 제안서 생성 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">03</span>
+      <h2 class="section-title">제안서 생성</h2>
+    </div>
+
+    <p class="reveal" style="font-size:15px;color:var(--text-mid);line-height:1.8;margin-bottom:36px;max-width:640px;">
+      고객 RFP(제안요청서)를 업로드하면 AI가 자동으로 목차를 추출하고,
+      요구사항을 매핑한 뒤, 참조 문서와 웹검색을 활용하여
+      섹션별 콘텐츠를 생성합니다. 5단계 위자드로 전 과정을 안내합니다.
+    </p>
+
+    <!-- 5-step wizard -->
+    <div class="flow-rows reveal">
+      <div class="flow-wrap">
+        <div class="flow-step">
+          <div class="flow-box featured">
+            <div class="flow-num">STEP 1</div>
+            <div class="flow-cmd">Draft</div>
+            <div class="flow-name">작업 생성</div>
+            <div class="flow-out">템플릿 · 고객 문서<br>참조 문서 선택</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">STEP 2</div>
+            <div class="flow-cmd">Analyze</div>
+            <div class="flow-name">목차 추출</div>
+            <div class="flow-out">RFP 분석 → 트리 구조<br>사용자 편집 가능</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">STEP 3</div>
+            <div class="flow-cmd">Map</div>
+            <div class="flow-name">요구사항 매핑</div>
+            <div class="flow-out">요구사항 → 섹션 매핑<br>Gap Matrix 시각화</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">STEP 4</div>
+            <div class="flow-cmd">Generate</div>
+            <div class="flow-name">콘텐츠 생성</div>
+            <div class="flow-out">RAG + 웹검색 기반<br>섹션별 자동 작성</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box done-box">
+            <div class="flow-num">STEP 5</div>
+            <div class="flow-cmd" style="color:var(--green);">Render</div>
+            <div class="flow-name">문서 렌더링</div>
+            <div class="flow-out">PDF · PPTX · HTML<br>다운로드 · 미리보기</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key capabilities -->
+    <div class="feature-grid reveal" style="margin-top:36px;">
+      <div class="feature-card">
+        <div class="feature-icon">🌳</div>
+        <div class="feature-title">목차 트리 에디터</div>
+        <div class="feature-text">AI가 추출한 목차를 <strong>드래그&드롭으로 재배치</strong>하고 섹션을 추가/삭제할 수 있습니다. Markdown 내보내기도 지원합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <div class="feature-title">Gap Matrix</div>
+        <div class="feature-text">고객 요구사항과 목차 섹션 간 <strong>매핑 현황을 시각화</strong>합니다. 미배치 요구사항은 새 섹션을 자동 생성하여 누락을 방지합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">✏️</div>
+        <div class="feature-title">섹션별 편집 & 재생성</div>
+        <div class="feature-text">각 섹션을 <strong>개별 수정하거나 사용자 지시사항을 포함해 재생성</strong>할 수 있습니다. 진행 상황은 SSE로 실시간 표시됩니다.</div>
+      </div>
+    </div>
+
+    <!-- Output formats -->
+    <div class="reveal" style="margin-top:24px;padding:24px 28px;border:1px solid var(--border);background:rgba(8,7,8,0.02);">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;">출력 형식</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <span class="badge badge-blue">PDF</span>
+        <span class="badge badge-green">PPTX</span>
+        <span class="badge badge-amber">HTML 미리보기</span>
+        <span class="badge badge-purple">Markdown</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 4: 예상 질의문 생성 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">04</span>
+      <h2 class="section-title">예상 질의문 생성</h2>
+    </div>
+
+    <p class="reveal" style="font-size:15px;color:var(--text-mid);line-height:1.8;margin-bottom:36px;max-width:640px;">
+      고객 RFP와 제안서를 비교 분석하여 Gap을 식별하고,
+      평가위원 페르소나(기술위원, 사업관리위원 등)별로
+      맞춤형 예상 질문과 모범 답변을 자동 생성합니다.
+    </p>
+
+    <!-- 3-phase workflow -->
+    <div class="flow-rows reveal">
+      <div class="flow-wrap">
+        <div class="flow-step">
+          <div class="flow-box featured">
+            <div class="flow-num">PHASE 1</div>
+            <div class="flow-cmd">Analyze</div>
+            <div class="flow-name">Gap 분석</div>
+            <div class="flow-out">RFP 요구사항 추출<br>제안서 대비 Gap 식별</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box">
+            <div class="flow-num">PHASE 2</div>
+            <div class="flow-cmd">Generate</div>
+            <div class="flow-name">Q&A 생성</div>
+            <div class="flow-out">페르소나별 질문 생성<br>참조 문서 기반 답변</div>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-box done-box">
+            <div class="flow-num">PHASE 3</div>
+            <div class="flow-cmd" style="color:var(--green);">Render</div>
+            <div class="flow-name">결과 출력</div>
+            <div class="flow-out">Excel 다운로드<br>HTML 미리보기</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gap analysis modes -->
+    <div class="reveal" style="margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div style="padding:28px;border:1px solid var(--border);">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:14px;">Gap 분석 모드</div>
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span class="badge badge-blue">RAG</span>
+              <span style="font-size:14px;font-weight:600;">벡터 검색 모드</span>
+            </div>
+            <div style="font-size:13px;color:var(--text-mid);line-height:1.7;">제안서에서 요구사항별 관련 내용을 <strong style="color:var(--text);">벡터 유사도 검색</strong>으로 빠르게 매칭합니다. 대량 처리에 적합합니다.</div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:16px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span class="badge badge-green">LLM</span>
+              <span style="font-size:14px;font-weight:600;">LLM 정밀 분석 모드</span>
+            </div>
+            <div style="font-size:13px;color:var(--text-mid);line-height:1.7;">LLM이 제안서 전체를 읽고 <strong style="color:var(--text);">정밀하게 충족/부분충족/미충족을 판정</strong>합니다. 더 정확하지만 시간이 더 소요됩니다.</div>
+          </div>
+        </div>
+      </div>
+      <div style="padding:28px;border:1px solid var(--border);">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:14px;">페르소나 시스템</div>
+        <div style="font-size:13px;color:var(--text-mid);line-height:1.85;">
+          평가위원의 <strong style="color:var(--text);">직책과 관심 영역</strong>을 페르소나로 정의합니다.<br><br>
+          각 페르소나는 자신의 전문 분야에서 Gap이 큰 부분을 중점적으로 질문합니다.
+          기본 제공 페르소나 외에 <strong style="color:var(--text);">사용자 정의 페르소나</strong>를 추가할 수 있습니다.<br><br>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);">예시: 기술위원, 사업관리위원, 보안전문가, PM 등</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analysis perspectives -->
+    <div class="reveal" style="margin-top:24px;padding:24px 28px;border:1px solid var(--border);background:rgba(8,7,8,0.02);">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;">다각적 분석 관점</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">사업 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">사업 개요 · 목적 · 배경 · 범위</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">기술 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">아키텍처 · 시스템 구성 · 인프라</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">수행 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">방법론 · 절차 · 산출물</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">관리 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">일정 · 위험 · 품질 관리</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">인력 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">조직 · 경험 · 실적</div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px;">운영 관점</div>
+          <div style="font-size:13px;color:var(--text-mid);">유지보수 · 교육 · 보안</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 5: 공통 기반 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">05</span>
+      <h2 class="section-title">공통 기반 기능</h2>
+    </div>
+
+    <div class="feature-grid reveal">
+      <div class="feature-card">
+        <div class="feature-icon">📄</div>
+        <div class="feature-title">문서 관리</div>
+        <div class="feature-text">PDF · DOCX · HWP 등 다양한 형식의 문서를 업로드하면 <strong>자동으로 청크 분할 → 벡터화 → 인덱싱</strong>됩니다. Tag와 Collection으로 분류 관리합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <div class="feature-title">멀티모델 관리</div>
+        <div class="feature-text">용도별로 다른 LLM을 설정할 수 있습니다. <strong>채팅 · 쿼리 분석 · 문서 생성</strong> 등 목적에 따라 최적의 모델을 선택합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <div class="feature-title">대시보드 & 모니터링</div>
+        <div class="feature-text">토큰 사용량, 응답 품질 평가, 사용 통계를 <strong>대시보드에서 실시간 모니터링</strong>합니다. 감사 로그로 전체 사용 이력을 추적합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-title">인증 & 권한</div>
+        <div class="feature-text"><strong>JWT 기반 인증</strong>과 역할 기반 접근 제어(USER / ADMIN)를 제공합니다. 관리자 전용 페이지와 기능이 분리되어 있습니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">비동기 파이프라인</div>
+        <div class="feature-text">문서 인제스팅, 콘텐츠 생성 등 시간이 오래 걸리는 작업은 <strong>비동기로 처리</strong>되며 SSE를 통해 진행 상황을 실시간으로 알립니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💾</div>
+        <div class="feature-title">캐싱 & 최적화</div>
+        <div class="feature-text">요구사항 추출 결과, 문서 분석 결과를 <strong>캐싱하여 반복 작업의 속도를 향상</strong>합니다. Redis를 활용한 대화 이력 캐싱도 포함됩니다.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 6: 기술 스택 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">06</span>
+      <h2 class="section-title">기술 스택</h2>
+    </div>
+
+    <div class="tech-grid reveal">
+      <div class="tech-card">
+        <div class="tech-category">Backend</div>
+        <ul class="tech-items">
+          <li><strong>Java 21</strong> + Spring Boot 3.4</li>
+          <li><strong>Spring AI 1.1</strong> — ChatClient 기반 LLM 통합</li>
+          <li><strong>Spring Data JPA</strong> + Flyway 마이그레이션</li>
+          <li><strong>Redis</strong> — 대화 이력 캐싱 (TTL 60분)</li>
+          <li><strong>SSE</strong> — 실시간 스트리밍 응답</li>
+        </ul>
+      </div>
+      <div class="tech-card">
+        <div class="tech-category">Frontend</div>
+        <ul class="tech-items">
+          <li><strong>React 19</strong> + TypeScript 5.9</li>
+          <li><strong>Vite 8</strong> — 빌드 도구</li>
+          <li><strong>TanStack Query</strong> — 서버 상태 관리</li>
+          <li><strong>shadcn/ui</strong> — UI 컴포넌트</li>
+          <li><strong>Markdown</strong> 렌더링 지원</li>
+        </ul>
+      </div>
+      <div class="tech-card">
+        <div class="tech-category">Database & Search</div>
+        <ul class="tech-items">
+          <li><strong>PostgreSQL 16</strong> — 관계형 데이터 저장</li>
+          <li><strong>pgvector</strong> — 벡터 임베딩 저장 · 유사도 검색</li>
+          <li><strong>Tavily</strong> — 웹검색 API 통합</li>
+        </ul>
+      </div>
+      <div class="tech-card">
+        <div class="tech-category">Build & Deploy</div>
+        <ul class="tech-items">
+          <li><strong>Gradle</strong> (Kotlin DSL) — 백엔드 빌드</li>
+          <li><strong>pnpm</strong> — 프론트엔드 패키지 관리</li>
+          <li><strong>Docker Compose</strong> — PostgreSQL + pgvector</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── SECTION 7: 아키텍처 ─────────────── -->
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-num">07</span>
+      <h2 class="section-title">시스템 아키텍처</h2>
+    </div>
+
+    <!-- Architecture diagram (text-based) -->
+    <div class="reveal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:36px;">
+      <div style="padding:28px;border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:12px;line-height:2.0;color:var(--text-mid);background:rgba(8,7,8,0.02);">
+        <div style="font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:14px;">프론트엔드 구조</div>
+        <div><span style="color:var(--accent);font-weight:500;">React App</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--accent);">MainPage</span><span style="color:var(--text-dim);">     # RAG 챗봇</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--green);font-weight:500;">GeneratePage</span><span style="color:var(--text-dim);"> # 제안서 생성</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--purple);font-weight:500;">QuestionnairePage</span><span style="color:var(--text-dim);"> # 질의문</span></div>
+        <div><span style="color:var(--text-dim);">├── </span>DocumentPage<span style="color:var(--text-dim);">  # 문서 관리</span></div>
+        <div><span style="color:var(--text-dim);">└── </span>AdminPage<span style="color:var(--text-dim);">     # 관리자</span></div>
+      </div>
+      <div style="padding:28px;border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:12px;line-height:2.0;color:var(--text-mid);">
+        <div style="font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:14px;">백엔드 도메인 구조</div>
+        <div><span style="color:var(--accent);font-weight:500;">com.example.rag</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--accent);">chat/</span><span style="color:var(--text-dim);">          # 챗봇 도메인</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--green);font-weight:500;">generation/</span><span style="color:var(--text-dim);">    # 문서 생성</span></div>
+        <div><span style="color:var(--text-dim);">├── </span><span style="color:var(--purple);font-weight:500;">questionnaire/</span><span style="color:var(--text-dim);"> # 질의문</span></div>
+        <div><span style="color:var(--text-dim);">├── </span>document/<span style="color:var(--text-dim);">      # 문서 관리</span></div>
+        <div><span style="color:var(--text-dim);">├── </span>agent/<span style="color:var(--text-dim);">         # 검색 에이전트</span></div>
+        <div><span style="color:var(--text-dim);">└── </span>auth/<span style="color:var(--text-dim);">          # 인증/권한</span></div>
+      </div>
+    </div>
+
+    <!-- Data flow -->
+    <div class="reveal" style="padding:32px 36px;border:1px solid var(--border-accent);background:var(--accent-dim);position:relative;overflow:hidden;">
+      <div style="position:absolute;top:0;right:0;font-family:'DM Serif Display',serif;font-size:96px;color:rgba(43,80,212,0.05);line-height:1;pointer-events:none;padding:12px 24px;">⟳</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin-bottom:16px;">Data Flow</div>
+      <p style="font-size:14px;color:var(--text-mid);line-height:1.85;max-width:680px;">
+        <strong style="color:var(--text);">문서 업로드</strong> → 청크 분할 → 임베딩 벡터화 → <strong style="color:var(--accent);">pgvector 저장</strong><br>
+        <strong style="color:var(--text);">사용자 질의</strong> → 쿼리 분석 → 벡터 유사도 검색 → LLM 생성 → <strong style="color:var(--accent);">SSE 스트리밍</strong><br>
+        <strong style="color:var(--text);">제안서 생성</strong> → RFP 분석 → 목차 추출 → 요구사항 매핑 → 섹션 생성 → <strong style="color:var(--accent);">PDF/PPTX 렌더링</strong><br>
+        <strong style="color:var(--text);">질의문 생성</strong> → Gap 분석 → 페르소나별 Q&A 생성 → <strong style="color:var(--accent);">Excel 출력</strong>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── FOOTER ─────────────── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-meta">
+        <div>Spring RAG Application</div>
+        <div>Backend: Java 21 · Spring Boot 3.4 · Spring AI 1.1</div>
+        <div>Frontend: React 19 · Vite 8 · TypeScript 5.9</div>
+        <div>Database: PostgreSQL 16 + pgvector</div>
+      </div>
+      <div class="footer-brand">Service Overview</div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  window.addEventListener('scroll', () => {
+    const s = window.scrollY, t = document.documentElement.scrollHeight - window.innerHeight;
+    document.getElementById('progressBar').style.width = (s / t * 100) + '%';
+  });
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); } });
+  }, { threshold: 0.08 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>

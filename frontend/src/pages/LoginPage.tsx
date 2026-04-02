@@ -35,7 +35,7 @@ export function LoginPage() {
           <div className="mx-auto w-12 h-12 rounded-xl bg-primary flex items-center justify-center mb-3">
             <Sparkles className="size-6 text-primary-foreground" />
           </div>
-          <CardTitle className="text-xl">RAG 채팅</CardTitle>
+          <CardTitle className="text-xl">제안서 생성 서비스</CardTitle>
           <p className="text-sm text-muted-foreground mt-1">로그인하여 시작하세요</p>
         </CardHeader>
         <CardContent>
