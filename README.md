@@ -20,17 +20,19 @@ Spring AI 기반 RAG(Retrieval-Augmented Generation) 애플리케이션.
 - 태그 및 컬렉션 기반 문서 분류
 - 공개/비공개 문서 관리
 - 비동기 배치 임베딩 파이프라인
+- 문서 인제스천 워커 (lease/retry, 복구 스케줄러)
 - 문서 재인덱싱
 
 ### AI 문서 생성 (위자드)
 5단계 위자드 기반 문서 생성:
 1. **설정** — 템플릿 선택, 고객/참조 문서 지정, 웹 검색 옵션
-2. **목차 구성** — 고객 문서에서 AI 목차 추출, 편집 가능 (추가/삭제/순서변경)
-3. **요구사항 배치** — 요구사항 자동 추출 → 목차에 매핑 (드래그&드롭), 원본 요구사항 번호 보존
-4. **내용 생성** — 섹션별 AI 생성 (8가지 레이아웃 템플릿), 개별 재생성/편집, 참조문서 RAG + 웹 검색
-5. **렌더링** — HTML 문서 출력, 미리보기, 다운로드
+2. **목차 구성** — 고객 문서에서 AI 목차 추출 (PDF 표 포함, 1~4 depth 계층), 비즈니스/기술 섹션 자동 구분, 편집 가능 (추가/삭제/순서변경)
+3. **요구사항 배치** — 요구사항 자동 추출 → 목차에 매핑 (드래그&드롭), 미매핑 요구사항 리프 노드 자동 배치, 원본 요구사항 번호 보존
+4. **내용 생성** — 섹션별 AI 생성 (8가지 레이아웃 템플릿), 멀티 depth 선택 생성, 개별 재생성/편집, 참조문서 RAG + 웹 검색
+5. **렌더링** — 챕터 구조 HTML 문서 출력, 미리보기, 다운로드
 - 목차 및 요구사항 배치 마크다운 다운로드
 - 요구사항 추출 결과 캐시 공유 (문서 생성 ↔ 예상 질의서 간)
+- 생성 Job별 문서 연관 추적 (GenerationJobDocument)
 
 ### 예상 질의서 생성
 - 멀티 페르소나 기반 예상 질문/답변 생성
@@ -42,9 +44,12 @@ Spring AI 기반 RAG(Retrieval-Augmented Generation) 애플리케이션.
 
 ### 관리자 대시보드
 - 채팅/토큰 사용량 메트릭 및 트렌드 차트
-- 파이프라인 트레이스 조회
-- 사용자·문서·대화 관리
-- LLM 모델 관리
+- 생성 KPI (문서/질의서 총건수·오늘·실패), 일별 생성 트렌드 차트
+- 토큰 사용 목적별 필터 (CHAT/GENERATION/QUESTIONNAIRE) 및 도넛 차트
+- 모델별 가격 테이블 및 사용자별 비용 차트
+- 생성 파이프라인 트레이스 기록 (단계별 소요시간·에러 추적)
+- 사용자·문서·대화·생성 관리 (상태 필터, 삭제)
+- LLM 모델 관리 (가격 인라인 편집)
 - 감사 로그
 - 요구사항 캐시 관리 (전체 초기화)
 
@@ -95,7 +100,7 @@ spring-rag-application/
 │   │   └── settings/       # 시스템 설정
 │   ├── src/main/resources/
 │   │   ├── application.yml
-│   │   ├── db/migration/   # Flyway 마이그레이션 (V1~V31)
+│   │   ├── db/migration/   # Flyway 마이그레이션 (V1~V34)
 │   │   ├── prompts/        # AI 프롬프트 파일 (31개)
 │   │   └── templates/      # Thymeleaf 템플릿
 │   └── build.gradle.kts
@@ -193,3 +198,8 @@ Backend, Frontend, PostgreSQL, Redis가 한번에 실행됩니다. Podman도 지
 | 20 | Requirement-driven Generation Workflow (Phase A~D) |
 | 21 | Web Search Integration (Tavily + Agentic Tools) |
 | 22 | Requirement Cache Sharing, Markdown Download, Title Editing |
+| 23 | Document Generation UX — Chapter Structure, Job-Document Tracking |
+| 24 | Document Worker Pipeline (Lease/Retry, Recovery Scheduler) |
+| 25 | Outline Extraction Enhancement — Multi-depth Hierarchy, Business/Technical Distinction |
+| 26 | Admin Dashboard — Generation Stats, Token Tracking, Cost Management |
+| 27 | GenerationWorkflowService Refactoring (929→75 LOC Facade + 5 Services) |
