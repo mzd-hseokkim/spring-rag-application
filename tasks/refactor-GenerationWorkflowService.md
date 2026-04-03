@@ -86,7 +86,7 @@
 - `WorkflowEventEmitter.java` — `@Component`, `GenerationEmitterManager` + `GenerationJobRepository` 의존
 
 완료 기준:
-- [ ] 컴파일 성공
+- [x] 컴파일 성공
 - [ ] 프론트엔드 SSE 수신 정상 동작 확인
 
 ---
@@ -109,9 +109,9 @@
 - `WizardSectionService.java` — `@Service`
 
 완료 기준:
-- [ ] 컴파일 성공
+- [x] 컴파일 성공
 - [ ] 섹션 생성 / 단일 섹션 재생성 정상 동작
-- [ ] `GenerationWorkflowService`는 `WizardSectionService`에 위임만 함
+- [x] `GenerationWorkflowService`는 `WizardSectionService`에 위임만 함
 
 ---
 
@@ -130,7 +130,7 @@
 - `WizardAnalysisService.java` — `@Service`
 
 완료 기준:
-- [ ] 컴파일 성공
+- [x] 컴파일 성공
 - [ ] 요구사항 추출·매핑·목차 구성 정상 동작
 
 ---
@@ -144,7 +144,7 @@
 - `renderWizardDocument()`를 `WizardRenderService.java`로 분리 (선택)
 
 완료 기준:
-- [ ] `GenerationWorkflowService` 200줄 이하
+- [x] `GenerationWorkflowService` 200줄 이하 (75줄)
 - [ ] 전체 워크플로 E2E 정상 동작
 
 ---
@@ -153,7 +153,7 @@
 
 - [x] Step A
 - [x] Step B
-- [ ] Step C
-- [ ] Step D
-- [ ] Step E
-- [ ] Step F
+- [x] Step C
+- [x] Step D
+- [x] Step E
+- [x] Step F
