@@ -1,6 +1,9 @@
 package com.example.rag.questionnaire.workflow;
 
 import com.example.rag.common.RagException;
+import com.example.rag.dashboard.GenerationTraceEntity;
+import com.example.rag.dashboard.GenerationTraceService;
+import com.example.rag.model.TokenRecordingContext;
 import com.example.rag.questionnaire.QuestionnaireEmitterManager;
 import com.example.rag.questionnaire.QuestionnaireJob;
 import com.example.rag.questionnaire.QuestionnaireJobRepository;
@@ -54,6 +57,7 @@ public class QuestionnaireWorkflowService {
     private final PersonaRepository personaRepository;
     private final QuestionnaireEmitterManager emitterManager;
     private final ObjectMapper objectMapper;
+    private final GenerationTraceService traceService;
 
     public QuestionnaireWorkflowService(QuestionnaireGeneratorService generator,
                                         RequirementExtractor requirementExtractor,
@@ -66,7 +70,8 @@ public class QuestionnaireWorkflowService {
                                         QuestionnaireJobRepository jobRepository,
                                         PersonaRepository personaRepository,
                                         QuestionnaireEmitterManager emitterManager,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        GenerationTraceService traceService) {
         this.generator = generator;
         this.requirementExtractor = requirementExtractor;
         this.requirementMatcher = requirementMatcher;
@@ -79,6 +84,7 @@ public class QuestionnaireWorkflowService {
         this.personaRepository = personaRepository;
         this.emitterManager = emitterManager;
         this.objectMapper = objectMapper;
+        this.traceService = traceService;
     }
 
     @SuppressWarnings("java:S107") // async workflow entry point — parameter object adds unnecessary indirection
@@ -88,8 +94,11 @@ public class QuestionnaireWorkflowService {
                         boolean includeWebSearch, String analysisMode) {
         QuestionnaireJob job = jobRepository.findByIdWithUser(detachedJob.getId())
                 .orElseThrow(() -> new IllegalStateException("Job not found: " + detachedJob.getId()));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity currentTrace = null;
         try {
             // ── Phase 1: ANALYZING — 요구사항 추출 + 갭 매트릭스 ──
+            currentTrace = traceService.start(job.getId(), "QUESTIONNAIRE", "ANALYZE");
             updateStatus(job, QuestionnaireStatus.ANALYZING);
             emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.ANALYZING, "문서를 분석하고 있습니다..."));
 
@@ -158,8 +167,10 @@ public class QuestionnaireWorkflowService {
             // DB에도 저장 (참조/디버깅용)
             job.setDocumentAnalysis(documentAnalysis);
             jobRepository.save(job);
+            traceService.complete(currentTrace);
 
             // ── Phase 2: GENERATING — 페르소나별 질문 생성 ──
+            currentTrace = traceService.start(job.getId(), "QUESTIONNAIRE", "GENERATE");
             updateStatus(job, QuestionnaireStatus.GENERATING);
             boolean proposalProvided = !proposalDocIds.isEmpty();
             List<PersonaQna> allQna = generateForAllPersonas(
@@ -167,8 +178,10 @@ public class QuestionnaireWorkflowService {
 
             job.setGeneratedQna(toJson(allQna));
             jobRepository.save(job);
+            traceService.complete(currentTrace);
 
             // ── Phase 3: RENDERING ──
+            currentTrace = traceService.start(job.getId(), "QUESTIONNAIRE", "RENDER");
             updateStatus(job, QuestionnaireStatus.RENDERING);
             emitEvent(job, QuestionnaireProgressEvent.status(QuestionnaireStatus.RENDERING, "질의서를 생성하고 있습니다..."));
 
@@ -176,14 +189,18 @@ public class QuestionnaireWorkflowService {
             job.setOutputFilePath(outputPath);
 
             updateStatus(job, QuestionnaireStatus.COMPLETE);
+            traceService.complete(currentTrace);
             emitEvent(job, QuestionnaireProgressEvent.complete("/api/questionnaires/" + job.getId() + "/download"));
             log.info("Questionnaire job {} - complete, output: {}", job.getId(), outputPath);
 
         } catch (Exception e) {
             log.error("Questionnaire job {} failed", job.getId(), e);
+            if (currentTrace != null) traceService.fail(currentTrace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             updateStatus(job, QuestionnaireStatus.FAILED);
             emitEvent(job, QuestionnaireProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 

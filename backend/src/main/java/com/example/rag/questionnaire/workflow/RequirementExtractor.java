@@ -81,7 +81,7 @@ public class RequirementExtractor {
     }
 
     private List<Requirement> extractFromContent(String documentContent, String userInput) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String prompt = promptLoader.load("questionnaire-extract-requirements.txt");
 
         String content = client.prompt()

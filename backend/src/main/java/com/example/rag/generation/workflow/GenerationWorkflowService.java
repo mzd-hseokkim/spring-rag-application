@@ -1,5 +1,8 @@
 package com.example.rag.generation.workflow;
 
+import com.example.rag.dashboard.GenerationTraceEntity;
+import com.example.rag.dashboard.GenerationTraceService;
+import com.example.rag.model.TokenRecordingContext;
 import com.example.rag.document.DocumentChunk;
 import com.example.rag.document.DocumentChunkRepository;
 import com.example.rag.generation.GenerationEmitterManager;
@@ -56,6 +59,7 @@ public class GenerationWorkflowService {
     private final GenerationEmitterManager emitterManager;
     private final ObjectMapper objectMapper;
     private final GenerationDataParser dataParser;
+    private final GenerationTraceService traceService;
 
     public GenerationWorkflowService(ContentGeneratorService contentGenerator,
                                      OutlineExtractor outlineExtractor,
@@ -70,7 +74,8 @@ public class GenerationWorkflowService {
                                      GenerationJobRepository jobRepository,
                                      GenerationEmitterManager emitterManager,
                                      ObjectMapper objectMapper,
-                                     GenerationDataParser dataParser) {
+                                     GenerationDataParser dataParser,
+                                     GenerationTraceService traceService) {
         this.contentGenerator = contentGenerator;
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
@@ -85,6 +90,7 @@ public class GenerationWorkflowService {
         this.emitterManager = emitterManager;
         this.objectMapper = objectMapper;
         this.dataParser = dataParser;
+        this.traceService = traceService;
     }
 
     @Async("ingestionExecutor")
@@ -92,8 +98,11 @@ public class GenerationWorkflowService {
         // @Async는 별도 스레드에서 실행되므로, 호출측 트랜잭션 커밋 후 DB에서 다시 조회 (template, user eager fetch)
         GenerationJob job = jobRepository.findByIdWithTemplate(detachedJob.getId())
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + detachedJob.getId()));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity currentTrace = null;
         try {
             // Phase 1: PLAN
+            currentTrace = traceService.start(job.getId(), "GENERATION", "OUTLINE");
             updateStatus(job, GenerationStatus.PLANNING);
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.PLANNING, "문서 구조를 설계하고 있습니다..."));
 
@@ -109,9 +118,11 @@ public class GenerationWorkflowService {
             job.setOutline(dataParser.toJson(outline));
             job.setTotalSections(outline.sections().size());
             jobRepository.save(job);
+            traceService.complete(currentTrace);
             log.info("Generation job {} - outline created with {} sections", job.getId(), outline.sections().size());
 
             // Phase 2: GENERATE
+            currentTrace = traceService.start(job.getId(), "GENERATION", "SECTION_GENERATE");
             updateStatus(job, GenerationStatus.GENERATING);
             List<SectionContent> sections = new ArrayList<>();
 
@@ -135,10 +146,12 @@ public class GenerationWorkflowService {
 
             job.setGeneratedSections(dataParser.toJson(sections));
             jobRepository.save(job);
+            traceService.complete(currentTrace);
 
             // Phase 3: REVIEW — 향후 구현 (Plan 05)
 
             // Phase 4: RENDER
+            currentTrace = traceService.start(job.getId(), "GENERATION", "RENDER");
             updateStatus(job, GenerationStatus.RENDERING);
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.RENDERING, "최종 문서를 생성하고 있습니다..."));
 
@@ -146,14 +159,18 @@ public class GenerationWorkflowService {
             job.setOutputFilePath(outputPath);
 
             updateStatus(job, GenerationStatus.COMPLETE);
+            traceService.complete(currentTrace);
             emitEvent(job, GenerationProgressEvent.complete("/api/generations/" + job.getId() + "/download"));
             log.info("Generation job {} - complete, output: {}", job.getId(), outputPath);
 
         } catch (Exception e) {
             log.error("Generation job {} failed", job.getId(), e);
+            if (currentTrace != null) traceService.fail(currentTrace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             updateStatus(job, GenerationStatus.FAILED);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 
@@ -166,6 +183,8 @@ public class GenerationWorkflowService {
     public void extractOutline(UUID jobId, List<UUID> customerDocIds) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity trace = traceService.start(jobId, "GENERATION", "EXTRACT_OUTLINE");
         try {
             // Phase 1: 고객문서 전체 청크 로드
             emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "고객 문서를 읽고 있습니다..."));
@@ -236,17 +255,21 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.DRAFT);
             jobRepository.save(job);
 
+            traceService.complete(trace);
             emitEvent(job, GenerationProgressEvent.complete("outline"));
             log.info("Generation job {} - outline extracted: {} top-level sections (with {} requirements)",
                     jobId, outline.size(), requirements.size());
 
         } catch (Exception e) {
             log.error("Generation job {} outline extraction failed", jobId, e);
+            traceService.fail(trace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 
@@ -258,6 +281,8 @@ public class GenerationWorkflowService {
     public void mapRequirements(UUID jobId, List<UUID> customerDocIds) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity trace = traceService.start(jobId, "GENERATION", "MAP_REQUIREMENTS");
         try {
             job.setStatus(GenerationStatus.MAPPING);
             job.setCurrentStep(3);
@@ -311,16 +336,20 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.DRAFT);
             jobRepository.save(job);
 
+            traceService.complete(trace);
             emitEvent(job, GenerationProgressEvent.complete(FIELD_REQUIREMENTS));
             log.info("Generation job {} - requirement mapping complete: {} keys", jobId, mapping.size());
 
         } catch (Exception e) {
             log.error("Generation job {} requirement mapping failed", jobId, e);
+            traceService.fail(trace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 
@@ -386,6 +415,8 @@ public class GenerationWorkflowService {
     public void generateWizardSections(UUID jobId, List<UUID> refDocIds, boolean includeWebSearch, List<String> filterKeys, boolean forceRegenerate) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity trace = traceService.start(jobId, "GENERATION", "SECTION_GENERATE");
         try {
             job.setStatus(GenerationStatus.GENERATING);
             job.setCurrentStep(4);
@@ -473,16 +504,20 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.READY);
             jobRepository.save(job);
 
+            traceService.complete(trace);
             emitEvent(job, GenerationProgressEvent.complete("sections"));
             log.info("Generation job {} - all {} wizard sections complete", jobId, sections.size());
 
         } catch (Exception e) {
             log.error("Generation job {} wizard section generation failed", jobId, e);
+            traceService.fail(trace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 
@@ -650,6 +685,8 @@ public class GenerationWorkflowService {
     public void renderWizardDocument(UUID jobId) {
         GenerationJob job = jobRepository.findByIdWithTemplate(jobId)
                 .orElseThrow(() -> new IllegalStateException(JOB_NOT_FOUND + jobId));
+        TokenRecordingContext.setUserId(job.getUser().getId());
+        GenerationTraceEntity trace = traceService.start(jobId, "GENERATION", "RENDER");
         try {
             job.setStatus(GenerationStatus.RENDERING);
             job.setCurrentStep(5);
@@ -683,16 +720,20 @@ public class GenerationWorkflowService {
             job.setStatus(GenerationStatus.COMPLETE);
             jobRepository.save(job);
 
+            traceService.complete(trace);
             emitEvent(job, GenerationProgressEvent.complete("/api/generations/" + job.getId() + "/download"));
             log.info("Generation job {} - wizard rendering complete, output: {}", jobId, outputPath);
 
         } catch (Exception e) {
             log.error("Generation job {} wizard rendering failed", jobId, e);
+            traceService.fail(trace, e.getMessage());
             job.setErrorMessage(e.getMessage());
             job.setStepStatus(STEP_STATUS_FAILED);
             job.setStatus(GenerationStatus.FAILED);
             jobRepository.save(job);
             emitEvent(job, GenerationProgressEvent.error(e.getMessage()));
+        } finally {
+            TokenRecordingContext.clear();
         }
     }
 

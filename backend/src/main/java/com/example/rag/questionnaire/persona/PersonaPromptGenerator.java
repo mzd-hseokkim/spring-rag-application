@@ -22,7 +22,7 @@ public class PersonaPromptGenerator {
     }
 
     public String generate(String name, String role, String focusAreas) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String userPrompt = promptLoader.load("persona-prompt-gen.txt");
 
         String content = client.prompt()

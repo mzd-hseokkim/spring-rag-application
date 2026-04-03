@@ -80,6 +80,40 @@ export async function reindexAll() {
   return res.json();
 }
 
+// --- 모델 단가 ---
+export interface ModelPricing {
+  id: string;
+  modelName: string;
+  inputPricePer1m: number;
+  outputPricePer1m: number;
+  currency: string;
+  updatedAt: string;
+}
+
+export async function fetchModelPricing(): Promise<ModelPricing[]> {
+  const res = await fetch('/api/admin/settings/model-pricing', { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch model pricing');
+  return res.json();
+}
+
+export async function upsertModelPricing(data: { modelName: string; inputPricePer1m: number; outputPricePer1m: number; currency?: string }): Promise<ModelPricing> {
+  const res = await fetch('/api/admin/settings/model-pricing', {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to update model pricing');
+  return res.json();
+}
+
+export async function deleteModelPricing(id: string) {
+  const res = await fetch(`/api/admin/settings/model-pricing/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete model pricing');
+}
+
 // --- 설정 ---
 export interface ChunkingSettings {
   mode: string;
@@ -137,6 +171,39 @@ export async function fetchAuditLogs(page = 0, size = 30, action?: string) {
   const res = await fetch(`/api/admin/audit-logs?${params}`, { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch audit logs');
   return res.json();
+}
+
+// --- 생성 작업 ---
+export async function fetchAdminGenerations(page = 0, size = 20, status?: string) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (status) params.set('status', status);
+  const res = await fetch(`/api/admin/generations?${params}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch generations');
+  return res.json();
+}
+
+export async function deleteAdminGeneration(id: string) {
+  const res = await fetch(`/api/admin/generations/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete generation');
+}
+
+export async function fetchAdminQuestionnaires(page = 0, size = 20, status?: string) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (status) params.set('status', status);
+  const res = await fetch(`/api/admin/questionnaires?${params}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch questionnaires');
+  return res.json();
+}
+
+export async function deleteAdminQuestionnaire(id: string) {
+  const res = await fetch(`/api/admin/questionnaires/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete questionnaire');
 }
 
 // --- 대화 ---

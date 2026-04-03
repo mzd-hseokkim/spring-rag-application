@@ -17,6 +17,7 @@ import { AdminDashboardPage } from '@/pages/admin/AdminDashboardPage';
 import { AdminEvalPage } from '@/pages/admin/AdminEvalPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
+import { AdminGenerationsPage } from '@/pages/admin/AdminGenerationsPage';
 import { GeneratePage } from '@/pages/GeneratePage';
 import { QuestionnairePage } from '@/pages/QuestionnairePage';
 
@@ -59,6 +60,7 @@ function App() {
               <Route path="eval" element={<AdminEvalPage />} />
               <Route path="users" element={<AdminUsersPage />} />
               <Route path="documents" element={<AdminDocumentsPage />} />
+              <Route path="generations" element={<AdminGenerationsPage />} />
               <Route path="conversations" element={<AdminConversationsPage />} />
               <Route path="models" element={<AdminModelsPage />} />
               <Route path="audit" element={<AdminAuditPage />} />

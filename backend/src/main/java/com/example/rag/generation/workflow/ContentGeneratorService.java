@@ -42,12 +42,12 @@ public class ContentGeneratorService {
     }
 
     public ChatClient getModelClient() {
-        return modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        return modelClientProvider.getChatClient(ModelPurpose.GENERATION);
     }
 
     public DocumentOutline generateOutline(String userInput, String systemPrompt,
                                            List<String> ragContext) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String userPrompt = promptLoader.load("generation-outline.txt");
         String contextText = ragContext.isEmpty() ? "없음" : String.join(SECTION_SEPARATOR, ragContext);
 
@@ -67,7 +67,7 @@ public class ContentGeneratorService {
     public SectionContent generateSection(SectionPlan plan, String systemPrompt,
                                           List<String> ragContext,
                                           List<SectionContent> previousSections) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String userPrompt = promptLoader.load("generation-section.txt");
 
         String joined = previousSections.stream()
@@ -101,7 +101,7 @@ public class ContentGeneratorService {
                                                            String requirementsText, String systemPrompt,
                                                            List<String> ragContext, List<String> webContext,
                                                            List<SectionContent> previousSections) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String userPrompt = promptLoader.load("generation-section-v2.txt");
 
         String joined = previousSections.stream()

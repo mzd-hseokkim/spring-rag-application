@@ -30,6 +30,13 @@ public class LlmModelService {
 
     public LlmModel getDefaultModel(ModelPurpose purpose) {
         return repository.findByPurposeAndDefaultModelTrue(purpose)
+                .or(() -> {
+                    // GENERATION/QUESTIONNAIRE에 전용 모델이 없으면 CHAT 모델로 fallback
+                    if (purpose == ModelPurpose.GENERATION || purpose == ModelPurpose.QUESTIONNAIRE) {
+                        return repository.findByPurposeAndDefaultModelTrue(ModelPurpose.CHAT);
+                    }
+                    return java.util.Optional.empty();
+                })
                 .orElseThrow(() -> new RuntimeException("No default model for purpose: " + purpose));
     }
 

@@ -48,7 +48,7 @@ export interface LlmModel {
   provider: 'OLLAMA' | 'ANTHROPIC' | 'AZURE_OPENAI';
   modelId: string;
   displayName: string;
-  purpose: 'CHAT' | 'EMBEDDING' | 'QUERY' | 'RERANK' | 'EVALUATION';
+  purpose: 'CHAT' | 'EMBEDDING' | 'QUERY' | 'RERANK' | 'EVALUATION' | 'GENERATION' | 'QUESTIONNAIRE';
   isDefault: boolean;
   isActive: boolean;
   baseUrl: string | null;

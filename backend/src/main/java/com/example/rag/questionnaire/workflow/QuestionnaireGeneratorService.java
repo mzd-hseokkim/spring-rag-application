@@ -95,7 +95,7 @@ public class QuestionnaireGeneratorService {
                                           List<String> refContext, List<String> webContext,
                                           String userInput, int questionCount,
                                           boolean proposalProvided) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
 
         String systemPrompt;
         if (persona.getPrompt() != null && !persona.getPrompt().isBlank()) {
@@ -137,7 +137,7 @@ public class QuestionnaireGeneratorService {
     // ── Map: 배치별 부분 분석 ──
 
     private String analyzePartialDocument(List<String> batch, String documentType, int batchIndex, int totalBatches) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String userPrompt = promptLoader.load("questionnaire-analyze-partial.txt");
         String documentContent = String.join(CHUNK_SEPARATOR, batch);
 
@@ -156,7 +156,7 @@ public class QuestionnaireGeneratorService {
     // ── Reduce: 통합 분석 ──
 
     private String mergeAnalyses(List<String> partialAnalyses, String userInput) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String userPrompt = promptLoader.load("questionnaire-analyze-merge.txt");
         String joined = String.join("\n\n---\n\n", partialAnalyses);
         String input = userInput != null ? userInput : "";
@@ -174,7 +174,7 @@ public class QuestionnaireGeneratorService {
     // ── 배치 1개 (소량 문서)일 때 직접 분석 ──
 
     private String analyzeFullDocument(String customerContent, String proposalContent, String userInput) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String userPrompt = promptLoader.load("questionnaire-analyze.txt");
         String input = userInput != null ? userInput : "";
 

@@ -36,6 +36,15 @@ public class ModelClientFactory {
         return chatClientCache.computeIfAbsent(model.getId(), id -> createChatClient(model));
     }
 
+    public ChatModel getChatModel(LlmModel model) {
+        return switch (model.getProvider()) {
+            case OLLAMA -> createOllamaChatModel(model);
+            case ANTHROPIC -> createAnthropicChatModel(model);
+            case AZURE_OPENAI -> throw new com.example.rag.common.RagException(
+                    "Chat is not supported for AZURE_OPENAI provider");
+        };
+    }
+
     public EmbeddingModel getEmbeddingModel(LlmModel model) {
         return embeddingModelCache.computeIfAbsent(model.getId(), id -> createEmbeddingModel(model));
     }

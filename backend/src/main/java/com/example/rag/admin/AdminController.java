@@ -2,6 +2,8 @@ package com.example.rag.admin;
 
 import com.example.rag.audit.AuditService;
 import com.example.rag.auth.UserRole;
+import com.example.rag.dashboard.ModelPricingEntity;
+import com.example.rag.dashboard.ModelPricingRepository;
 import com.example.rag.document.pipeline.ReindexService;
 import com.example.rag.questionnaire.workflow.RequirementCacheService;
 import com.example.rag.settings.ChunkingSettings;
@@ -15,7 +17,9 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -33,17 +37,20 @@ public class AdminController {
     private final ReindexService reindexService;
     private final RequirementCacheService requirementCache;
     private final AuditService auditService;
+    private final ModelPricingRepository modelPricingRepository;
 
     public AdminController(AdminService adminService,
                            SettingsService settingsService,
                            ReindexService reindexService,
                            RequirementCacheService requirementCache,
-                           AuditService auditService) {
+                           AuditService auditService,
+                           ModelPricingRepository modelPricingRepository) {
         this.adminService = adminService;
         this.settingsService = settingsService;
         this.reindexService = reindexService;
         this.requirementCache = requirementCache;
         this.auditService = auditService;
+        this.modelPricingRepository = modelPricingRepository;
     }
 
     private UUID currentUserId(Authentication auth) {
@@ -175,6 +182,67 @@ public class AdminController {
         EmbeddingSettings result = settingsService.updateEmbeddingSettings(settings);
         auditService.log(currentUserId(auth), null, "UPDATE_SETTINGS", "EMBEDDING", null);
         return result;
+    }
+
+    // --- 모델 단가 ---
+
+    @GetMapping("/settings/model-pricing")
+    public List<ModelPricingEntity> getModelPricing() {
+        return modelPricingRepository.findAll();
+    }
+
+    @PutMapping("/settings/model-pricing")
+    public ModelPricingEntity upsertModelPricing(@RequestBody Map<String, Object> body, Authentication auth) {
+        String modelName = (String) body.get("modelName");
+        BigDecimal inputPrice = new BigDecimal(body.get("inputPricePer1m").toString());
+        BigDecimal outputPrice = new BigDecimal(body.get("outputPricePer1m").toString());
+        String currency = body.getOrDefault("currency", "USD").toString();
+
+        ModelPricingEntity entity = modelPricingRepository.findByModelName(modelName)
+                .orElse(new ModelPricingEntity(modelName, inputPrice, outputPrice, currency));
+        entity.setInputPricePer1m(inputPrice);
+        entity.setOutputPricePer1m(outputPrice);
+        entity.setCurrency(currency);
+        ModelPricingEntity saved = modelPricingRepository.save(entity);
+        auditService.log(currentUserId(auth), null, "UPDATE_MODEL_PRICING", "MODEL_PRICING", modelName);
+        return saved;
+    }
+
+    @DeleteMapping("/settings/model-pricing/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteModelPricing(@PathVariable UUID id, Authentication auth) {
+        modelPricingRepository.deleteById(id);
+        auditService.log(currentUserId(auth), null, "DELETE_MODEL_PRICING", "MODEL_PRICING", id.toString());
+    }
+
+    // --- 생성 작업 관리 ---
+
+    @GetMapping("/generations")
+    public Page<AdminService.AdminGenerationJobDto> listGenerationJobs(
+            @RequestParam(required = false) String status,
+            @PageableDefault(size = 20) Pageable pageable) {
+        return adminService.listGenerationJobs(status, pageable);
+    }
+
+    @DeleteMapping("/generations/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteGenerationJob(@PathVariable UUID id, Authentication auth) {
+        adminService.deleteGenerationJob(id);
+        auditService.log(currentUserId(auth), null, "DELETE_GENERATION", "GENERATION", id.toString());
+    }
+
+    @GetMapping("/questionnaires")
+    public Page<AdminService.AdminQuestionnaireJobDto> listQuestionnaireJobs(
+            @RequestParam(required = false) String status,
+            @PageableDefault(size = 20) Pageable pageable) {
+        return adminService.listQuestionnaireJobs(status, pageable);
+    }
+
+    @DeleteMapping("/questionnaires/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteQuestionnaireJob(@PathVariable UUID id, Authentication auth) {
+        adminService.deleteQuestionnaireJob(id);
+        auditService.log(currentUserId(auth), null, "DELETE_QUESTIONNAIRE", "QUESTIONNAIRE", id.toString());
     }
 
     // --- 감사 로그 ---

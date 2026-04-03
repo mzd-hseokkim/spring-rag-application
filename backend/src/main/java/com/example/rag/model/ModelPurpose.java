@@ -5,5 +5,7 @@ public enum ModelPurpose {
     EMBEDDING,
     QUERY,
     RERANK,
-    EVALUATION
+    EVALUATION,
+    GENERATION,
+    QUESTIONNAIRE
 }

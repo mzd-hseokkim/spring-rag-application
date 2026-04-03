@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { dashboardApi } from '@/api/dashboard';
 
 const COLORS = ['#011936', '#465362', '#ED254E', '#4A90A4'];
@@ -9,11 +9,13 @@ export function OverviewTab() {
   const [overview, setOverview] = useState<Record<string, number>>({});
   const [chatTrend, setChatTrend] = useState<{ date: string; count: number }[]>([]);
   const [agentDist, setAgentDist] = useState<{ action: string; count: number }[]>([]);
+  const [genTrend, setGenTrend] = useState<{ date: string; generationCount: number; questionnaireCount: number }[]>([]);
 
   useEffect(() => {
     dashboardApi.overview().then(setOverview).catch(() => {});
     dashboardApi.chatTrend(30).then(setChatTrend).catch(() => {});
     dashboardApi.agentDistribution().then(setAgentDist).catch(() => {});
+    dashboardApi.generationTrend(30).then(setGenTrend).catch(() => {});
   }, []);
 
   const kpis = [
@@ -23,6 +25,15 @@ export function OverviewTab() {
     { label: '평균 응답시간', value: `${((overview.avgLatencyMs ?? 0) / 1000).toFixed(1)}초` },
   ];
 
+  const generationKpis = [
+    { label: '문서 생성 (전체)', value: overview.generationTotal ?? 0 },
+    { label: '문서 생성 (오늘)', value: overview.generationToday ?? 0 },
+    { label: '문서 생성 (실패)', value: overview.generationFailed ?? 0, alert: (overview.generationFailed ?? 0) > 0 },
+    { label: '질문 생성 (전체)', value: overview.questionnaireTotal ?? 0 },
+    { label: '질문 생성 (오늘)', value: overview.questionnaireToday ?? 0 },
+    { label: '질문 생성 (실패)', value: overview.questionnaireFailed ?? 0, alert: (overview.questionnaireFailed ?? 0) > 0 },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">
@@ -30,6 +41,17 @@ export function OverviewTab() {
           <Card key={kpi.label} className="p-4">
             <p className="text-xs text-muted-foreground">{kpi.label}</p>
             <p className="text-2xl font-bold mt-1">{kpi.value}</p>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-6 gap-4">
+        {generationKpis.map(kpi => (
+          <Card key={kpi.label} className="p-4">
+            <p className="text-xs text-muted-foreground">{kpi.label}</p>
+            <p className={`text-2xl font-bold mt-1 ${'alert' in kpi && kpi.alert ? 'text-red-500' : ''}`}>
+              {kpi.value}
+            </p>
           </Card>
         ))}
       </div>
@@ -65,6 +87,25 @@ export function OverviewTab() {
           )}
         </Card>
       </div>
+
+      <Card className="p-4">
+        <h3 className="text-sm font-medium mb-3">일별 생성 작업 (최근 30일)</h3>
+        {genTrend.length > 0 ? (
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={genTrend}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="generationCount" name="문서 생성" stroke="#011936" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="questionnaireCount" name="질문 생성" stroke="#ED254E" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-16">데이터 없음</p>
+        )}
+      </Card>
     </div>
   );
 }

@@ -160,7 +160,7 @@ public class RequirementMatcher {
     }
 
     private List<MatchResult> matchBatchWithLlm(List<Requirement> batch, String proposalContent) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.QUESTIONNAIRE);
         String prompt = promptLoader.load("questionnaire-match-requirement.txt");
 
         String reqJson;

@@ -63,7 +63,7 @@ public class RequirementMapper {
             reqList.append(r.id()).append(": ").append(r.item()).append("\n");
         }
 
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
         // 1단계: LLM에게 요구사항 → 상위섹션 배정만 요청 (단순한 JSON)
         String prompt = """
@@ -419,7 +419,7 @@ public class RequirementMapper {
     }
 
     private Map<String, List<String>> forceMapBatch(String outlineText, List<Requirement> requirements) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
         StringBuilder reqText = new StringBuilder();
         for (Requirement r : requirements) {
@@ -457,7 +457,7 @@ public class RequirementMapper {
     }
 
     private Map<String, List<String>> mapBatch(String outlineText, List<Requirement> requirements) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String prompt = promptLoader.load("generation-map-requirements.txt");
 
         StringBuilder reqJson = new StringBuilder("[\n");

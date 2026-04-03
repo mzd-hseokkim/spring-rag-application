@@ -123,7 +123,7 @@ public class OutlineExtractor {
                 %s
                 """.formatted(combinedContent);
 
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String result = client.prompt().user(detectionPrompt).call().content();
         log.info("detectRecommendedOutline raw response: {}", result);
 
@@ -279,7 +279,7 @@ public class OutlineExtractor {
             suggestions = suggestions.substring(0, 12_000) + TRUNCATION_SUFFIX;
         }
         final String reqSuggestions = suggestions;
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
         // leaf 노드별로 하위 목차 생성 (병렬), full path를 key로 사용
         java.util.Map<String, List<OutlineNode>> expandedChildren =
@@ -372,7 +372,7 @@ public class OutlineExtractor {
      * Map 단계: 요구사항 배치에 대한 목차 섹션 제안
      */
     private String mapOutlineSuggestion(String requirementsText, int batchNum, int totalBatches) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
         String mapPrompt = """
                 다음 요구사항 목록(배치 %d/%d)을 분석하고, 이 요구사항들을 반영하기 위해
@@ -402,7 +402,7 @@ public class OutlineExtractor {
      */
     private List<OutlineNode> reduceOutline(List<String> customerChunks, String userInput,
                                              String rawSuggestions) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
         String rawContent = String.join("\n---\n", customerChunks);
         if (rawContent.length() > 20_000) {
@@ -560,7 +560,7 @@ public class OutlineExtractor {
      */
     private List<OutlineNode> extractDirect(List<String> customerChunks, String userInput, String reqs,
                                               String ignored) {
-        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.CHAT);
+        ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String prompt = promptLoader.load("generation-extract-outline.txt");
 
         String rawContent = String.join("\n---\n", customerChunks);

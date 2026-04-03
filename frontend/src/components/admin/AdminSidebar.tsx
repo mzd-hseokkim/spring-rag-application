@@ -1,5 +1,5 @@
 import { NavLink, Link } from 'react-router-dom';
-import { ArrowLeft, Users, FileText, MessageSquare, Settings2, BarChart3, FlaskConical, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Users, FileText, MessageSquare, Settings2, BarChart3, FlaskConical, ShieldCheck, Sparkles } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { LogOut } from 'lucide-react';
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/admin/eval', label: '성능 평가', icon: FlaskConical },
   { to: '/admin/users', label: '사용자 관리', icon: Users },
   { to: '/admin/documents', label: '문서 관리', icon: FileText },
+  { to: '/admin/generations', label: '생성 관리', icon: Sparkles },
   { to: '/admin/conversations', label: '대화 관리', icon: MessageSquare },
   { to: '/admin/models', label: '모델 관리', icon: Settings2 },
   { to: '/admin/audit', label: '감사 로그', icon: ShieldCheck },

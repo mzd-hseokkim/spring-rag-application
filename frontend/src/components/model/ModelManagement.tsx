@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,9 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { fetchModelPricing, upsertModelPricing, type ModelPricing } from '@/api/admin';
 import type { LlmModel } from '@/types';
 
-const PURPOSES = ['CHAT', 'EMBEDDING', 'QUERY', 'RERANK', 'EVALUATION'] as const;
+const PURPOSES = ['CHAT', 'EMBEDDING', 'QUERY', 'RERANK', 'EVALUATION', 'GENERATION', 'QUESTIONNAIRE'] as const;
 
 type ModelState = {
   models: LlmModel[];
@@ -29,6 +30,28 @@ export function ModelManagement({ modelState }: { modelState: ModelState }) {
   const { models, setDefault, testModel, deleteModel, createModel, discoverOllama } = modelState;
   const [selectedPurpose, setSelectedPurpose] = useState<string>('CHAT');
   const [showAdd, setShowAdd] = useState(false);
+  const [pricing, setPricing] = useState<ModelPricing[]>([]);
+
+  const loadPricing = useCallback(() => {
+    fetchModelPricing().then(setPricing).catch(() => {});
+  }, []);
+  useEffect(() => { loadPricing(); }, [loadPricing]);
+
+  const getPricing = (displayName: string) => pricing.find(p => p.modelName === displayName);
+
+  const handleSavePricing = async (displayName: string, inputPrice: string, outputPrice: string) => {
+    try {
+      await upsertModelPricing({
+        modelName: displayName,
+        inputPricePer1m: parseFloat(inputPrice) || 0,
+        outputPricePer1m: parseFloat(outputPrice) || 0,
+      });
+      toast.success('단가가 저장되었습니다.');
+      loadPricing();
+    } catch {
+      toast.error('단가 저장에 실패했습니다.');
+    }
+  };
 
   const filtered = models.filter(m => m.purpose === selectedPurpose);
 
@@ -95,6 +118,9 @@ export function ModelManagement({ modelState }: { modelState: ModelState }) {
               {!m.isDefault && <Button variant="outline" size="xs" onClick={() => setDefault(m.id)}>기본 설정</Button>}
               {!m.isDefault && <Button variant="destructive" size="xs" onClick={() => deleteModel(m.id)}>삭제</Button>}
             </div>
+            {!['EMBEDDING', 'QUERY', 'RERANK'].includes(m.purpose) && (
+              <PricingRow pricing={getPricing(m.displayName)} onSave={(inp, out) => handleSavePricing(m.displayName, inp, out)} />
+            )}
           </Card>
         ))}
         {filtered.length === 0 && (
@@ -175,5 +201,46 @@ function AddModelForm({ onSubmit }: { onSubmit: (m: Partial<LlmModel>) => Promis
       {(provider === 'ANTHROPIC' || provider === 'AZURE_OPENAI') && <Input placeholder="API Key 또는 환경변수명" value={apiKeyRef} onChange={e => setApiKeyRef(e.target.value)} className="h-8 text-xs" />}
       <Button type="submit" size="sm" disabled={selectedPurposes.size === 0}>등록</Button>
     </form>
+  );
+}
+
+function PricingRow({ pricing, onSave }: { pricing?: ModelPricing; onSave: (inp: string, out: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [inp, setInp] = useState(pricing?.inputPricePer1m?.toString() ?? '');
+  const [out, setOut] = useState(pricing?.outputPricePer1m?.toString() ?? '');
+
+  useEffect(() => {
+    setInp(pricing?.inputPricePer1m?.toString() ?? '');
+    setOut(pricing?.outputPricePer1m?.toString() ?? '');
+  }, [pricing]);
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span>단가:</span>
+        {pricing ? (
+          <span>입력 ${pricing.inputPricePer1m}/1M · 출력 ${pricing.outputPricePer1m}/1M</span>
+        ) : (
+          <span>미설정</span>
+        )}
+        <Button variant="ghost" size="xs" className="h-5 text-[10px]" onClick={() => setEditing(true)}>
+          {pricing ? '수정' : '설정'}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[11px] text-muted-foreground shrink-0">$/1M:</span>
+      <Input placeholder="입력" value={inp} onChange={e => setInp(e.target.value)}
+        className="h-6 text-[11px] w-20" type="number" step="0.01" />
+      <Input placeholder="출력" value={out} onChange={e => setOut(e.target.value)}
+        className="h-6 text-[11px] w-20" type="number" step="0.01" />
+      <Button variant="outline" size="xs" className="h-5 text-[10px]"
+        onClick={async () => { await onSave(inp, out); setEditing(false); }}>저장</Button>
+      <Button variant="ghost" size="xs" className="h-5 text-[10px]"
+        onClick={() => setEditing(false)}>취소</Button>
+    </div>
   );
 }

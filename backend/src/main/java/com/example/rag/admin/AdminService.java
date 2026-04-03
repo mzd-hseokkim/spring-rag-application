@@ -10,11 +10,18 @@ import com.example.rag.conversation.ConversationRepository;
 import com.example.rag.conversation.ConversationService;
 import com.example.rag.document.Document;
 import com.example.rag.document.DocumentRepository;
+import com.example.rag.generation.GenerationJob;
+import com.example.rag.generation.GenerationJobRepository;
+import com.example.rag.generation.GenerationStatus;
+import com.example.rag.questionnaire.QuestionnaireJob;
+import com.example.rag.questionnaire.QuestionnaireJobRepository;
+import com.example.rag.questionnaire.QuestionnaireStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,17 +33,23 @@ public class AdminService {
     private final DocumentRepository documentRepository;
     private final ConversationRepository conversationRepository;
     private final ConversationService conversationService;
+    private final GenerationJobRepository generationJobRepository;
+    private final QuestionnaireJobRepository questionnaireJobRepository;
 
     public AdminService(AppUserRepository userRepository,
                         RefreshTokenRepository refreshTokenRepository,
                         DocumentRepository documentRepository,
                         ConversationRepository conversationRepository,
-                        ConversationService conversationService) {
+                        ConversationService conversationService,
+                        GenerationJobRepository generationJobRepository,
+                        QuestionnaireJobRepository questionnaireJobRepository) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.documentRepository = documentRepository;
         this.conversationRepository = conversationRepository;
         this.conversationService = conversationService;
+        this.generationJobRepository = generationJobRepository;
+        this.questionnaireJobRepository = questionnaireJobRepository;
     }
 
     // --- 사용자 관리 ---
@@ -153,4 +166,56 @@ public class AdminService {
 
     public record AdminConversationDetailDto(AdminConversationDto conversation,
                                               List<ConversationMessage> messages) {}
+
+    // --- 생성 작업 관리 ---
+
+    @Transactional(readOnly = true)
+    public Page<AdminGenerationJobDto> listGenerationJobs(String status, Pageable pageable) {
+        Page<GenerationJob> page = (status == null || status.isBlank())
+                ? generationJobRepository.findAllWithUser(pageable)
+                : generationJobRepository.findAllWithUserByStatus(GenerationStatus.valueOf(status), pageable);
+        return page.map(AdminGenerationJobDto::from);
+    }
+
+    @Transactional
+    public void deleteGenerationJob(UUID jobId) {
+        if (!generationJobRepository.existsById(jobId)) {
+            throw new IllegalArgumentException("생성 작업을 찾을 수 없습니다.");
+        }
+        generationJobRepository.deleteById(jobId);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<AdminQuestionnaireJobDto> listQuestionnaireJobs(String status, Pageable pageable) {
+        Page<QuestionnaireJob> page = (status == null || status.isBlank())
+                ? questionnaireJobRepository.findAllWithUser(pageable)
+                : questionnaireJobRepository.findAllWithUserByStatus(QuestionnaireStatus.valueOf(status), pageable);
+        return page.map(AdminQuestionnaireJobDto::from);
+    }
+
+    @Transactional
+    public void deleteQuestionnaireJob(UUID jobId) {
+        if (!questionnaireJobRepository.existsById(jobId)) {
+            throw new IllegalArgumentException("질문 생성 작업을 찾을 수 없습니다.");
+        }
+        questionnaireJobRepository.deleteById(jobId);
+    }
+
+    public record AdminGenerationJobDto(UUID id, String title, String status, String ownerEmail,
+                                         String errorMessage, LocalDateTime createdAt, LocalDateTime updatedAt) {
+        public static AdminGenerationJobDto from(GenerationJob j) {
+            return new AdminGenerationJobDto(j.getId(), j.getTitle(), j.getStatus().name(),
+                    j.getUser() != null ? j.getUser().getEmail() : null,
+                    j.getErrorMessage(), j.getCreatedAt(), j.getUpdatedAt());
+        }
+    }
+
+    public record AdminQuestionnaireJobDto(UUID id, String title, String status, String ownerEmail,
+                                            String errorMessage, LocalDateTime createdAt, LocalDateTime updatedAt) {
+        public static AdminQuestionnaireJobDto from(QuestionnaireJob j) {
+            return new AdminQuestionnaireJobDto(j.getId(), j.getTitle(), j.getStatus().name(),
+                    j.getUser() != null ? j.getUser().getEmail() : null,
+                    j.getErrorMessage(), j.getCreatedAt(), j.getUpdatedAt());
+        }
+    }
 }
