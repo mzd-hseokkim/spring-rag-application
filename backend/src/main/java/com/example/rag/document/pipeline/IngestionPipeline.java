@@ -66,10 +66,6 @@ public class IngestionPipeline {
     /**
      * 동기 처리 — 재인덱싱에서도 호출 가능
      */
-    public void doProcess(UUID documentId, String contentType, byte[] fileBytes, Runnable heartbeat) {
-        doProcess(documentId, contentType, fileBytes);
-    }
-
     public void doProcess(UUID documentId, String contentType, byte[] fileBytes) {
         try {
             String filename = tx.execute(status -> {

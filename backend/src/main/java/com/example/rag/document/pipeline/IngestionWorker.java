@@ -93,17 +93,7 @@ public class IngestionWorker {
                 throw new IllegalStateException("파일 저장 경로가 없습니다");
             }
 
-            // heartbeat 갱신 콜백
-            Runnable heartbeat = () -> {
-                try {
-                    tx.executeWithoutResult(status ->
-                            documentRepository.renewLease(documentId, LocalDateTime.now().plusSeconds(LEASE_SECONDS)));
-                } catch (Exception e) {
-                    log.warn("Heartbeat renewal failed for document {}: {}", documentId, e.getMessage());
-                }
-            };
-
-            ingestionPipeline.doProcess(documentId, contentType, fileBytes, heartbeat);
+            ingestionPipeline.doProcess(documentId, contentType, fileBytes);
 
         } catch (Exception e) {
             log.error("Worker [{}] failed to process document {}", workerId, documentId, e);

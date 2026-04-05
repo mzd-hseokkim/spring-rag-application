@@ -89,7 +89,6 @@ public class RequirementMapper {
         String content = client.prompt().user(prompt).call().content();
         log.info("Unmapped assignment LLM response length: {}", content != null ? content.length() : 0);
 
-        // LLM 응답 파싱: { "섹션key": ["요구사항id", ...] }
         Map<String, List<String>> assignment = parseMapping(content);
         if (assignment.isEmpty()) {
             log.warn("LLM returned empty assignment for {} unmapped requirements", unmapped.size());
@@ -106,28 +105,44 @@ public class RequirementMapper {
         java.util.Set<String> existingKeys = new java.util.HashSet<>();
         collectAllKeys(outline, existingKeys);
 
-        // 2단계: targetKey 기준으로 그룹핑 (같은 부모에 배정된 요구사항을 하나의 leaf로 합침)
+        // 2단계: targetKey 기준으로 그룹핑
+        Map<String, List<String>> groupedByTarget = groupByTargetKey(assignment, validReqIds, existingKeys);
+
+        // 3단계: 그룹별로 leaf 노드 생성 + outline 삽입 + mapping 구성
+        Map<String, List<String>> newMapping = createLeafNodes(groupedByTarget, outline, reqById, existingKeys);
+
+        int assignedCount = newMapping.values().stream().mapToInt(List::size).sum();
+        log.info("Unmapped processing complete: {}/{} requirements assigned to {} new leaves",
+                assignedCount, unmapped.size(), newMapping.size());
+        return new UnmappedSectionsResult(List.of(), newMapping);
+    }
+
+    private Map<String, List<String>> groupByTargetKey(Map<String, List<String>> assignment,
+                                                        java.util.Set<String> validReqIds,
+                                                        java.util.Set<String> existingKeys) {
         Map<String, List<String>> groupedByTarget = new java.util.LinkedHashMap<>();
         for (var entry : assignment.entrySet()) {
             String sectionKey = entry.getKey();
             List<String> reqIds = entry.getValue().stream()
                     .filter(validReqIds::contains)
                     .toList();
-            if (reqIds.isEmpty()) continue;
-
-            String targetKey = existingKeys.contains(sectionKey) ? sectionKey : findClosestParentKey(sectionKey, existingKeys);
-            if (targetKey == null) {
-                log.warn("Section key '{}' not found in outline, skipping {} requirements", sectionKey, reqIds.size());
-                continue;
+            if (!reqIds.isEmpty()) {
+                String targetKey = existingKeys.contains(sectionKey) ? sectionKey : findClosestParentKey(sectionKey, existingKeys);
+                if (targetKey != null) {
+                    groupedByTarget.computeIfAbsent(targetKey, k -> new ArrayList<>()).addAll(reqIds);
+                } else {
+                    log.warn("Section key '{}' not found in outline, skipping {} requirements", sectionKey, reqIds.size());
+                }
             }
-
-            groupedByTarget.computeIfAbsent(targetKey, k -> new ArrayList<>()).addAll(reqIds);
         }
+        return groupedByTarget;
+    }
 
-        // 3단계: 그룹별로 leaf 노드 생성 + outline 삽입 + mapping 구성
+    private Map<String, List<String>> createLeafNodes(Map<String, List<String>> groupedByTarget,
+                                                        List<OutlineNode> outline,
+                                                        Map<String, Requirement> reqById,
+                                                        java.util.Set<String> existingKeys) {
         Map<String, List<String>> newMapping = new HashMap<>();
-        int assignedCount = 0;
-
         for (var entry : groupedByTarget.entrySet()) {
             String targetKey = entry.getKey();
             List<String> reqIds = entry.getValue().stream().distinct().toList();
@@ -137,24 +152,20 @@ public class RequirementMapper {
                     .map(id -> reqById.containsKey(id) ? reqById.get(id).item() : id)
                     .collect(java.util.stream.Collectors.joining(", "));
 
-            String leafKey = generateNextChildKey(outline, targetKey, existingKeys);
+            String leafKey = generateNextChildKey(targetKey, existingKeys);
 
             OutlineNode newLeaf = new OutlineNode(leafKey, leafTitle, leafDesc, List.of());
             boolean inserted = insertLeafUnderParent(outline, targetKey, newLeaf);
             if (inserted) {
                 existingKeys.add(leafKey);
                 newMapping.put(leafKey, new ArrayList<>(reqIds));
-                assignedCount += reqIds.size();
                 log.info("Created leaf '{}' under '{}' with {} requirements: {}",
                         leafKey, targetKey, reqIds.size(), reqIds);
             } else {
                 log.warn("Failed to insert leaf under '{}' for requirements: {}", targetKey, reqIds);
             }
         }
-
-        log.info("Unmapped processing complete: {}/{} requirements assigned to {} new leaves",
-                assignedCount, unmapped.size(), newMapping.size());
-        return new UnmappedSectionsResult(List.of(), newMapping);
+        return newMapping;
     }
 
     /**
@@ -175,7 +186,7 @@ public class RequirementMapper {
     /**
      * targetKey 아래에 새 자식 key를 생성. 기존 자식 중 마지막 번호 + 1.
      */
-    private String generateNextChildKey(List<OutlineNode> outline, String targetKey,
+    private String generateNextChildKey(String targetKey,
                                          java.util.Set<String> existingKeys) {
         String prefix = targetKey + ".";
         int maxNum = 0;
@@ -186,7 +197,9 @@ public class RequirementMapper {
                 if (!suffix.contains(".")) {
                     try {
                         maxNum = Math.max(maxNum, Integer.parseInt(suffix));
-                    } catch (NumberFormatException ignored) {}
+                    } catch (NumberFormatException e) {
+                        // non-numeric suffix, skip
+                    }
                 }
             }
         }
@@ -241,41 +254,6 @@ public class RequirementMapper {
             }
         }
         return false;
-    }
-
-    private UnmappedSectionsResult parseUnmappedResult(String content) {
-        if (content == null || content.isBlank()) return new UnmappedSectionsResult(List.of(), Map.of());
-        try {
-            String json = content.trim();
-            if (json.startsWith("```")) {
-                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
-            }
-            int objStart = json.indexOf('{');
-            int objEnd = json.lastIndexOf('}');
-            if (objStart >= 0 && objEnd > objStart) {
-                json = json.substring(objStart, objEnd + 1);
-            }
-            var tree = objectMapper.readTree(json);
-
-            List<OutlineNode> sections = List.of();
-            if (tree.has("sections")) {
-                sections = objectMapper.readValue(tree.get("sections").toString(),
-                        new TypeReference<List<OutlineNode>>() {});
-            }
-
-            Map<String, List<String>> mapping = Map.of();
-            if (tree.has("mapping")) {
-                mapping = objectMapper.readValue(tree.get("mapping").toString(), MAPPING_TYPE);
-            }
-
-            log.info("Parsed unmapped sections result: {} new sections, {} mapping keys",
-                    sections.size(), mapping.size());
-            return new UnmappedSectionsResult(sections, mapping);
-        } catch (Exception e) {
-            log.warn("Failed to parse unmapped sections result: {} | preview: {}",
-                    e.getMessage(), content.substring(0, Math.min(200, content.length())));
-            return new UnmappedSectionsResult(List.of(), Map.of());
-        }
     }
 
     /**

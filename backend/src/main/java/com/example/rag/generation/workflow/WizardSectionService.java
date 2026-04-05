@@ -116,21 +116,7 @@ public class WizardSectionService {
             // 기존에 생성된 섹션이 있으면 복원 (이어서 생성)
             List<SectionContent> sections = new ArrayList<>();
             java.util.Set<String> existingKeys = new java.util.HashSet<>();
-            List<SectionContent> existing = dataParser.parseSections(job.getGeneratedSections());
-            if (!existing.isEmpty()) {
-                // forceRegenerate이면 선택된 섹션의 기존 결과를 제거
-                if (forceRegenerate && !filterKeys.isEmpty()) {
-                    java.util.Set<String> forceKeys = new java.util.HashSet<>(filterKeys);
-                    existing = existing.stream()
-                            .filter(s -> forceKeys.stream().noneMatch(fk -> s.key().equals(fk) || s.key().startsWith(fk + ".")))
-                            .toList();
-                    log.info("Generation job {} - force regenerating {} top-level keys, kept {} existing sections",
-                            jobId, filterKeys.size(), existing.size());
-                }
-                sections.addAll(existing);
-                existing.forEach(s -> existingKeys.add(s.key()));
-                log.info("Generation job {} - resuming with {} existing sections", jobId, existing.size());
-            }
+            restoreExistingSections(job, jobId, filterKeys, forceRegenerate, sections, existingKeys);
 
             // 웹 검색 결과 캐시 (같은 job 내 동일 쿼리 재사용)
             Map<String, List<String>> webSearchCache = new java.util.HashMap<>();
@@ -153,7 +139,9 @@ public class WizardSectionService {
                 // 중간 저장 — 프론트엔드가 progress 이벤트마다 조회하여 완료된 섹션을 표시
                 job.setGeneratedSections(dataParser.toJson(sections));
                 jobRepository.save(job);
-                log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title());
+                if (log.isInfoEnabled()) {
+                    log.info("Generation job {} - wizard section {}/{} complete: {}", jobId, i + 1, leafSections.size(), leaf.title());
+                }
             }
 
             job.setGeneratedSections(dataParser.toJson(sections));
@@ -177,6 +165,26 @@ public class WizardSectionService {
         } finally {
             TokenRecordingContext.clear();
         }
+    }
+
+    private void restoreExistingSections(GenerationJob job, UUID jobId, List<String> filterKeys,
+                                           boolean forceRegenerate,
+                                           List<SectionContent> sections,
+                                           java.util.Set<String> existingKeys) {
+        List<SectionContent> existing = dataParser.parseSections(job.getGeneratedSections());
+        if (existing.isEmpty()) return;
+
+        if (forceRegenerate && !filterKeys.isEmpty()) {
+            java.util.Set<String> forceKeys = new java.util.HashSet<>(filterKeys);
+            existing = existing.stream()
+                    .filter(s -> forceKeys.stream().noneMatch(fk -> s.key().equals(fk) || s.key().startsWith(fk + ".")))
+                    .toList();
+            log.info("Generation job {} - force regenerating {} top-level keys, kept {} existing sections",
+                    jobId, filterKeys.size(), existing.size());
+        }
+        sections.addAll(existing);
+        existing.forEach(s -> existingKeys.add(s.key()));
+        log.info("Generation job {} - resuming with {} existing sections", jobId, existing.size());
     }
 
     @Async("ingestionExecutor")

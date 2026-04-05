@@ -209,7 +209,7 @@ public class HtmlRenderer implements Renderer {
 
     private String convertStringNewlines(String s) {
         // 이모지 제거
-        String result = s.replaceAll("[\\x{1F000}-\\x{1FAFF}\\x{2300}-\\x{23FF}\\x{2600}-\\x{27BF}\\x{2B50}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{20E3}\\x{E0020}-\\x{E007F}\\x{2702}-\\x{27B0}\\x{1F900}-\\x{1F9FF}\\x{1FA00}-\\x{1FA6F}\\x{1FA70}-\\x{1FAFF}]+\\s?", "");
+        String result = s.replaceAll("[\\x{1F000}-\\x{1FAFF}\\x{2300}-\\x{23FF}\\x{2600}-\\x{27BF}\\x{2B50}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{20E3}\\x{E0020}-\\x{E007F}]+\\s?", "");
         // \\n 리터럴과 실제 줄바꿈을 <br>로 변환
         result = result.replace("\\n", "\n").replace("\n", "<br>");
         // 줄 시작 또는 , 뒤의 · / • 만 bullet로 인식하여 개행 (단어 중간의 가운뎃점은 무시)

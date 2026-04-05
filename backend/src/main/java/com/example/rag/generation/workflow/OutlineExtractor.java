@@ -29,6 +29,7 @@ public class OutlineExtractor {
     private static final int REQ_SUMMARY_CHAR_LIMIT = 12_000;
     private static final int MAX_PARALLEL = 3;
     private static final String TRUNCATION_SUFFIX = "\n... (이하 생략)";
+    private static final String CHUNK_SEPARATOR = "\n---\n";
     private static final int EXPAND_WINDOW = 3;
     private static final List<String> RECOMMENDED_OUTLINE_KEYWORDS = List.of(
             "권장 목차", "추천 목차", "제안 목차", "제안서 목차", "목차 구성", "목차(안)", "목차안",
@@ -56,55 +57,85 @@ public class OutlineExtractor {
      * 없으면 null 반환.
      */
     public String detectRecommendedOutline(List<UUID> customerDocIds) {
-        List<String> relevantChunks = new ArrayList<>();
-
-        for (UUID docId : customerDocIds) {
-            List<DocumentChunk> allChunks = chunkRepository.findByDocumentIdOrderByChunkIndex(docId);
-            List<Integer> matchIndices = new ArrayList<>();
-            for (DocumentChunk chunk : allChunks) {
-                if (RECOMMENDED_OUTLINE_KEYWORDS.stream().anyMatch(chunk.getContent()::contains)) {
-                    matchIndices.add(chunk.getChunkIndex());
-                }
-            }
-            if (matchIndices.isEmpty()) continue;
-
-            // 각 매칭 위치마다 독립적으로 확장
-            java.util.Set<Integer> collectedIndices = new java.util.HashSet<>();
-            for (int matchIdx : matchIndices) {
-                int fromIdx = Math.max(0, matchIdx - EXPAND_WINDOW);
-                int toIdx = matchIdx + EXPAND_WINDOW;
-                for (DocumentChunk chunk : allChunks) {
-                    int idx = chunk.getChunkIndex();
-                    if (idx >= fromIdx && idx <= toIdx && collectedIndices.add(idx)) {
-                        relevantChunks.add(chunk.getContent());
-                    }
-                }
-            }
-
-            // PDF 테이블은 문서 끝에 별도 청크로 저장됨 → 키워드 근처에 없을 수 있음
-            // 같은 문서의 마크다운 테이블 청크도 포함 (목차 표 데이터 누락 방지)
-            for (DocumentChunk chunk : allChunks) {
-                if (!collectedIndices.contains(chunk.getChunkIndex())
-                        && chunk.getContent().trim().startsWith("|")) {
-                    relevantChunks.add(chunk.getContent());
-                    collectedIndices.add(chunk.getChunkIndex());
-                }
-            }
-
-            log.info("Doc {} - {} keyword matches, {} chunks collected (incl. tables)",
-                    docId, matchIndices.size(), collectedIndices.size());
-        }
+        List<String> relevantChunks = collectRelevantChunks(customerDocIds);
 
         if (relevantChunks.isEmpty()) {
             log.info("No recommended outline keywords found in customer document");
             return null;
         }
 
-        String combinedContent = String.join("\n---\n", relevantChunks);
+        String combinedContent = String.join(CHUNK_SEPARATOR, relevantChunks);
         if (combinedContent.length() > 10_000) {
             combinedContent = combinedContent.substring(0, 10_000) + TRUNCATION_SUFFIX;
         }
 
+        String result = callDetectionLlm(combinedContent);
+
+        if (result == null || result.isBlank() || result.contains("없음")) {
+            log.info("No recommended outline found in document");
+            return null;
+        }
+
+        return validateOutlineJson(result);
+    }
+
+    private List<String> collectRelevantChunks(List<UUID> customerDocIds) {
+        List<String> relevantChunks = new ArrayList<>();
+        for (UUID docId : customerDocIds) {
+            collectChunksForDocument(docId, relevantChunks);
+        }
+        return relevantChunks;
+    }
+
+    private void collectChunksForDocument(UUID docId, List<String> relevantChunks) {
+        List<DocumentChunk> allChunks = chunkRepository.findByDocumentIdOrderByChunkIndex(docId);
+        List<Integer> matchIndices = findKeywordMatchIndices(allChunks);
+        if (matchIndices.isEmpty()) return;
+
+        java.util.Set<Integer> collectedIndices = new java.util.HashSet<>();
+        expandAroundMatches(allChunks, matchIndices, collectedIndices, relevantChunks);
+        collectTableChunks(allChunks, collectedIndices, relevantChunks);
+
+        log.info("Doc {} - {} keyword matches, {} chunks collected (incl. tables)",
+                docId, matchIndices.size(), collectedIndices.size());
+    }
+
+    private List<Integer> findKeywordMatchIndices(List<DocumentChunk> allChunks) {
+        List<Integer> matchIndices = new ArrayList<>();
+        for (DocumentChunk chunk : allChunks) {
+            if (RECOMMENDED_OUTLINE_KEYWORDS.stream().anyMatch(chunk.getContent()::contains)) {
+                matchIndices.add(chunk.getChunkIndex());
+            }
+        }
+        return matchIndices;
+    }
+
+    private void expandAroundMatches(List<DocumentChunk> allChunks, List<Integer> matchIndices,
+                                      java.util.Set<Integer> collectedIndices, List<String> relevantChunks) {
+        for (int matchIdx : matchIndices) {
+            int fromIdx = Math.max(0, matchIdx - EXPAND_WINDOW);
+            int toIdx = matchIdx + EXPAND_WINDOW;
+            for (DocumentChunk chunk : allChunks) {
+                int idx = chunk.getChunkIndex();
+                if (idx >= fromIdx && idx <= toIdx && collectedIndices.add(idx)) {
+                    relevantChunks.add(chunk.getContent());
+                }
+            }
+        }
+    }
+
+    private void collectTableChunks(List<DocumentChunk> allChunks,
+                                     java.util.Set<Integer> collectedIndices, List<String> relevantChunks) {
+        for (DocumentChunk chunk : allChunks) {
+            if (!collectedIndices.contains(chunk.getChunkIndex())
+                    && chunk.getContent().trim().startsWith("|")) {
+                relevantChunks.add(chunk.getContent());
+                collectedIndices.add(chunk.getChunkIndex());
+            }
+        }
+    }
+
+    private String callDetectionLlm(String combinedContent) {
         String detectionPrompt = """
                 다음은 고객 문서(RFP/제안요청서)의 일부입니다.
                 발주처가 제안사에게 따르도록 권장하는 "권장 목차" 또는 "제안서 목차 구성"이 있는지 확인하세요.
@@ -126,13 +157,10 @@ public class OutlineExtractor {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String result = client.prompt().user(detectionPrompt).call().content();
         log.info("detectRecommendedOutline raw response: {}", result);
+        return result;
+    }
 
-        if (result == null || result.isBlank() || result.contains("없음")) {
-            log.info("No recommended outline found in document");
-            return null;
-        }
-
-        // JSON 유효성 검증: LLM이 설명 텍스트만 반환한 경우 걸러냄
+    private String validateOutlineJson(String result) {
         String trimmed = result.trim();
         if (trimmed.startsWith("```")) {
             trimmed = trimmed.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
@@ -140,8 +168,10 @@ public class OutlineExtractor {
         int arrStart = trimmed.indexOf('[');
         int arrEnd = trimmed.lastIndexOf(']');
         if (arrStart < 0 || arrEnd <= arrStart) {
-            log.warn("Recommended outline response is not JSON array, discarding: {}",
-                    trimmed.substring(0, Math.min(trimmed.length(), 200)));
+            if (log.isWarnEnabled()) {
+                log.warn("Recommended outline response is not JSON array, discarding: {}",
+                        trimmed.substring(0, Math.min(trimmed.length(), 200)));
+            }
             return null;
         }
         try {
@@ -188,7 +218,7 @@ public class OutlineExtractor {
 
         // 요구사항이 프롬프트에 직접 들어갈 수 있는 크기면 단일 호출
         if (reqs.length() <= REQ_SUMMARY_CHAR_LIMIT) {
-            return extractDirect(customerChunks, userInput, reqs, null);
+            return extractDirect(customerChunks, userInput, reqs);
         }
 
         // Map-Reduce: 요구사항이 너무 많은 경우
@@ -317,11 +347,6 @@ public class OutlineExtractor {
      * 자식 key가 이미 부모 key를 접두어로 포함하면 그대로 사용 (중복 방지).
      */
     private void collectLeaves(List<OutlineNode> nodes, String parentPath,
-                                java.util.Map<String, OutlineNode> leafByPath) {
-        collectLeaves(nodes, parentPath, leafByPath, "", null);
-    }
-
-    private void collectLeaves(List<OutlineNode> nodes, String parentPath,
                                 java.util.Map<String, OutlineNode> leafByPath,
                                 String parentTitlePath,
                                 java.util.Map<String, String> titlePaths) {
@@ -404,7 +429,7 @@ public class OutlineExtractor {
                                              String rawSuggestions) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
 
-        String rawContent = String.join("\n---\n", customerChunks);
+        String rawContent = String.join(CHUNK_SEPARATOR, customerChunks);
         if (rawContent.length() > 20_000) {
             rawContent = rawContent.substring(0, 20_000) + TRUNCATION_SUFFIX;
         }
@@ -558,12 +583,11 @@ public class OutlineExtractor {
     /**
      * 요구사항이 적을 때: 단일 호출로 목차 추출
      */
-    private List<OutlineNode> extractDirect(List<String> customerChunks, String userInput, String reqs,
-                                              String ignored) {
+    private List<OutlineNode> extractDirect(List<String> customerChunks, String userInput, String reqs) {
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
         String prompt = promptLoader.load("generation-extract-outline.txt");
 
-        String rawContent = String.join("\n---\n", customerChunks);
+        String rawContent = String.join(CHUNK_SEPARATOR, customerChunks);
         int contentLimit = reqs.length() > 500 ? 25_000 : 50_000;
         if (rawContent.length() > contentLimit) {
             rawContent = rawContent.substring(0, contentLimit) + TRUNCATION_SUFFIX;

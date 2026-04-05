@@ -25,6 +25,7 @@ public class SimpleGenerationService {
     private static final Logger log = LoggerFactory.getLogger(SimpleGenerationService.class);
     private static final int MAX_RETRIES = 2;
     private static final String JOB_NOT_FOUND = "Job not found: ";
+    private static final String TRACE_PURPOSE = "GENERATION";
 
     private final ContentGeneratorService contentGenerator;
     private final DocumentRendererService rendererService;
@@ -59,7 +60,7 @@ public class SimpleGenerationService {
         GenerationTraceEntity currentTrace = null;
         try {
             // Phase 1: PLAN
-            currentTrace = traceService.start(job.getId(), "GENERATION", "OUTLINE");
+            currentTrace = traceService.start(job.getId(), TRACE_PURPOSE, "OUTLINE");
             eventEmitter.updateStatus(job, GenerationStatus.PLANNING);
             eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.PLANNING, "문서 구조를 설계하고 있습니다..."));
 
@@ -79,7 +80,7 @@ public class SimpleGenerationService {
             log.info("Generation job {} - outline created with {} sections", job.getId(), outline.sections().size());
 
             // Phase 2: GENERATE
-            currentTrace = traceService.start(job.getId(), "GENERATION", "SECTION_GENERATE");
+            currentTrace = traceService.start(job.getId(), TRACE_PURPOSE, "SECTION_GENERATE");
             eventEmitter.updateStatus(job, GenerationStatus.GENERATING);
             List<SectionContent> sections = new ArrayList<>();
 
@@ -108,7 +109,7 @@ public class SimpleGenerationService {
             // Phase 3: REVIEW — 향후 구현 (Plan 05)
 
             // Phase 4: RENDER
-            currentTrace = traceService.start(job.getId(), "GENERATION", "RENDER");
+            currentTrace = traceService.start(job.getId(), TRACE_PURPOSE, "RENDER");
             eventEmitter.updateStatus(job, GenerationStatus.RENDERING);
             eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.RENDERING, "최종 문서를 생성하고 있습니다..."));
 

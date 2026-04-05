@@ -58,42 +58,51 @@ public class MarkdownRenderer {
                                     Map<String, SectionContent> sectionMap,
                                     Map<String, List<String>> ancestorMap, int headingLevel) {
         for (OutlineNode node : nodes) {
-            boolean isLeaf = node.children().isEmpty();
             String heading = "#".repeat(Math.min(headingLevel + 1, 6));
 
-            if (isLeaf) {
-                SectionContent section = sectionMap.get(node.key());
-                sb.append("---\n\n");
-
-                // breadcrumb
-                List<String> ancestors = ancestorMap.getOrDefault(node.key(), List.of());
-                if (!ancestors.isEmpty()) {
-                    sb.append("> ").append(String.join(" > ", ancestors)).append("\n\n");
-                }
-
-                sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
-
-                if (section != null) {
-                    renderSectionContent(sb, section);
-                } else {
-                    sb.append("*（내용 미생성）*\n\n");
-                }
+            if (node.children().isEmpty()) {
+                renderLeafNode(sb, node, sectionMap, ancestorMap, heading);
             } else {
-                // 비-leaf: 챕터/섹션 제목 표시
-                sb.append("\n---\n\n");
-                sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
-
-                // 1depth 노드: 하위 항목 목록 표시
-                if (headingLevel == 1) {
-                    for (OutlineNode child : node.children()) {
-                        sb.append("- **").append(child.key()).append(".** ").append(child.title()).append("\n");
-                    }
-                    sb.append("\n");
-                }
-
-                renderOutlineTree(sb, node.children(), sectionMap, ancestorMap, headingLevel + 1);
+                renderBranchNode(sb, node, sectionMap, ancestorMap, heading, headingLevel);
             }
         }
+    }
+
+    private void renderLeafNode(StringBuilder sb, OutlineNode node,
+                                 Map<String, SectionContent> sectionMap,
+                                 Map<String, List<String>> ancestorMap, String heading) {
+        SectionContent section = sectionMap.get(node.key());
+        sb.append("---\n\n");
+
+        List<String> ancestors = ancestorMap.getOrDefault(node.key(), List.of());
+        if (!ancestors.isEmpty()) {
+            sb.append("> ").append(String.join(" > ", ancestors)).append("\n\n");
+        }
+
+        sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
+
+        if (section != null) {
+            renderSectionContent(sb, section);
+        } else {
+            sb.append("*（내용 미생성）*\n\n");
+        }
+    }
+
+    private void renderBranchNode(StringBuilder sb, OutlineNode node,
+                                   Map<String, SectionContent> sectionMap,
+                                   Map<String, List<String>> ancestorMap,
+                                   String heading, int headingLevel) {
+        sb.append("\n---\n\n");
+        sb.append(heading).append(" ").append(node.key()).append(". ").append(node.title()).append("\n\n");
+
+        if (headingLevel == 1) {
+            for (OutlineNode child : node.children()) {
+                sb.append("- **").append(child.key()).append(".** ").append(child.title()).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        renderOutlineTree(sb, node.children(), sectionMap, ancestorMap, headingLevel + 1);
     }
 
     private void renderSectionContent(StringBuilder sb, SectionContent section) {

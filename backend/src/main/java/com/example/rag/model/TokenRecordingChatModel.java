@@ -42,8 +42,8 @@ public class TokenRecordingChatModel implements ChatModel {
             var usage = response.getMetadata().getUsage();
             if (usage == null) return;
 
-            int inputTokens = (int) usage.getPromptTokens();
-            int outputTokens = (int) usage.getCompletionTokens();
+            int inputTokens = usage.getPromptTokens();
+            int outputTokens = usage.getCompletionTokens();
             if (inputTokens == 0 && outputTokens == 0) return;
 
             java.util.UUID userId = resolveCurrentUserId();

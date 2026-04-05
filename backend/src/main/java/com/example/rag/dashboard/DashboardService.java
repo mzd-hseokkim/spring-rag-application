@@ -27,6 +27,9 @@ public class DashboardService {
 
     private static final String KEY_INPUT_TOKENS = "inputTokens";
     private static final String KEY_OUTPUT_TOKENS = "outputTokens";
+    private static final String KEY_REQUEST_COUNT = "requestCount";
+    private static final String KEY_PURPOSE = "purpose";
+    private static final String KEY_ESTIMATED_COST = "estimatedCost";
 
     private static final BigDecimal ONE_MILLION = new BigDecimal("1000000");
 
@@ -141,7 +144,7 @@ public class DashboardService {
                         "name", row[1].toString(),
                         KEY_INPUT_TOKENS, ((Number) row[2]).longValue(),
                         KEY_OUTPUT_TOKENS, ((Number) row[3]).longValue(),
-                        "requestCount", ((Number) row[4]).longValue()))
+                        KEY_REQUEST_COUNT, ((Number) row[4]).longValue()))
                 .toList();
     }
 
@@ -154,10 +157,10 @@ public class DashboardService {
         return rows.stream()
                 .map(row -> Map.<String, Object>of(
                         "modelName", row[0].toString(),
-                        "purpose", row[1].toString(),
+                        KEY_PURPOSE, row[1].toString(),
                         KEY_INPUT_TOKENS, ((Number) row[2]).longValue(),
                         KEY_OUTPUT_TOKENS, ((Number) row[3]).longValue(),
-                        "requestCount", ((Number) row[4]).longValue()))
+                        KEY_REQUEST_COUNT, ((Number) row[4]).longValue()))
                 .toList();
     }
 
@@ -166,10 +169,10 @@ public class DashboardService {
         LocalDateTime after = LocalDate.now().minusDays(days).atStartOfDay();
         return tokenUsageRepository.sumByPurpose(after).stream()
                 .map(row -> Map.<String, Object>of(
-                        "purpose", row[0].toString(),
+                        KEY_PURPOSE, row[0].toString(),
                         KEY_INPUT_TOKENS, ((Number) row[1]).longValue(),
                         KEY_OUTPUT_TOKENS, ((Number) row[2]).longValue(),
-                        "requestCount", ((Number) row[3]).longValue()))
+                        KEY_REQUEST_COUNT, ((Number) row[3]).longValue()))
                 .toList();
     }
 
@@ -226,11 +229,11 @@ public class DashboardService {
 
                     Map<String, Object> result = new HashMap<>();
                     result.put("modelName", modelName);
-                    result.put("purpose", purpose);
+                    result.put(KEY_PURPOSE, purpose);
                     result.put(KEY_INPUT_TOKENS, inputTokens);
                     result.put(KEY_OUTPUT_TOKENS, outputTokens);
-                    result.put("requestCount", requestCount);
-                    result.put("estimatedCost", cost.setScale(4, RoundingMode.HALF_UP));
+                    result.put(KEY_REQUEST_COUNT, requestCount);
+                    result.put(KEY_ESTIMATED_COST, cost.setScale(4, RoundingMode.HALF_UP));
                     result.put("currency", currency);
                     return result;
                 })
@@ -258,7 +261,7 @@ public class DashboardService {
                 m.put("name", name);
                 m.put(KEY_INPUT_TOKENS, 0L);
                 m.put(KEY_OUTPUT_TOKENS, 0L);
-                m.put("estimatedCost", BigDecimal.ZERO);
+                m.put(KEY_ESTIMATED_COST, BigDecimal.ZERO);
                 m.put("currency", "USD");
                 return m;
             });
@@ -266,22 +269,23 @@ public class DashboardService {
             entry.put(KEY_INPUT_TOKENS, (long) entry.get(KEY_INPUT_TOKENS) + inputTokens);
             entry.put(KEY_OUTPUT_TOKENS, (long) entry.get(KEY_OUTPUT_TOKENS) + outputTokens);
 
-            ModelPricingEntity pricing = pricingMap.get(modelName);
-            if (pricing != null) {
+            pricingMap.computeIfPresent(modelName, (k, pricing) -> {
                 BigDecimal inputCost = pricing.getInputPricePer1m()
                         .multiply(BigDecimal.valueOf(inputTokens))
                         .divide(ONE_MILLION, 6, RoundingMode.HALF_UP);
                 BigDecimal outputCost = pricing.getOutputPricePer1m()
                         .multiply(BigDecimal.valueOf(outputTokens))
                         .divide(ONE_MILLION, 6, RoundingMode.HALF_UP);
-                entry.put("estimatedCost", ((BigDecimal) entry.get("estimatedCost")).add(inputCost).add(outputCost));
-            }
+                entry.put(KEY_ESTIMATED_COST, ((BigDecimal) entry.get(KEY_ESTIMATED_COST)).add(inputCost).add(outputCost));
+                return pricing;
+            });
         }
 
-        return userCostMap.values().stream()
-                .sorted((a, b) -> ((BigDecimal) b.get("estimatedCost")).compareTo((BigDecimal) a.get("estimatedCost")))
-                .peek(m -> m.put("estimatedCost", ((BigDecimal) m.get("estimatedCost")).setScale(4, RoundingMode.HALF_UP)))
+        List<Map<String, Object>> sorted = userCostMap.values().stream()
+                .sorted((a, b) -> ((BigDecimal) b.get(KEY_ESTIMATED_COST)).compareTo((BigDecimal) a.get(KEY_ESTIMATED_COST)))
                 .toList();
+        sorted.forEach(m -> m.put(KEY_ESTIMATED_COST, ((BigDecimal) m.get(KEY_ESTIMATED_COST)).setScale(4, RoundingMode.HALF_UP)));
+        return sorted;
     }
 
     @Transactional(readOnly = true)
