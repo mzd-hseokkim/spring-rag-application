@@ -33,10 +33,12 @@ public class WizardAnalysisService {
     private static final String STEP_STATUS_FAILED = "FAILED";
     private static final String FIELD_REQUIREMENTS = "requirements";
     private static final String FIELD_MAPPING = "mapping";
+    private static final String FIELD_RFP_MANDATES = "rfpMandates";
     private static final String MSG_CACHED_REQUIREMENTS = "개를 사용합니다.";
 
     private final OutlineExtractor outlineExtractor;
     private final RequirementExtractor requirementExtractor;
+    private final RfpMandateExtractor rfpMandateExtractor;
     private final RequirementCacheService requirementCache;
     private final RequirementMapper requirementMapper;
     private final DocumentChunkRepository chunkRepository;
@@ -47,6 +49,7 @@ public class WizardAnalysisService {
 
     public WizardAnalysisService(OutlineExtractor outlineExtractor,
                                  RequirementExtractor requirementExtractor,
+                                 RfpMandateExtractor rfpMandateExtractor,
                                  RequirementCacheService requirementCache,
                                  RequirementMapper requirementMapper,
                                  DocumentChunkRepository chunkRepository,
@@ -56,6 +59,7 @@ public class WizardAnalysisService {
                                  WorkflowEventEmitter eventEmitter) {
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
+        this.rfpMandateExtractor = rfpMandateExtractor;
         this.requirementCache = requirementCache;
         this.requirementMapper = requirementMapper;
         this.chunkRepository = chunkRepository;
@@ -93,8 +97,24 @@ public class WizardAnalysisService {
                 log.info("Generation job {} - no recommended outline found, using standard structure", jobId);
             }
 
+            // Phase 1.6: RFP 의무 작성 항목 + 평가 배점표 추출 (재사용 또는 신규)
+            RfpMandates rfpMandates = dataParser.parseRfpMandatesFromMapping(job.getRequirementMapping());
+            boolean mandatesFresh = false;
+            if (rfpMandates.isEmpty()) {
+                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                        "RFP 의무 작성 항목과 배점표를 확인하고 있습니다..."));
+                rfpMandates = rfpMandateExtractor.extract(customerChunks, job.getUserInput());
+                mandatesFresh = true;
+                log.info("Generation job {} - RFP mandates extracted: {} items, {} weights",
+                        jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
+            } else {
+                log.info("Generation job {} - reusing RFP mandates: {} items, {} weights",
+                        jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
+            }
+
             // Phase 2: 요구사항 — 이미 추출된 것이 있으면 재사용, 없으면 추출
             List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
+            boolean requirementsFresh = false;
             if (!requirements.isEmpty()) {
                 log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
                 eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
@@ -116,12 +136,26 @@ public class WizardAnalysisService {
                             partialReqs -> eventEmitter.emitRequirements(job, partialReqs));
                     requirementCache.put(customerDocIds, requirements);
                 }
+                requirementsFresh = true;
+            }
 
-                // 요구사항을 job에 미리 저장 (Step 3에서 재활용)
-                var reqData = new java.util.LinkedHashMap<String, Object>();
-                reqData.put(FIELD_REQUIREMENTS, requirements);
-                reqData.put(FIELD_MAPPING, java.util.Map.of());
-                job.setRequirementMapping(dataParser.toJson(reqData));
+            // Phase 2.5: 가중치 fallback — 정량 배점이 전혀 없으면 importance에서 유도
+            boolean fallbackApplied = false;
+            boolean allWeightsNull = requirements.stream().allMatch(r -> r.weight() == null);
+            if (allWeightsNull && !rfpMandates.hasEvaluationWeights()) {
+                requirements = requirements.stream()
+                        .map(r -> new Requirement(r.id(), r.category(), r.item(), r.description(),
+                                r.importance(), importanceToWeight(r.importance())))
+                        .toList();
+                fallbackApplied = true;
+                log.info("Generation job {} - applied importance→weight fallback (상=5, 중=3, 하/기타=1)", jobId);
+                eventEmitter.emitWarning(job,
+                        "이 RFP에서 정량 배점을 찾지 못했습니다. 중요도(상/중/하)를 기준으로 균등 분배합니다.");
+            }
+
+            // 새로 추출/변경된 정보가 있으면 통합 저장
+            if (requirementsFresh || mandatesFresh || fallbackApplied) {
+                persistRequirementMapping(job, requirements, rfpMandates);
             }
 
             log.info("Generation job {} - {} requirements for outline extraction", jobId, requirements.size());
@@ -139,7 +173,23 @@ public class WizardAnalysisService {
             List<OutlineNode> outline = outlineExtractor.extract(customerChunks, job.getUserInput(),
                     requirementsSummary, requirements,
                     msg -> eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
-                    recommendedOutline);
+                    recommendedOutline, rfpMandates);
+
+            // Phase 3.5: 의무 작성 항목 커버리지 검증
+            if (rfpMandates.hasMandatoryItems()) {
+                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                        "의무 작성 항목 커버리지를 확인하고 있습니다..."));
+                List<MandatoryItem> uncovered = outlineExtractor.verifyMandatoryItemCoverage(outline, rfpMandates.mandatoryItems());
+                if (!uncovered.isEmpty()) {
+                    String list = uncovered.stream()
+                            .map(i -> "[" + i.id() + "] " + i.title())
+                            .collect(java.util.stream.Collectors.joining(", "));
+                    log.warn("Generation job {} - {} mandatory items uncovered: {}", jobId, uncovered.size(), list);
+                    eventEmitter.emitWarning(job,
+                            "다음 의무 작성 항목이 목차에 포함되지 않았습니다 (" + uncovered.size() + "개): " + list);
+                }
+            }
+
             job.setOutline(outlineExtractor.toJson(outline));
             job.setCurrentStep(2);
             job.setStepStatus(STEP_STATUS_COMPLETE);
@@ -292,6 +342,32 @@ public class WizardAnalysisService {
 
         log.info("Job {} - added {} new mapping keys for {} unmapped requirements",
                 jobId, result.newMapping().size(), unmapped.size());
+    }
+
+    /**
+     * 요구사항/매핑/RfpMandates를 통합 JSON으로 직렬화하여 job에 저장한다.
+     * 기존 매핑은 최대한 보존한다 (Step 3 결과를 덮어쓰지 않기 위함).
+     */
+    private void persistRequirementMapping(GenerationJob job, List<Requirement> requirements, RfpMandates rfpMandates) {
+        Map<String, List<String>> existingMapping = dataParser.parseMappingFromJson(job.getRequirementMapping());
+        var reqData = new java.util.LinkedHashMap<String, Object>();
+        reqData.put(FIELD_REQUIREMENTS, requirements);
+        reqData.put(FIELD_MAPPING, existingMapping);
+        reqData.put(FIELD_RFP_MANDATES, rfpMandates);
+        job.setRequirementMapping(dataParser.toJson(reqData));
+    }
+
+    /**
+     * importance 라벨을 정량 weight로 변환 (정량 배점 미확보 시 fallback).
+     * 상=5, 중=3, 하/기타=1
+     */
+    private static Integer importanceToWeight(String importance) {
+        if (importance == null) return 1;
+        return switch (importance) {
+            case "상" -> 5;
+            case "중" -> 3;
+            default -> 1;
+        };
     }
 
     private List<String> loadCustomerChunks(List<UUID> customerDocIds) {

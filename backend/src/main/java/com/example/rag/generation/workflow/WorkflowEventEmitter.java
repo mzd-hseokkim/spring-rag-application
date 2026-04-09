@@ -34,6 +34,15 @@ public class WorkflowEventEmitter {
         jobRepository.save(job);
     }
 
+    /**
+     * 사용자에게 경고 메시지를 전달한다 (예: 정량 배점 미확보 → 균등 분배 적용).
+     * 현재 SSE 이벤트 모델을 그대로 사용하기 위해 status 이벤트로 발행하되,
+     * 메시지에 ⚠️ 프리픽스를 붙여 프론트엔드/사용자가 경고로 식별할 수 있게 한다.
+     */
+    public void emitWarning(GenerationJob job, String message) {
+        emitEvent(job, GenerationProgressEvent.status(job.getStatus(), "⚠️ " + message));
+    }
+
     public void emitRequirements(GenerationJob job, List<Requirement> requirements) {
         SseEmitter emitter = emitterManager.get(job.getId());
         if (emitter == null) return;
