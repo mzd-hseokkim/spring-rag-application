@@ -12,10 +12,11 @@ import java.util.List;
 public record ExpansionPlan(
         Integer weight,                      // 이 섹션에 할당된 RFP 배점 (null = 미매칭)
         List<String> topics,                 // 이 섹션이 다뤄야 할 주제 목록 (다른 섹션과 중복 없이 배분됨)
-        List<String> mandatoryItemIds        // 이 섹션에 배치된 의무 작성 항목 ID
+        List<String> mandatoryItemIds,       // 이 섹션에 배치된 의무 작성 항목 ID
+        String role                          // CategoryMappingDeriver가 부여한 역할 (WHY, WHAT, HOW-tech 등)
 ) {
     public static ExpansionPlan empty() {
-        return new ExpansionPlan(null, List.of(), List.of());
+        return new ExpansionPlan(null, List.of(), List.of(), null);
     }
 
     public boolean hasWeight() {

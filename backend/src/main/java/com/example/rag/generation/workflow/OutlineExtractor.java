@@ -576,7 +576,8 @@ public class OutlineExtractor {
             plans.put(leafKey, new ExpansionPlan(
                     assignment.weight(),
                     topics,
-                    assignment.mandatoryItemIds()));
+                    assignment.mandatoryItemIds(),
+                    assignment.role()));
         }
 
         if (log.isInfoEnabled()) {
@@ -799,7 +800,7 @@ public class OutlineExtractor {
                     newTopics.add(filtered);
                 }
             }
-            result.put(leafKey, new ExpansionPlan(plan.weight(), newTopics, plan.mandatoryItemIds()));
+            result.put(leafKey, new ExpansionPlan(plan.weight(), newTopics, plan.mandatoryItemIds(), plan.role()));
         }
 
         return result;
@@ -895,7 +896,8 @@ public class OutlineExtractor {
                     normalized.put(leaf.key(), new ExpansionPlan(
                             plan.weight(),
                             plan.topics() != null ? plan.topics() : List.of(),
-                            plan.mandatoryItemIds() != null ? plan.mandatoryItemIds() : List.of()));
+                            plan.mandatoryItemIds() != null ? plan.mandatoryItemIds() : List.of(),
+                            plan.role()));
                 }
             }
 
@@ -1188,8 +1190,9 @@ public class OutlineExtractor {
 
                 %s
                 """.formatted(topicLedger);
-        String perspective = getPerspective(keyPrefix);
-        boolean isFactualOrAdmin = perspective.startsWith("사실 기반") || perspective.startsWith("지원/행정");
+        String planRole = (plan != null && plan.role() != null) ? plan.role() : "";
+        String perspective = getPerspective(planRole);
+        boolean isFactualOrAdmin = "WHY".equals(planRole) || "OPS".equals(planRole) || "MISC".equals(planRole);
         String weightContext = buildWeightContext(plan, rfpMandates);
         String topicsContext = buildTopicsContext(plan);
         String mandatoryContext = buildMandatoryContext(plan, rfpMandates);
@@ -1369,50 +1372,34 @@ public class OutlineExtractor {
     private static final int MAX_CHILDREN_PER_SECTION = 8;
 
     /**
-     * 섹션의 top-level key(I~VIII)에 따라 서술 관점(perspective)을 결정한다.
-     * III(수행계획)은 업무/사용자 관점, IV(수행기반)은 기술/구현 관점으로 분리하여
-     * 같은 요구사항이 양쪽에 배치되어도 관점이 다르게 서술되도록 한다.
+     * CategoryMappingDeriver가 부여한 role을 기반으로 서술 관점(perspective)을 결정한다.
+     * key(I, II, III...) 하드코딩 없이 role만으로 판단하므로 RFP-agnostic.
      */
-    private String getPerspective(String keyPrefix) {
-        String topLevel = keyPrefix.contains(".") ? keyPrefix.substring(0, keyPrefix.indexOf('.')) : keyPrefix;
-        String subKey = keyPrefix.contains(".") ? keyPrefix.substring(keyPrefix.indexOf('.') + 1) : "";
-        return switch (topLevel.toUpperCase()) {
-            case "I" -> "사실 기반 서술: 회사 현황, 조직, 실적을 객관적 사실 위주로 작성";
-            case "II" -> (subKey.startsWith("1") || subKey.startsWith("2"))
-                    ? "전략적 방향(WHY/WHAT): '왜' 이 전략이 필요한지, '무엇을' 달성할지 서술. 구현 상세나 프로세스 설명 금지. II.4(방법론)와 중복 금지"
-                    : "실행 방법론(HOW): 전체 사업 수행 방법론을 균형있게 서술 — 개발 프로세스, 품질 관리, 데이터 관리, 보안 관리 접근을 " +
-                      "방법론 수준에서 골고루 다루세요. 한 가지 영역(예: 보안)에 치우치면 안 됨. " +
-                      "기술 스택 디테일(암호 알고리즘, 프레임워크명 등)은 IV에서 다루므로 여기서는 방법론적 접근만. " +
-                      "II.2(전략)에서 이미 다룬 전략 방향을 반복하지 말 것";
-            case "III" -> "업무/사용자 관점(WHAT): 사용자가 체감하는 기능·서비스·결과물을 서술. " +
+    private String getPerspective(String role) {
+        if (role == null || role.isBlank()) return "";
+        return switch (role) {
+            case "WHY" -> "사실/배경 기반 서술: 회사 현황, 사업 배경, 추진 필요성 등을 객관적으로 작성. " +
+                    "기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다";
+            case "WHAT" -> "업무/사용자 관점: 사용자가 체감하는 기능·서비스·결과물을 서술. " +
                     "기술 구현 용어(에이전틱 AI, 오케스트레이션, RAG, 벡터DB 등) 사용 금지. " +
-                    "대신 '법령 검색', '요약 제공', '맞춤 추천', '검색 정확도 관리' 같은 업무 언어 사용. " +
-                    "IV(수행기반)에서 다룰 기술 상세와 중복되지 않도록 주의";
-            case "IV" -> "기술/구현 관점(HOW): 기술 아키텍처, 솔루션, 구현 방법을 서술. " +
-                    "III(수행계획)에서 이미 다룬 업무 기능 설명을 반복하지 말 것. " +
-                    "이 섹션은 '그 기능을 어떤 기술로 구현하는가'에 집중";
-            case "V" -> {
-                String vBase = "관리 프로세스 관점. 간결하게 서술. ";
-                yield switch (subKey) {
-                    case "1" -> vBase + "일정 수립·추적·마일스톤 관리에 집중. 품질/보안/위험은 V.2/V.3/V.4에서 다룸";
-                    case "2" -> vBase + "품질보증·테스트·표준 준수에 집중. 일정/보안/위험은 V.1/V.3/V.4에서 다룸";
-                    case "3" -> vBase + "기밀보안 운영 관리에 집중. 기술 보안 구현은 IV.3에서 다룸";
-                    case "4" -> vBase + "위험 식별·평가·대응·모니터링에만 집중. 일정관리(V.1), 품질(V.2), 보안(V.3)은 해당 섹션에서 다루므로 여기에 넣지 마세요. " +
-                            "보고 체계, 산출물 관리, IRM, 테스트 수행은 이 섹션의 범위가 아닙니다";
-                    default -> vBase;
-                };
-            }
-            case "VI" -> {
-                String viBase = "지원/행정 관점. 다른 챕터의 내용을 반복하지 말 것. ";
-                yield switch (subKey) {
-                    case "1" -> viBase + "인수인계 절차·기술자산 이관에만 집중. 교육은 VI.2, 기술지원은 VI.3, 하자보수는 VI.4에서 다루므로 여기서 반복 금지";
-                    case "2" -> viBase + "교육훈련 계획·실행에만 집중. 인수인계(VI.1), 기술지원(VI.3)과 중복 금지";
-                    case "3" -> viBase + "기술지원 범위·체계에만 집중. 교육(VI.2)·인수인계(VI.1)·하자보수(VI.4)·보안(V.3) 내용은 해당 섹션에서 다루므로 반복 금지";
-                    case "4" -> viBase + "하자보수 범위·절차·SLA에만 집중. 인수인계(VI.1)·교육(VI.2)·기술지원(VI.3) 내용은 해당 섹션에서 다루므로 반복 금지";
-                    default -> viBase;
-                };
-            }
-            case "VII", "VIII" -> "지원/행정 관점: 하도급, 기타사항 등 표준 절차";
+                    "업무 언어(검색, 조회, 추천, 관리 등)만 사용. " +
+                    "기술 구현 상세는 HOW-tech 역할 섹션에서 다루므로 여기서 중복하지 마세요";
+            case "HOW-tech" -> "기술/구현 관점: 기술 아키텍처, 솔루션, 구현 방법을 서술. " +
+                    "WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것. " +
+                    "'그 기능을 어떤 기술로 구현하는가'에 집중";
+            case "HOW-method" -> "실행 방법론: 사업 전체의 수행 방법론을 균형있게 서술 — " +
+                    "개발 프로세스, 품질 관리, 데이터 관리, 보안 관리 접근을 방법론 수준에서 골고루. " +
+                    "한 가지 영역(예: 보안)에 치우치면 안 됨. " +
+                    "기술 스택 디테일은 HOW-tech 역할 섹션에서 다루므로 여기서는 방법론적 접근만";
+            case "CTRL-tech" -> "기술 통제 관점: 보안·테스트·제약사항의 기술적 구현 방법을 서술. " +
+                    "관리 프로세스(조직, 교육, 점검 계획)는 CTRL-mgmt 역할 섹션에서 다룸";
+            case "CTRL-mgmt" -> "관리 통제 관점: 보안·품질의 운영 관리 프로세스(조직, 교육, 점검, 모니터링)를 서술. " +
+                    "기술 구현 상세는 CTRL-tech 역할 섹션에서 다룸";
+            case "MGMT" -> "관리 프로세스: 이 섹션의 title 범위에 해당하는 관리 활동만 서술. " +
+                    "같은 챕터의 형제 섹션과 역할이 겹치지 않도록 주의. 간결하게";
+            case "OPS" -> "운영/지원: 이 섹션의 title 범위에 해당하는 운영·지원 활동만 서술. " +
+                    "같은 챕터의 형제 섹션에서 다루는 내용(인수인계, 교육, 하자보수 등)을 반복하지 말 것";
+            case "MISC" -> "기타/행정: 표준 절차, 법적 준수, 부가 사항";
             default -> "";
         };
     }
@@ -1494,13 +1481,13 @@ public class OutlineExtractor {
      */
     private List<String> consolidateTopics(ChatClient client, OutlineNode topSection,
                                             String keyPrefix, List<String> topics,
-                                            String siblingContext) {
+                                            String siblingContext, String role) {
         StringBuilder topicList = new StringBuilder();
         for (int i = 0; i < topics.size(); i++) {
             topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
         }
 
-        String perspective = getPerspective(keyPrefix);
+        String perspective = getPerspective(role);
 
         String prompt = """
                 다음 %d개의 하위 항목을 **최대 %d개의 핵심 주제로 통합**하세요.
@@ -1584,7 +1571,7 @@ public class OutlineExtractor {
 
         // children이 MAX를 초과하면 유사 주제를 통합하여 수를 줄임
         if (topics.size() > MAX_CHILDREN_PER_SECTION) {
-            topics = consolidateTopics(client, topSection, keyPrefix, topics, siblingContext);
+            topics = consolidateTopics(client, topSection, keyPrefix, topics, siblingContext, plan.role());
         }
 
         // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
@@ -1634,7 +1621,7 @@ public class OutlineExtractor {
         }
 
         String parentLine = titlePath.isEmpty() ? topSection.title() : titlePath + " > " + topSection.title();
-        String perspective = getPerspective(keyPrefix);
+        String perspective = getPerspective(plan.role());
         String grandPart = needsGrandchildren
                 ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
