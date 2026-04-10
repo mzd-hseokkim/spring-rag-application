@@ -486,14 +486,104 @@ iteration의 패턴은 다음과 같았다:
 
 ---
 
-## 🚧 다음 작업 시 시작점 (2026-04-10 야간 commit 후)
+## 🚧 다음 작업 시 시작점 (2026-04-10 오전 commit 8edf44b 후)
 
-**최종 상태**: Phase A + Phase B (4단계 아키텍처) 구현 완료. 컴파일 OK. **검증 미완**.
+**최종 상태**: Phase A + Phase B + Phase B-fix 구현 완료. 컴파일 OK. **새 RFP로 검증 대기**.
 
-### 야간 작업 commit 순서
-1. `150acb0` — Step 1/2/3 + RFP-agnostic cleanup (알려진 빈 leaf 버그 포함)
+### Commit 순서
+1. `150acb0` — Step 1/2/3 + RFP-agnostic cleanup (알려진 빈 leaf 버그)
 2. `97f3605` — Phase A: empty leaf safeguard + OutlineValidator
-3. (이 commit) — Phase B: RuleBasedPlanner + CategoryMappingDeriver 통합
+3. `41493e5` — Phase B: rule-based planner replacing LLM-based planExpansion
+4. `8edf44b` — **Phase B-fix**: 1:N category distribution + SSE heartbeat (최신)
+
+### 8edf44b의 변경 (검증 필요)
+
+**P0 #1 — 카테고리 폭주 해결**:
+- `CategoryMappingDeriver`: 카테고리 항목 수를 LLM에 전달
+- `generation-derive-category-mapping.txt` v2: 1:N 분배 전략 표 (1~7→1:1, 8~15→1:2, 16~30→1:2~3, 30+→1:3+)
+- `RuleBasedPlanner.pickLeafForRequirement`: round-robin 분배 + soft cap 10 + spillover
+
+**P0 #2 — 카테고리 한/영 통합**:
+- `questionnaire-extract-requirements.txt`: 영어 병기 예시 제거, 한국어 단일 강제
+
+**P1 — SSE heartbeat**:
+- `GenerationEmitterManager`: ScheduledExecutor로 15초마다 SSE comment ping
+- 18분 작업 중 SSE 끊김 문제 해결
+
+### 직전 검증 결과 요약 (job c842f839 — Sonnet 4.6, 8edf44b 적용 전)
+
+| 지표 | 결과 | 비고 |
+|---|---|---|
+| 요구사항 추출 | 120개 | Haiku 시 445개에서 정상화 |
+| 평가항목 라벨 | 0개 | Fix J 효과 |
+| II.2 추진전략 | 6개 | Haiku 40개 → 정상 |
+| VI.1 인수인계 | 5개 | Haiku 42개 → 정상 |
+| **III.1 기능 요구사항** | **36개** | "기능" 카테고리 폭주 — 8edf44b가 해결 목표 |
+| **IV.3 보안 요구사항** | **22개** | "보안" 카테고리 폭주 — 8edf44b가 해결 목표 |
+| **V.1 일정관리** | **30개** | "관리" 카테고리 폭주 — 8edf44b가 해결 목표 |
+| IV.1 적용기술 | 1개 | underflow — 8edf44b가 해결 목표 (round-robin) |
+| Empty leaf safeguard | no empty leaves found | Phase A 작동 |
+| Validation | PASSED with 1 warning (REQ-12 in 3 leaves) | Phase A 작동 |
+| SSE | 18분 동안 끊겨서 프론트 에러 표시 | 8edf44b의 P1이 해결 |
+
+### 새 작업 첫 단계 — 검증
+
+1. **서버 재기동** (필수 — heartbeat 스케줄러 시작 + recordingClientCache 초기화)
+2. **새 job 생성** (기존 job 재사용 X — c842f839에는 stale 한/영 혼합 카테고리가 저장되어 있음)
+3. outline까지 생성
+4. job_id 받아 DB dump 분석 — 다음 명령:
+   ```bash
+   docker exec rag-postgres psql -U raguser -d ragdb -t -A -c \
+     "SELECT outline FROM generation_job WHERE id = '<NEW_JOB_ID>'" \
+     > C:/WORK/workspace/spring-rag-application/outline-v7.json
+   docker exec rag-postgres psql -U raguser -d ragdb -t -A -c \
+     "SELECT requirement_mapping FROM generation_job WHERE id = '<NEW_JOB_ID>'" \
+     > C:/WORK/workspace/spring-rag-application/mapping-v7.json
+   ```
+
+### 검증 체크리스트 (8edf44b 효과)
+
+- [ ] **P0 #2**: requirements 카테고리에 영어 병기 없음 (`기능 (Functional)` 등 사라짐)
+- [ ] **P0 #1 — round-robin**: 큰 카테고리(30개+)가 여러 leaf에 분산. 한 leaf가 30개+ children 갖지 않음
+- [ ] **P0 #1 — soft cap**: 어떤 leaf도 children > 10 이상 폭주 안 함 (이상적 5~10)
+- [ ] **P0 #1 — IV.1 underflow 해결**: 적용기술이 1개가 아닌 합리적 수
+- [ ] **P1 — SSE**: 18분 작업 동안 프론트가 끊김 없이 진행률 표시 유지
+- [ ] (회귀 검증) Empty leaf safeguard 여전히 동작
+- [ ] (회귀 검증) Outline validation PASSED
+- [ ] (회귀 검증) Phase A의 II 챕터 균형 (II.1~II.4 모두 5~6개) 유지
+
+### 관찰할 로그 라인
+
+```
+1. (NEW) SSE heartbeat scheduler started (interval=15s)
+2. CategoryMapping: N categories mapped, M leaves with roles
+   - 큰 카테고리가 ["X", "Y"] 형태로 1:N 매핑되었는지
+3. RuleBasedPlanner: N requirements assigned to M leaves (P unassigned)
+4. (변경) plan[X]: weight=..., topics=[...], mandIds=[...] — 각 leaf의 요구사항 수가 균등한지
+5. Empty leaf safeguard: no empty leaves found
+6. Outline validation: PASSED with N warnings
+```
+
+### 만약 폭주가 여전하면
+
+가능성:
+- **CategoryMappingDeriver가 1:1 매핑 고집**: prompt를 더 강하게 (예: "30개+ 카테고리는 반드시 2개 이상 leaf"). 또는 LLM 응답 후 코드 검증/수정 로직 추가.
+- **soft cap이 너무 관대**: LEAF_REQ_SOFT_CAP=10인데 8 또는 6으로 줄임.
+- **카테고리 사이 분산이 어색**: prompt에 더 구체적인 분산 매트릭스.
+- **모델 한계**: Sonnet도 prompt를 못 따르면 더 강한 모델 또는 self-refinement validator 도입.
+
+### 만약 새 회귀가 보이면
+
+immediate rollback:
+```bash
+git revert 8edf44b   # P0 #1 + #2 + P1 되돌리기 (Phase A/B는 유지)
+```
+
+또는 task 문서의 옵션 A/B/C 참고.
+
+---
+
+### 알려진 잔존 문제 (이전 v6 평가에서)
 
 ### 내일 첫 작업 — 검증 (★ 가장 중요 ★)
 
