@@ -383,7 +383,8 @@ public class OutlineExtractor {
         rescueEmptyLeaves(client, sortedLeaves, leafTitlePaths, expandedChildren, reqSuggestions, progressCallback);
 
         // 트리를 재구성: leaf 노드에 생성된 children 붙이기
-        return rebuildWithChildren(topLevel, "", expandedChildren);
+        List<OutlineNode> result = rebuildWithChildren(topLevel, "", expandedChildren);
+        return filterMetaNodes(result);
     }
 
     /**
@@ -1379,7 +1380,10 @@ public class OutlineExtractor {
             case "I" -> "사실 기반 서술: 회사 현황, 조직, 실적을 객관적 사실 위주로 작성";
             case "II" -> (subKey.startsWith("1") || subKey.startsWith("2"))
                     ? "전략적 방향(WHY/WHAT): '왜' 이 전략이 필요한지, '무엇을' 달성할지 서술. 구현 상세나 프로세스 설명 금지. II.4(방법론)와 중복 금지"
-                    : "실행 방법론(HOW): '어떻게' 실행할지 프로세스와 체계를 서술. II.2(전략)에서 이미 다룬 전략 방향을 반복하지 말 것";
+                    : "실행 방법론(HOW): 전체 사업 수행 방법론을 균형있게 서술 — 개발 프로세스, 품질 관리, 데이터 관리, 보안 관리 접근을 " +
+                      "방법론 수준에서 골고루 다루세요. 한 가지 영역(예: 보안)에 치우치면 안 됨. " +
+                      "기술 스택 디테일(암호 알고리즘, 프레임워크명 등)은 IV에서 다루므로 여기서는 방법론적 접근만. " +
+                      "II.2(전략)에서 이미 다룬 전략 방향을 반복하지 말 것";
             case "III" -> "업무/사용자 관점(WHAT): 사용자가 체감하는 기능·서비스·결과물을 서술. " +
                     "기술 구현 용어(에이전틱 AI, 오케스트레이션, RAG, 벡터DB 등) 사용 금지. " +
                     "대신 '법령 검색', '요약 제공', '맞춤 추천', '검색 정확도 관리' 같은 업무 언어 사용. " +
@@ -1387,10 +1391,69 @@ public class OutlineExtractor {
             case "IV" -> "기술/구현 관점(HOW): 기술 아키텍처, 솔루션, 구현 방법을 서술. " +
                     "III(수행계획)에서 이미 다룬 업무 기능 설명을 반복하지 말 것. " +
                     "이 섹션은 '그 기능을 어떤 기술로 구현하는가'에 집중";
-            case "V" -> "관리 프로세스 관점: 표준 프로젝트 관리 방법론(일정/품질/보안/위험) 적용. 간결하게 서술";
-            case "VI", "VII", "VIII" -> "지원/행정 관점: 인수인계, 교육, 하도급 등 표준 절차. 다른 챕터의 내용을 반복하지 말 것";
+            case "V" -> {
+                String vBase = "관리 프로세스 관점. 간결하게 서술. ";
+                yield switch (subKey) {
+                    case "1" -> vBase + "일정 수립·추적·마일스톤 관리에 집중. 품질/보안/위험은 V.2/V.3/V.4에서 다룸";
+                    case "2" -> vBase + "품질보증·테스트·표준 준수에 집중. 일정/보안/위험은 V.1/V.3/V.4에서 다룸";
+                    case "3" -> vBase + "기밀보안 운영 관리에 집중. 기술 보안 구현은 IV.3에서 다룸";
+                    case "4" -> vBase + "위험 식별·평가·대응·모니터링에만 집중. 일정관리(V.1), 품질(V.2), 보안(V.3)은 해당 섹션에서 다루므로 여기에 넣지 마세요. " +
+                            "보고 체계, 산출물 관리, IRM, 테스트 수행은 이 섹션의 범위가 아닙니다";
+                    default -> vBase;
+                };
+            }
+            case "VI" -> {
+                String viBase = "지원/행정 관점. 다른 챕터의 내용을 반복하지 말 것. ";
+                yield switch (subKey) {
+                    case "1" -> viBase + "인수인계 절차·기술자산 이관에만 집중. 교육은 VI.2, 기술지원은 VI.3, 하자보수는 VI.4에서 다루므로 여기서 반복 금지";
+                    case "2" -> viBase + "교육훈련 계획·실행에만 집중. 인수인계(VI.1), 기술지원(VI.3)과 중복 금지";
+                    case "3" -> viBase + "기술지원 범위·체계에만 집중. 교육(VI.2)·인수인계(VI.1)·하자보수(VI.4)·보안(V.3) 내용은 해당 섹션에서 다루므로 반복 금지";
+                    case "4" -> viBase + "하자보수 범위·절차·SLA에만 집중. 인수인계(VI.1)·교육(VI.2)·기술지원(VI.3) 내용은 해당 섹션에서 다루므로 반복 금지";
+                    default -> viBase;
+                };
+            }
+            case "VII", "VIII" -> "지원/행정 관점: 하도급, 기타사항 등 표준 절차";
             default -> "";
         };
+    }
+
+    /**
+     * LLM이 메타/자기참조 텍스트를 title이나 description에 넣는 경우를 후처리로 제거한다.
+     * 예: "통합 주제 제목 재정리", "형제 섹션 이관 항목", "다루지 않는다" 등.
+     */
+    private List<OutlineNode> filterMetaNodes(List<OutlineNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) return nodes;
+        List<OutlineNode> filtered = new ArrayList<>();
+        for (OutlineNode n : nodes) {
+            if (isMetaNode(n)) {
+                log.info("Filtered meta node: key={}, title={}", n.key(), n.title());
+                continue;
+            }
+            // description에서도 메타 텍스트 제거
+            String cleanDesc = cleanMetaDescription(n.description());
+            List<OutlineNode> cleanChildren = filterMetaNodes(n.children());
+            filtered.add(new OutlineNode(n.key(), n.title(), cleanDesc, cleanChildren));
+        }
+        return filtered;
+    }
+
+    private boolean isMetaNode(OutlineNode node) {
+        String t = node.title();
+        if (t == null || t.length() < 4) return true;
+        String lower = t.toLowerCase();
+        return lower.contains("재정리") || lower.contains("이관 항목") || lower.contains("다루지 않는다")
+                || lower.contains("중복 제거 후") || lower.contains("최종)") || lower.contains("형제 섹션")
+                || lower.contains("검토 필요") || t.startsWith("---") || t.startsWith("※") || t.startsWith(">");
+    }
+
+    private String cleanMetaDescription(String desc) {
+        if (desc == null || desc.isBlank()) return desc;
+        // "형제 섹션 이관 항목 —" 패턴으로 시작하는 description 제거
+        if (desc.contains("이관하여 관리하며") || desc.contains("본 섹션에서는 다루지 않는다")
+                || desc.contains("해당 섹션으로 이관")) {
+            return "";
+        }
+        return desc;
     }
 
     /**
@@ -1484,6 +1547,7 @@ public class OutlineExtractor {
                 .filter(s -> !s.startsWith("#") && !s.startsWith("```"))
                 .filter(s -> !s.equals("---") && !s.startsWith("※") && !s.startsWith("*※"))
                 .filter(s -> !s.startsWith("아래는") && !s.startsWith("위 ") && !s.startsWith("**"))
+                .filter(s -> !s.contains("재정리") && !s.contains("이관 항목") && !s.contains("최종)"))
                 .filter(s -> !s.startsWith(">") && !s.contains("⚠") && !s.contains("검토 필요"))
                 .map(s -> s.replaceFirst("^\\d+\\.\\s*", ""))
                 .map(s -> s.replaceFirst("^[-*]\\s+", ""))
