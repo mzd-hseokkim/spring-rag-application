@@ -356,6 +356,9 @@ public class OutlineExtractor {
         java.util.Map<String, ExpansionPlan> plans = createPlansViaRuleBasedPlanner(
                 sortedLeaves, leafTitlePaths, requirements, rfpMandates, progressCallback);
 
+        // 같은 parent의 형제 섹션 목록을 미리 계산 (중복 방지용)
+        java.util.Map<String, String> siblingContextMap = buildSiblingContext(sortedLeaves);
+
         java.util.Map<String, List<OutlineNode>> expandedChildren = new java.util.LinkedHashMap<>();
         StringBuilder ledger = new StringBuilder();
         int total = sortedLeaves.size();
@@ -366,11 +369,12 @@ public class OutlineExtractor {
             OutlineNode leaf = entry.getValue();
             String titlePath = leafTitlePaths.getOrDefault(fullPath, "");
             ExpansionPlan plan = plans.getOrDefault(fullPath, ExpansionPlan.empty());
+            String siblingContext = siblingContextMap.getOrDefault(fullPath, "");
             if (progressCallback != null) {
                 progressCallback.onProgress("권장 목차 항목 " + processed + "/" + total + " 구성: " + leaf.title());
             }
             OutlineNode expanded = expandSection(client, leaf, reqSuggestions, fullPath, titlePath,
-                    ledger.toString(), plan, rfpMandates);
+                    ledger.toString(), plan, rfpMandates, siblingContext);
             expandedChildren.put(fullPath, expanded.children());
             appendToLedger(ledger, fullPath, leaf.title(), expanded.children());
         }
@@ -1154,16 +1158,16 @@ public class OutlineExtractor {
      */
     private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions,
                                        String topicLedger, ExpansionPlan plan, RfpMandates rfpMandates) {
-        return expandSection(client, topSection, suggestions, topSection.key(), "", topicLedger, plan, rfpMandates);
+        return expandSection(client, topSection, suggestions, topSection.key(), "", topicLedger, plan, rfpMandates, "");
     }
 
     private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions,
                                        String keyPrefix, String titlePath, String topicLedger,
-                                       ExpansionPlan plan, RfpMandates rfpMandates) {
+                                       ExpansionPlan plan, RfpMandates rfpMandates, String siblingContext) {
         // Strict 모드: plan에 topics가 있으면 코드 차원으로 children titles를 강제
         // LLM은 description + (필요 시) grandchildren만 채움
         if (plan != null && plan.hasTopics()) {
-            return expandWithStrictPlan(client, topSection, keyPrefix, titlePath, plan, rfpMandates);
+            return expandWithStrictPlan(client, topSection, keyPrefix, titlePath, plan, rfpMandates, siblingContext);
         }
         String parentContext = titlePath.isEmpty() ? "" : """
 
@@ -1401,11 +1405,44 @@ public class OutlineExtractor {
     }
 
     /**
+     * 같은 parent를 가진 형제 섹션 목록을 미리 계산한다.
+     * V.4 확장 시 "V.1 일정관리, V.2 품질관리, V.3 기밀보안 관리"를 알려줘서
+     * 이들과 중복되는 내용을 V.4에 넣지 않도록 한다.
+     */
+    private java.util.Map<String, String> buildSiblingContext(
+            List<java.util.Map.Entry<String, OutlineNode>> sortedLeaves) {
+        // parent 별로 children 그룹핑
+        java.util.Map<String, List<java.util.Map.Entry<String, OutlineNode>>> byParent = new java.util.LinkedHashMap<>();
+        for (var entry : sortedLeaves) {
+            String path = entry.getKey();
+            String parent = path.contains(".") ? path.substring(0, path.lastIndexOf('.')) : "";
+            byParent.computeIfAbsent(parent, k -> new ArrayList<>()).add(entry);
+        }
+
+        // 각 leaf에 대해 형제 목록 생성
+        java.util.Map<String, String> result = new java.util.HashMap<>();
+        for (var group : byParent.values()) {
+            if (group.size() <= 1) continue;
+            for (var entry : group) {
+                StringBuilder sb = new StringBuilder();
+                for (var sibling : group) {
+                    if (!sibling.getKey().equals(entry.getKey())) {
+                        sb.append("- ").append(sibling.getKey()).append(" ").append(sibling.getValue().title()).append("\n");
+                    }
+                }
+                result.put(entry.getKey(), sb.toString());
+            }
+        }
+        return result;
+    }
+
+    /**
      * topics가 MAX_CHILDREN_PER_SECTION을 초과할 때, LLM에게 유사 주제를 통합하여
      * 수 자체를 줄이도록 요청한다. 통합 후 기존 expandWithStrictPlan 로직 사용.
      */
     private List<String> consolidateTopics(ChatClient client, OutlineNode topSection,
-                                            String keyPrefix, List<String> topics) {
+                                            String keyPrefix, List<String> topics,
+                                            String siblingContext) {
         StringBuilder topicList = new StringBuilder();
         for (int i = 0; i < topics.size(); i++) {
             topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
@@ -1420,17 +1457,18 @@ public class OutlineExtractor {
 
                 ## 이 섹션의 서술 관점 (반드시 준수)
                 %s
-
+                %s
                 ## 통합할 항목들
                 %s
                 ## 규칙
                 1. 의미적으로 유사하거나 밀접한 항목들을 하나의 주제로 통합
                 2. 통합된 주제의 제목은 **위 서술 관점에 맞는 언어**로 작성. 다른 챕터에서 다룰 관점의 용어는 사용 금지
-                3. 각 항목에 포함된 요구사항 ID (SFR-xxx, NFR-xxx 등)는 통합 주제 뒤에 괄호로 모두 나열
-                4. 어떤 항목도 누락하지 마세요 — 모든 원본 항목이 하나의 통합 주제에 포함되어야 합니다
-                5. 최소 3개, 최대 %d개 주제로 통합
-                6. "~전략 및 목표" 같은 기계적 패턴 제목 금지. 구체적이고 차별화된 제목 사용
-                7. **주제 제목만 출력하세요. 설명, 메모, 경고(⚠️), 구분선(---), 검토 의견 등은 절대 포함하지 마세요**
+                3. **형제 섹션에서 다룰 내용은 이 섹션의 통합 주제에 포함하지 마세요** (위 형제 섹션 목록 참고)
+                4. 각 항목에 포함된 요구사항 ID (SFR-xxx, NFR-xxx 등)는 통합 주제 뒤에 괄호로 모두 나열
+                5. 어떤 항목도 누락하지 마세요 — 모든 원본 항목이 하나의 통합 주제에 포함되어야 합니다
+                6. 최소 3개, 최대 %d개 주제로 통합
+                7. "~전략 및 목표" 같은 기계적 패턴 제목 금지. 구체적이고 차별화된 제목 사용
+                8. **주제 제목만 출력하세요. 설명, 메모, 경고(⚠️), 구분선(---), 검토 의견 등은 절대 포함하지 마세요**
 
                 ## 출력 형식 (한 줄에 하나씩, 번호 없이 제목만)
                 통합 주제 제목 1 (REQ-IDs)
@@ -1438,7 +1476,9 @@ public class OutlineExtractor {
                 ...
                 """.formatted(topics.size(), MAX_CHILDREN_PER_SECTION,
                 keyPrefix, topSection.title(),
-                perspective, topicList, MAX_CHILDREN_PER_SECTION);
+                perspective,
+                siblingContext.isBlank() ? "" : "\n## 형제 섹션 (이들이 다루는 주제와 중복 금지)\n" + siblingContext,
+                topicList, MAX_CHILDREN_PER_SECTION);
 
         String content;
         try {
@@ -1485,12 +1525,13 @@ public class OutlineExtractor {
 
     private OutlineNode expandWithStrictPlan(ChatClient client, OutlineNode topSection,
                                               String keyPrefix, String titlePath,
-                                              ExpansionPlan plan, RfpMandates rfpMandates) {
+                                              ExpansionPlan plan, RfpMandates rfpMandates,
+                                              String siblingContext) {
         List<String> topics = plan.topics();
 
         // children이 MAX를 초과하면 유사 주제를 통합하여 수를 줄임
         if (topics.size() > MAX_CHILDREN_PER_SECTION) {
-            topics = consolidateTopics(client, topSection, keyPrefix, topics);
+            topics = consolidateTopics(client, topSection, keyPrefix, topics, siblingContext);
         }
 
         // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
@@ -1556,7 +1597,7 @@ public class OutlineExtractor {
 
                 ## 이 섹션의 서술 관점 (description 작성 시 반드시 준수)
                 %s
-
+                %s
                 ## 확정된 children (key/title 변경 금지!)
                 %s
                 %s
@@ -1574,6 +1615,7 @@ public class OutlineExtractor {
                   {"key":"<위 그대로>","title":"<위 그대로>","description":"...","children":[]}
                 ]
                 """.formatted(keyPrefix, topSection.title(), parentLine, perspective,
+                siblingContext.isBlank() ? "" : "\n## 형제 섹션 (이 섹션과 중복되는 내용을 넣지 마세요)\n" + siblingContext,
                 skeletonText, mandatoryText, grandPart);
 
         String content;
