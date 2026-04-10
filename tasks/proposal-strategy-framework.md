@@ -145,20 +145,121 @@ public record ProposalStrategy(
 `generation_job` 테이블에 `proposal_strategy JSONB` 컬럼 추가 (Flyway migration).
 또는 `requirement_mapping` JSONB 안에 `"strategy"` 키로 함께 저장.
 
-### 목차 생성 연동
+### Downstream 데이터 흐름
 
-`extractWithFixedTopLevel()`의 expansion 프롬프트에 전략 context 추가:
 ```
-## 이 제안서의 핵심 전략 (모든 섹션에서 일관되게 반영)
-- KP-1: 법령 환각 제로 — RAG 출처 검증, 전문가 검수
-- KP-2: ...
+Phase 2.7  ProposalStrategyDeriver
+    ↓ ProposalStrategy (KP + AI) — generation_job.proposal_strategy에 persist
+    │
+    ├─→ [연동 1] Phase 3 목차 생성
+    │     ├─ consolidateTopics(): 전략 context로 topic 통합 우선순위 결정
+    │     └─ expandWithStrictPlan(): description에 관련 KP 참조 반영
+    │
+    ├─→ [연동 2] II.2 추진전략 섹션 자동 구성
+    │     └─ Key Points가 곧 II.2의 골격 (children = KP 제목)
+    │
+    ├─→ [연동 3] Step 3 요구사항 매핑
+    │     └─ KP→AI→요구사항 ID 매핑으로 섹션-전략 추적성 확보
+    │
+    └─→ [연동 4] Step 4 본문 생성 (후속 작업)
+          └─ 각 섹션 프롬프트에 관련 KP/AI 주입
 ```
 
-### 본문 생성 연동 (후속 작업)
+### 연동 1: 목차 생성 (Phase 3)
 
-본문 생성 시 각 섹션의 프롬프트에:
-- 해당 섹션과 관련된 Key Point / Action Items 전달
-- "이 섹션에서 강조해야 할 전략적 메시지" 가이드
+**consolidateTopics()에 전략 context 전달**
+
+현재:
+```
+"다음 42개 항목을 최대 8개 핵심 주제로 통합하세요."
+```
+
+개선:
+```
+"다음 42개 항목을 최대 8개 핵심 주제로 통합하세요.
+
+## 이 제안서의 핵심 전략 (통합 시 우선순위 참고)
+- KP-1: 법령 환각 제로 (관련: SFR-001, SFR-003, SFR-005)
+- KP-2: 검색 응답 2초 이내 (관련: NFR-001, NFR-003)
+→ 관련 Key Point의 Action Items가 통합 주제에 반영되어야 합니다."
+```
+
+**구현 위치**: `OutlineExtractor.consolidateTopics()` 메서드에 `ProposalStrategy` 파라미터 추가.
+전략이 없으면(empty) 기존 프롬프트 그대로 사용.
+
+**expandWithStrictPlan()에 전략 context 전달**
+
+각 leaf의 description 생성 시:
+```
+"이 섹션은 핵심 전략 'KP-1: 법령 환각 제로'의 Action Item
+'RAG 기반 출처 검증 파이프라인 구축'과 직접 관련됩니다.
+description에 이 전략적 메시지를 반영하세요."
+```
+
+**구현**: `expandWithStrictPlan()` 프롬프트에 `## 관련 핵심 전략` 섹션 조건부 추가.
+KP의 `relatedRequirementIds`와 해당 leaf의 topics(요구사항 ID 포함)를 매칭하여 관련 KP만 주입.
+
+### 연동 2: II.2 추진전략 섹션 자동 구성
+
+**II.2의 children을 Key Points로 직접 매핑**
+
+현재 II.2는 RuleBasedPlanner가 일반적으로 children을 생성.
+전략이 있으면 II.2의 children을 Key Points로 **오버라이드**:
+
+```
+II.2.1. 법령 환각 제로 전략 (KP-1)
+II.2.2. 검색 응답 2초 이내 달성 전략 (KP-2)
+II.2.3. ...
+```
+
+**구현**: `extractWithFixedTopLevel()`에서 II.2(또는 추진전략에 해당하는 leaf)를 감지하고,
+해당 leaf의 expansion을 전략 기반으로 전환. `expandSection()` 호출 전에 plan을 KP 기반으로 교체.
+
+### 연동 3: 요구사항 매핑 (Step 3)
+
+**전략 기반 매핑 추적성**
+
+`generation_job.requirement_mapping`에 `"strategy"` 키 추가:
+```json
+{
+  "requirements": [...],
+  "mapping": {...},
+  "rfpMandates": {...},
+  "strategy": {
+    "keyPoints": [
+      {
+        "id": "KP-1",
+        "title": "법령 환각 제로",
+        "actionItems": [
+          {"id": "AI-1-1", "relatedRequirementIds": ["SFR-001", "SFR-003"]},
+          ...
+        ],
+        "outlineSections": ["III.1.1", "IV.1.1"]  ← 매핑 후 채워짐
+      }
+    ]
+  }
+}
+```
+
+`RequirementMapper.map()` 완료 후, 각 KP의 `relatedRequirementIds`가 어느 섹션에 매핑됐는지
+역추적하여 `outlineSections` 필드를 채움. 이 정보는 본문 생성 시 "이 섹션이 어떤 전략과 관련되는지" 참조에 사용.
+
+### 연동 4: 본문 생성 (Step 4, 후속 작업)
+
+각 섹션의 본문 프롬프트에 관련 전략 정보 주입:
+
+```
+## 이 섹션과 관련된 핵심 전략
+- KP-1: 법령 환각 제로
+  - Action Item: RAG 기반 출처 검증 파이프라인 구축
+  - 이 섹션에서 강조할 점: 검색 결과의 법적 정확성을 어떻게 보장하는지 구체적으로 서술
+
+→ 이 전략적 메시지를 자연스럽게 반영하여 작성하세요.
+  직접 "KP-1" 같은 코드를 본문에 노출하지 마세요.
+```
+
+**구현**: 본문 생성 프롬프트에 `{strategyContext}` 변수 추가.
+섹션 key → KP 매핑 (연동 3의 `outlineSections`)을 통해 관련 KP만 필터링.
 
 ## 프롬프트 설계 방향
 
@@ -186,13 +287,19 @@ public record ProposalStrategy(
 - evaluationWeights가 비어있으면 요구사항 importance(상/중/하) 기반 fallback
 - 전략 도출 실패 시 목차 생성은 기존 로직으로 정상 진행 (graceful degradation)
 
-## 예상 작업량
+## 구현 순서 및 예상 작업량
 
-| 단계 | 작업 | 예상 |
-|---|---|---|
-| 1 | ProposalStrategy 데이터 모델 + DB migration | 소 |
-| 2 | ProposalStrategyDeriver + 프롬프트 작성 | 중 |
-| 3 | WizardAnalysisService Phase 2.7 삽입 | 소 |
-| 4 | 목차 생성 프롬프트에 전략 context 연동 | 소 |
-| 5 | 프론트엔드 전략 표시 UI (선택) | 중 |
-| 6 | 본문 생성 연동 (후속) | 별도 작업 |
+| 순서 | 작업 | 영향 범위 | 예상 |
+|---|---|---|---|
+| 1 | `ProposalStrategy` record + DB migration (컬럼 추가) | 데이터 모델 | 소 |
+| 2 | `ProposalStrategyDeriver` + 프롬프트 작성 | 새 클래스 | 중 |
+| 3 | `WizardAnalysisService` Phase 2.7 삽입 + persist | 파이프라인 | 소 |
+| 4 | **[연동 1]** `consolidateTopics()` + `expandWithStrictPlan()`에 전략 context 주입 | OutlineExtractor | 중 |
+| 5 | **[연동 2]** II.2 추진전략 children을 KP로 오버라이드 | OutlineExtractor | 소 |
+| 6 | **[연동 3]** `RequirementMapper`에서 KP→섹션 역매핑 | RequirementMapper | 소 |
+| 7 | 프론트엔드 전략 표시 UI (선택) | frontend | 중 |
+| 8 | **[연동 4]** 본문 생성 프롬프트에 전략 context 주입 | 별도 작업 | 중 |
+
+### 최소 MVP (1~4)
+
+1~4까지 구현하면 전략이 목차에 반영됨. 5~6은 추가 개선, 7~8은 후속 작업.
