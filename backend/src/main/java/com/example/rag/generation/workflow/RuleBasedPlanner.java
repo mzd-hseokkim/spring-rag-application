@@ -34,6 +34,9 @@ public class RuleBasedPlanner {
 
     private static final Logger log = LoggerFactory.getLogger(RuleBasedPlanner.class);
 
+    /** 한 leaf가 받을 수 있는 권장 최대 요구사항 수. 초과 시 다음 candidate으로 spillover. */
+    private static final int LEAF_REQ_SOFT_CAP = 10;
+
     /**
      * 모든 leaf에 대해 SectionAssignment를 생성.
      *
@@ -62,13 +65,16 @@ public class RuleBasedPlanner {
             leafToMandIds.put(leafKey, new ArrayList<>());
         }
 
-        // 2. 요구사항 배분 (category → leaf 매핑 사용)
+        // round-robin 카운터 (카테고리별)와 leaf 부하 카운터 — 1:N 분산에 사용
+        Map<String, Integer> categoryRoundRobin = new HashMap<>();
+
+        // 2. 요구사항 배분 (category → leaf 매핑 사용 + round-robin + soft cap)
         int assigned = 0;
         int unassigned = 0;
         List<String> unassignedIds = new ArrayList<>();
         for (Requirement req : reqs) {
             if (req.id() == null || req.id().isBlank()) continue;
-            String targetLeaf = pickLeafForRequirement(req, cm, leafKeys);
+            String targetLeaf = pickLeafForRequirement(req, cm, leafKeys, leafToReqIds, categoryRoundRobin);
             if (targetLeaf != null) {
                 leafToReqIds.get(targetLeaf).add(req.id());
                 assigned++;
@@ -123,35 +129,51 @@ public class RuleBasedPlanner {
     }
 
     /**
-     * 한 요구사항이 어느 leaf로 가야 하는지 결정.
+     * 한 요구사항이 어느 leaf로 가야 하는지 결정 (round-robin + soft cap 적용).
      *
-     * 우선순위:
-     * 1. CategoryMapping에서 req.category → leaf key 직접 조회
-     *    - 매핑 결과가 여러 leaf면 첫 번째 선택 (1:1 결정론 유지)
-     * 2. 매핑 없으면 heuristic: leafKey/title keyword match
-     * 3. 모두 실패하면 null
+     * 알고리즘:
+     * 1. CategoryMapping에서 req.category → 후보 leaf 목록 조회
+     * 2. **round-robin으로 다음 candidate** 선택 (1:N 분산)
+     * 3. 선택된 leaf의 현재 부하가 LEAF_REQ_SOFT_CAP을 넘으면 **다음 candidate으로 spillover** 시도
+     * 4. 모든 candidate이 cap을 넘었으면 어쩔 수 없이 round-robin 순서대로 배정
+     * 5. 매핑이 아예 없으면 null
+     *
+     * 효과: 같은 카테고리 내 요구사항이 자연스럽게 여러 leaf에 분산되고,
+     * 한 leaf 폭주(40개+)가 발생할 확률이 낮아짐.
      */
-    private String pickLeafForRequirement(Requirement req, CategoryMapping mapping, List<String> leafKeys) {
-        // 1. Category 기반 매핑
+    private String pickLeafForRequirement(Requirement req, CategoryMapping mapping, List<String> leafKeys,
+                                             Map<String, List<String>> leafToReqIds,
+                                             Map<String, Integer> categoryRoundRobin) {
         String category = req.category();
-        if (category != null && !category.isBlank()) {
-            List<String> candidates = mapping.leavesForCategory(category);
-            if (!candidates.isEmpty()) {
-                // 첫 번째 candidate 선택 (여러 개면 round-robin 확장 가능)
-                String first = candidates.get(0);
-                if (leafKeys.contains(first)) {
-                    return first;
-                }
-                // candidates 중 실제 leafKeys에 있는 첫 번째
-                for (String c : candidates) {
-                    if (leafKeys.contains(c)) {
-                        return c;
-                    }
-                }
+        if (category == null || category.isBlank()) return null;
+
+        List<String> rawCandidates = mapping.leavesForCategory(category);
+        if (rawCandidates.isEmpty()) return null;
+
+        // 실제 leafKeys에 존재하는 candidate만 필터링 (LLM이 잘못된 leaf key를 줄 수 있음)
+        List<String> candidates = new ArrayList<>();
+        for (String c : rawCandidates) {
+            if (leafKeys.contains(c)) candidates.add(c);
+        }
+        if (candidates.isEmpty()) return null;
+
+        int counter = categoryRoundRobin.getOrDefault(category, 0);
+        int n = candidates.size();
+
+        // round-robin + soft cap: spillover까지 n번 시도
+        for (int attempt = 0; attempt < n; attempt++) {
+            String leaf = candidates.get((counter + attempt) % n);
+            int currentLoad = leafToReqIds.get(leaf).size();
+            if (currentLoad < LEAF_REQ_SOFT_CAP) {
+                categoryRoundRobin.put(category, counter + attempt + 1);
+                return leaf;
             }
         }
-        // 2. Heuristic fallback은 별도 로직 없이 null 반환 (validator가 unassigned를 catch)
-        return null;
+
+        // 모든 candidate이 soft cap 초과 — round-robin 순서대로 그냥 배정 (가장 부하 적은 게 좋지만 단순화)
+        String fallback = candidates.get(counter % n);
+        categoryRoundRobin.put(category, counter + 1);
+        return fallback;
     }
 
     /**

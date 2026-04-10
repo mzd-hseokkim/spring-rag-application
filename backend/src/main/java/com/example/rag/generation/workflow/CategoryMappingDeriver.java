@@ -14,10 +14,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -56,8 +54,9 @@ public class CategoryMappingDeriver {
         if (outlineLeaves == null || outlineLeaves.isEmpty()) {
             return CategoryMapping.empty();
         }
-        Set<String> categories = extractUniqueCategories(requirements);
-        if (categories.isEmpty()) {
+        // 카테고리별 항목 수 계산 — LLM이 1:N 분배 결정 시 사용
+        java.util.LinkedHashMap<String, Integer> categoryCounts = computeCategoryCounts(requirements);
+        if (categoryCounts.isEmpty()) {
             log.info("CategoryMappingDeriver: no categories in requirements, skipping");
             return CategoryMapping.empty();
         }
@@ -72,10 +71,13 @@ public class CategoryMappingDeriver {
             leavesBuf.append("\n");
         }
 
+        // 카테고리: 항목 수와 함께 표시 — LLM이 큰 카테고리를 1:N 분산하도록 유도
         StringBuilder categoriesBuf = new StringBuilder();
-        for (String cat : categories) {
-            categoriesBuf.append("- ").append(cat).append("\n");
+        for (var entry : categoryCounts.entrySet()) {
+            categoriesBuf.append("- ").append(entry.getKey())
+                    .append(": ").append(entry.getValue()).append("개\n");
         }
+        Set<String> categories = categoryCounts.keySet();
 
         final String leavesParam = leavesBuf.toString();
         final String categoriesParam = categoriesBuf.toString();
@@ -100,13 +102,26 @@ public class CategoryMappingDeriver {
         return mapping;
     }
 
-    private Set<String> extractUniqueCategories(List<Requirement> requirements) {
-        if (requirements == null) return Set.of();
-        return requirements.stream()
-                .map(Requirement::category)
-                .filter(Objects::nonNull)
-                .filter(c -> !c.isBlank())
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    /**
+     * 카테고리별 항목 수를 계산. 결과는 항목 수 내림차순 정렬 (큰 카테고리가 위에).
+     * LinkedHashMap으로 반환하여 순서 유지.
+     */
+    private java.util.LinkedHashMap<String, Integer> computeCategoryCounts(List<Requirement> requirements) {
+        if (requirements == null) return new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> raw = new java.util.HashMap<>();
+        for (Requirement r : requirements) {
+            String c = r.category();
+            if (c == null || c.isBlank()) continue;
+            raw.merge(c, 1, Integer::sum);
+        }
+        // 항목 수 내림차순 정렬
+        return raw.entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Integer>comparingByValue().reversed())
+                .collect(java.util.stream.Collectors.toMap(
+                        java.util.Map.Entry::getKey,
+                        java.util.Map.Entry::getValue,
+                        (a, b) -> a,
+                        java.util.LinkedHashMap::new));
     }
 
     private CategoryMapping parseMapping(String content) {
