@@ -7,6 +7,7 @@ import com.example.rag.document.DocumentChunkRepository;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
+import com.example.rag.model.TokenRecordingContext;
 import com.example.rag.questionnaire.workflow.Requirement;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -147,14 +148,15 @@ public class OutlineExtractor {
                 발주처가 제안사에게 따르도록 권장하는 "권장 목차" 또는 "제안서 목차 구성"이 있는지 확인하세요.
 
                 있다면: 문서에 나타난 모든 계층(대분류, 중분류 등)을 그대로 추출하여 아래 JSON 형식으로 출력하세요.
-                - 대분류 key: "1", "2", "3" ...
-                - 중분류 key: "1.1", "1.2", "2.1" ...
-                - 소분류 key: "1.1.1", "1.1.2" ...
+                - 문서에 나타난 번호 체계를 그대로 유지하세요. 로마숫자(I, II, III...)면 로마숫자로, 아라비아 숫자(1, 2, 3...)면 아라비아 숫자로.
+                - 대분류 key 예시: "I", "II", "III" 또는 "1", "2", "3" (문서 원본 따름)
+                - 중분류 key 예시: "I.1", "I.2", "II.1" 또는 "1.1", "1.2", "2.1" (대분류 key + "." + 순번)
+                - 소분류 key 예시: "I.1.1", "I.1.2" 또는 "1.1.1", "1.1.2"
                 - 문서에 있는 항목 제목을 그대로 사용하세요. 임의로 추가하거나 변경하지 마세요.
                 없다면: "없음"이라고만 답하세요.
 
-                출력 형식 예시:
-                [{"key":"1","title":"일반현황","description":"","children":[{"key":"1.1","title":"제안사 일반현황","description":"","children":[]},{"key":"1.2","title":"제안사의 조직 및 인원","description":"","children":[]}]}]
+                출력 형식 예시 (로마숫자 문서):
+                [{"key":"I","title":"일반현황","description":"","children":[{"key":"I.1","title":"제안사 일반현황","description":"","children":[]},{"key":"I.2","title":"제안사의 조직 및 인원","description":"","children":[]}]}]
 
                 ## 문서 내용
                 %s
@@ -261,7 +263,7 @@ public class OutlineExtractor {
                     .map(r -> "- [" + r.id() + "] [" + r.importance() + "] " + r.item() + ": " + r.description())
                     .collect(java.util.stream.Collectors.joining("\n"));
 
-            futures.add(CompletableFuture.runAsync(() -> {
+            futures.add(CompletableFuture.runAsync(TokenRecordingContext.wrap(() -> {
                 try {
                     semaphore.acquire();
                     try {
@@ -279,7 +281,7 @@ public class OutlineExtractor {
                     Thread.currentThread().interrupt();
                     throw new RagException("Outline map interrupted", e);
                 }
-            }));
+            })));
         }
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -1369,11 +1371,97 @@ public class OutlineExtractor {
      * 3. LLM 응답을 파싱하되, key/title은 skeleton 값으로 강제 덮어쓰기
      * 4. LLM이 deviate해도 plan.topics가 결과에 정확히 반영됨
      */
+
+    private static final int MAX_CHILDREN_PER_SECTION = 8;
+
+    /**
+     * topics가 MAX_CHILDREN_PER_SECTION을 초과할 때, LLM에게 유사 주제를 통합하여
+     * 수 자체를 줄이도록 요청한다. 통합 후 기존 expandWithStrictPlan 로직 사용.
+     */
+    private List<String> consolidateTopics(ChatClient client, OutlineNode topSection,
+                                            String keyPrefix, List<String> topics) {
+        StringBuilder topicList = new StringBuilder();
+        for (int i = 0; i < topics.size(); i++) {
+            topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
+        }
+
+        String prompt = """
+                다음 %d개의 하위 항목을 **최대 %d개의 핵심 주제로 통합**하세요.
+
+                ## 상위 섹션: %s > %s
+
+                ## 통합할 항목들
+                %s
+                ## 규칙
+                1. 의미적으로 유사하거나 밀접한 항목들을 하나의 주제로 통합
+                2. 통합된 주제의 제목은 포함된 항목들의 공통 주제를 반영
+                3. 각 항목에 포함된 요구사항 ID (SFR-xxx, NFR-xxx 등)는 통합 주제 뒤에 괄호로 모두 나열
+                   예: "법령정보 통합 검색 (SFR-001, SFR-002, SFR-003)"
+                4. 어떤 항목도 누락하지 마세요 — 모든 원본 항목이 하나의 통합 주제에 포함되어야 합니다
+                5. 최소 3개, 최대 %d개 주제로 통합
+                6. **주제 제목만 출력하세요. 설명, 메모, 경고(⚠️), 구분선(---), 검토 의견 등은 절대 포함하지 마세요**
+
+                ## 출력 형식 (한 줄에 하나씩, 번호 없이 제목만)
+                통합 주제 제목 1 (REQ-IDs)
+                통합 주제 제목 2 (REQ-IDs)
+                ...
+                """.formatted(topics.size(), MAX_CHILDREN_PER_SECTION,
+                keyPrefix, topSection.title(), topicList, MAX_CHILDREN_PER_SECTION);
+
+        String content;
+        try {
+            content = client.prompt().user(prompt).call().content();
+        } catch (Exception e) {
+            log.warn("Topic consolidation failed for {}, truncating to {}: {}",
+                    keyPrefix, MAX_CHILDREN_PER_SECTION, e.getMessage());
+            return topics.subList(0, Math.min(topics.size(), MAX_CHILDREN_PER_SECTION));
+        }
+
+        List<String> allLines = java.util.Arrays.stream(content.split("\n"))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .filter(s -> !s.startsWith("#") && !s.startsWith("```"))
+                .filter(s -> !s.equals("---") && !s.startsWith("※") && !s.startsWith("*※"))
+                .filter(s -> !s.startsWith("아래는") && !s.startsWith("위 ") && !s.startsWith("**"))
+                .filter(s -> !s.startsWith(">") && !s.contains("⚠") && !s.contains("검토 필요"))
+                .map(s -> s.replaceFirst("^\\d+\\.\\s*", ""))
+                .map(s -> s.replaceFirst("^[-*]\\s+", ""))
+                .filter(s -> s.length() >= 4)
+                .toList();
+
+        // LLM이 "초안 + 최종본"을 반복 출력하면 마지막 MAX_CHILDREN_PER_SECTION 개만 사용
+        List<String> consolidated;
+        if (allLines.size() > MAX_CHILDREN_PER_SECTION) {
+            consolidated = allLines.subList(allLines.size() - MAX_CHILDREN_PER_SECTION, allLines.size());
+            log.info("Topic consolidation '{}': LLM returned {} lines, using last {} as final",
+                    keyPrefix, allLines.size(), MAX_CHILDREN_PER_SECTION);
+        } else {
+            consolidated = allLines;
+        }
+
+        if (consolidated.isEmpty()) {
+            log.warn("Topic consolidation returned empty for {}, truncating to {}",
+                    keyPrefix, MAX_CHILDREN_PER_SECTION);
+            return topics.subList(0, Math.min(topics.size(), MAX_CHILDREN_PER_SECTION));
+        }
+
+        log.info("Topic consolidation '{}' (path={}): {} topics → {} consolidated",
+                topSection.title(), keyPrefix, topics.size(), consolidated.size());
+
+        return consolidated;
+    }
+
     private OutlineNode expandWithStrictPlan(ChatClient client, OutlineNode topSection,
                                               String keyPrefix, String titlePath,
                                               ExpansionPlan plan, RfpMandates rfpMandates) {
-        // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
         List<String> topics = plan.topics();
+
+        // children이 MAX를 초과하면 유사 주제를 통합하여 수를 줄임
+        if (topics.size() > MAX_CHILDREN_PER_SECTION) {
+            topics = consolidateTopics(client, topSection, keyPrefix, topics);
+        }
+
+        // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
         List<OutlineNode> skeleton = new ArrayList<>();
         // skeleton[i]에 해당하는 REQ-ID 목록 (description 프리픽스에 사용)
         List<List<String>> skeletonReqIds = new ArrayList<>();

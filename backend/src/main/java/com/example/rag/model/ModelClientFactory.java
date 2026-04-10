@@ -116,7 +116,7 @@ public class ModelClientFactory {
     private ChatModel createAnthropicChatModel(LlmModel model) {
         String apiKey = resolveApiKey(model.getApiKeyRef());
         HttpClient httpClient = HttpClient.create()
-                .responseTimeout(Duration.ofMinutes(5));
+                .responseTimeout(Duration.ofMinutes(10));
         RestClient.Builder restClientBuilder = RestClient.builder()
                 .requestFactory(new ReactorClientHttpRequestFactory(httpClient));
         AnthropicApi api = AnthropicApi.builder()

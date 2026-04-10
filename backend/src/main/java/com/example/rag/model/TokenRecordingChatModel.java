@@ -47,6 +47,10 @@ public class TokenRecordingChatModel implements ChatModel {
             if (inputTokens == 0 && outputTokens == 0) return;
 
             java.util.UUID userId = resolveCurrentUserId();
+            if (userId == null) {
+                log.debug("Skipping token recording: no user context (model={}, purpose={})", modelName, purpose);
+                return;
+            }
             tokenUsageRepository.save(new TokenUsageEntity(
                     userId, modelName, purpose, inputTokens, outputTokens, null));
 
@@ -75,7 +79,7 @@ public class TokenRecordingChatModel implements ChatModel {
             // SecurityContext가 없는 경우
         }
 
-        // 3. fallback: system user
-        return java.util.UUID.fromString("00000000-0000-0000-0000-000000000000");
+        // 3. 사용자 식별 불가 — 호출자가 recordUsage에서 skip 처리
+        return null;
     }
 }

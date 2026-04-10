@@ -5,6 +5,7 @@ import com.example.rag.common.RagException;
 import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
+import com.example.rag.model.TokenRecordingContext;
 import com.example.rag.questionnaire.workflow.Requirement;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -333,7 +334,7 @@ public class RequirementMapper {
             List<Requirement> batch = batches.get(i);
             int totalBatches = batches.size();
 
-            futures.add(CompletableFuture.runAsync(() -> {
+            futures.add(CompletableFuture.runAsync(TokenRecordingContext.wrap(() -> {
                 try {
                     semaphore.acquire();
                     try {
@@ -354,7 +355,7 @@ public class RequirementMapper {
                     Thread.currentThread().interrupt();
                     throw new RagException("Requirement mapping interrupted", e);
                 }
-            }));
+            })));
         }
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -372,7 +373,7 @@ public class RequirementMapper {
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (List<Requirement> batch : batches) {
-            futures.add(CompletableFuture.runAsync(() -> {
+            futures.add(CompletableFuture.runAsync(TokenRecordingContext.wrap(() -> {
                 try {
                     semaphore.acquire();
                     try {
@@ -390,7 +391,7 @@ public class RequirementMapper {
                     Thread.currentThread().interrupt();
                     throw new RagException("Requirement mapping interrupted", e);
                 }
-            }));
+            })));
         }
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         return result;

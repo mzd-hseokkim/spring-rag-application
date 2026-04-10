@@ -28,6 +28,7 @@ uploads/
 # Environment
 .env
 *.log
+logs/
 gradle.properties
 
 # OS

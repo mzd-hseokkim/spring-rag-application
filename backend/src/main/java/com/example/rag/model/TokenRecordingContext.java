@@ -23,4 +23,21 @@ public final class TokenRecordingContext {
     public static void clear() {
         USER_ID.remove();
     }
+
+    /**
+     * 현재 ThreadLocal의 userId를 캡처하여 작업에 전파한다.
+     * CompletableFuture.runAsync 등 ForkJoinPool 워커로 작업을 넘길 때 사용한다.
+     * 워커 스레드는 부모의 ThreadLocal을 상속하지 않으므로 명시적으로 전달해야 한다.
+     */
+    public static Runnable wrap(Runnable task) {
+        UUID captured = USER_ID.get();
+        return () -> {
+            try {
+                USER_ID.set(captured);
+                task.run();
+            } finally {
+                USER_ID.remove();
+            }
+        };
+    }
 }

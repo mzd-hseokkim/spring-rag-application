@@ -3,6 +3,7 @@ package com.example.rag.questionnaire.workflow;
 import com.example.rag.common.PromptLoader;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
+import com.example.rag.model.TokenRecordingContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -122,7 +123,7 @@ public class RequirementExtractor {
             String batchContent = String.join(CHUNK_SEPARATOR, batches.get(i));
             int batchNum = i + 1;
 
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(TokenRecordingContext.wrap(() -> {
                 try {
                     semaphore.acquire();
                     try {
@@ -144,7 +145,7 @@ public class RequirementExtractor {
                     Thread.currentThread().interrupt();
                     throw new com.example.rag.common.RagException("Batch extraction interrupted", e);
                 }
-            });
+            }));
             futures.add(future);
         }
 
