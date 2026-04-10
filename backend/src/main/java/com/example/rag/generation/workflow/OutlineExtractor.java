@@ -1191,7 +1191,7 @@ public class OutlineExtractor {
                 %s
                 """.formatted(topicLedger);
         String planRole = (plan != null && plan.role() != null) ? plan.role() : "";
-        String perspective = getPerspective(planRole);
+        String perspective = getPerspective(planRole, topSection.title());
         boolean isFactualOrAdmin = "WHY".equals(planRole) || "OPS".equals(planRole) || "MISC".equals(planRole);
         String weightContext = buildWeightContext(plan, rfpMandates);
         String topicsContext = buildTopicsContext(plan);
@@ -1372,36 +1372,51 @@ public class OutlineExtractor {
     private static final int MAX_CHILDREN_PER_SECTION = 8;
 
     /**
-     * CategoryMappingDeriver가 부여한 role을 기반으로 서술 관점(perspective)을 결정한다.
-     * key(I, II, III...) 하드코딩 없이 role만으로 판단하므로 RFP-agnostic.
+     * role(CategoryMappingDeriver 부여) + leaf title을 기반으로 서술 관점을 결정한다.
+     * role은 서사 흐름(WHY→WHAT→HOW→CTRL→MGMT→OPS)에서의 위치를 결정하고,
+     * title은 해당 위치 내에서의 구체적 scope를 한정한다.
+     * 둘 다 RFP-agnostic — role은 LLM이 판단, title은 권장 목차에서 옴.
      */
-    private String getPerspective(String role) {
+    private String getPerspective(String role, String sectionTitle) {
         if (role == null || role.isBlank()) return "";
-        return switch (role) {
+        String titleScope = (sectionTitle != null && !sectionTitle.isBlank())
+                ? "\n\n⚠️ 이 섹션의 title은 '" + sectionTitle + "'입니다. " +
+                  "이 title이 의미하는 범위 안의 내용만 다루세요. title과 무관한 내용은 형제 섹션에서 다룹니다."
+                : "";
+        String roleBase = switch (role) {
             case "WHY" -> "사실/배경 기반 서술: 회사 현황, 사업 배경, 추진 필요성 등을 객관적으로 작성. " +
                     "기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다";
-            case "WHAT" -> "업무/사용자 관점: 사용자가 체감하는 기능·서비스·결과물을 서술. " +
-                    "기술 구현 용어(에이전틱 AI, 오케스트레이션, RAG, 벡터DB 등) 사용 금지. " +
-                    "업무 언어(검색, 조회, 추천, 관리 등)만 사용. " +
-                    "기술 구현 상세는 HOW-tech 역할 섹션에서 다루므로 여기서 중복하지 마세요";
-            case "HOW-tech" -> "기술/구현 관점: 기술 아키텍처, 솔루션, 구현 방법을 서술. " +
-                    "WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것. " +
-                    "'그 기능을 어떤 기술로 구현하는가'에 집중";
-            case "HOW-method" -> "실행 방법론: 사업 전체의 수행 방법론을 균형있게 서술 — " +
-                    "개발 프로세스, 품질 관리, 데이터 관리, 보안 관리 접근을 방법론 수준에서 골고루. " +
-                    "한 가지 영역(예: 보안)에 치우치면 안 됨. " +
-                    "기술 스택 디테일은 HOW-tech 역할 섹션에서 다루므로 여기서는 방법론적 접근만";
-            case "CTRL-tech" -> "기술 통제 관점: 보안·테스트·제약사항의 기술적 구현 방법을 서술. " +
-                    "관리 프로세스(조직, 교육, 점검 계획)는 CTRL-mgmt 역할 섹션에서 다룸";
-            case "CTRL-mgmt" -> "관리 통제 관점: 보안·품질의 운영 관리 프로세스(조직, 교육, 점검, 모니터링)를 서술. " +
-                    "기술 구현 상세는 CTRL-tech 역할 섹션에서 다룸";
-            case "MGMT" -> "관리 프로세스: 이 섹션의 title 범위에 해당하는 관리 활동만 서술. " +
-                    "같은 챕터의 형제 섹션과 역할이 겹치지 않도록 주의. 간결하게";
-            case "OPS" -> "운영/지원: 이 섹션의 title 범위에 해당하는 운영·지원 활동만 서술. " +
-                    "같은 챕터의 형제 섹션에서 다루는 내용(인수인계, 교육, 하자보수 등)을 반복하지 말 것";
+            case "WHAT" -> "업무/사용자 관점 — '무엇을 달성하는가'에 집중:\n" +
+                    "- 사용자가 체감하는 기능·서비스·결과물을 서술\n" +
+                    "- ⛔ 기술 구현 용어 절대 금지: 프레임워크명, 알고리즘명, 인프라 용어, DB 엔진명, " +
+                    "라이브러리명(예: pgvector, Weaviate, Redis, Kubernetes, HNSW, ETL, CDC 등)\n" +
+                    "- ✅ 업무 언어만 사용: 검색, 조회, 추천, 관리, 보호, 제공, 지원, 통제, 확인 등\n" +
+                    "- '어떻게 구현하는가'는 별도의 기술 구현 섹션(HOW-tech)에서 다루므로 여기서 쓰지 마세요\n" +
+                    "- description에도 동일 규칙 적용 — 기술명이 하나라도 들어가면 실패입니다";
+            case "HOW-tech" -> "기술/구현 관점 — '어떻게 구현하는가'에 집중:\n" +
+                    "- 기술 아키텍처, 프레임워크, 알고리즘, 인프라 구성을 구체적으로 서술\n" +
+                    "- WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것\n" +
+                    "- 이 섹션 고유의 가치: '그 기능을 어떤 기술로 구현하는가'";
+            case "HOW-method" -> "실행 방법론 — '어떤 접근법으로 수행하는가'에 집중:\n" +
+                    "- 사업 전체의 수행 방법론을 균형있게: 개발 프로세스, 품질 관리, 데이터 관리, 보안 관리\n" +
+                    "- 한 가지 영역(예: 보안)에 치우치면 안 됨 — 각 영역 1~2개씩 균등 배분\n" +
+                    "- 기술 스택 디테일은 HOW-tech에서, 전략적 방향은 WHY에서 다루므로 여기서는 방법론 수준만";
+            case "CTRL-tech" -> "기술 통제 — 보안·테스트·제약의 기술적 구현:\n" +
+                    "- 구체적 보안 기술, 테스트 도구, 제약 대응 방법을 서술\n" +
+                    "- 관리 프로세스(조직, 교육, 점검 계획)는 CTRL-mgmt에서 다룸";
+            case "CTRL-mgmt" -> "관리 통제 — 보안·품질의 운영 관리 프로세스:\n" +
+                    "- 조직, 교육, 점검, 모니터링 등 관리 체계를 서술\n" +
+                    "- 기술 구현 상세(암호 알고리즘, 보안 도구 등)는 CTRL-tech에서 다룸";
+            case "MGMT" -> "관리 프로세스 — 이 섹션 title에 해당하는 관리 활동만:\n" +
+                    "- 형제 섹션과 역할이 겹치지 않도록 title scope 엄격 준수\n" +
+                    "- 간결하게 서술";
+            case "OPS" -> "운영/지원 — 이 섹션 title에 해당하는 활동만:\n" +
+                    "- 형제 섹션(인수인계, 교육, 하자보수 등)과 중복 금지\n" +
+                    "- title scope 엄격 준수";
             case "MISC" -> "기타/행정: 표준 절차, 법적 준수, 부가 사항";
             default -> "";
         };
+        return roleBase + titleScope;
     }
 
     /**
@@ -1487,7 +1502,7 @@ public class OutlineExtractor {
             topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
         }
 
-        String perspective = getPerspective(role);
+        String perspective = getPerspective(role, topSection.title());
 
         String prompt = """
                 다음 %d개의 하위 항목을 **최대 %d개의 핵심 주제로 통합**하세요.
@@ -1621,7 +1636,7 @@ public class OutlineExtractor {
         }
 
         String parentLine = titlePath.isEmpty() ? topSection.title() : titlePath + " > " + topSection.title();
-        String perspective = getPerspective(plan.role());
+        String perspective = getPerspective(plan.role(), topSection.title());
         String grandPart = needsGrandchildren
                 ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
