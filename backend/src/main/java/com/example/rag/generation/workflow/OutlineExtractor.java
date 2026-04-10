@@ -40,15 +40,21 @@ public class OutlineExtractor {
     private final PromptLoader promptLoader;
     private final ObjectMapper objectMapper;
     private final DocumentChunkRepository chunkRepository;
+    private final CategoryMappingDeriver categoryMappingDeriver;
+    private final RuleBasedPlanner ruleBasedPlanner;
 
     public OutlineExtractor(ModelClientProvider modelClientProvider,
                              PromptLoader promptLoader,
                              ObjectMapper objectMapper,
-                             DocumentChunkRepository chunkRepository) {
+                             DocumentChunkRepository chunkRepository,
+                             CategoryMappingDeriver categoryMappingDeriver,
+                             RuleBasedPlanner ruleBasedPlanner) {
         this.modelClientProvider = modelClientProvider;
         this.promptLoader = promptLoader;
         this.objectMapper = objectMapper;
         this.chunkRepository = chunkRepository;
+        this.categoryMappingDeriver = categoryMappingDeriver;
+        this.ruleBasedPlanner = ruleBasedPlanner;
     }
 
     /**
@@ -217,10 +223,11 @@ public class OutlineExtractor {
                                       RfpMandates rfpMandates) {
 
         RfpMandates mandates = rfpMandates != null ? rfpMandates : RfpMandates.empty();
+        List<Requirement> reqList = requirements != null ? requirements : List.of();
 
         // 권장 목차가 있으면: 상위 구조를 코드로 고정 → LLM은 하위만 채움
         if (recommendedOutline != null) {
-            return extractWithFixedTopLevel(recommendedOutline, requirementsSummary, progressCallback, mandates);
+            return extractWithFixedTopLevel(recommendedOutline, requirementsSummary, reqList, progressCallback, mandates);
         }
 
         String reqs = requirementsSummary != null ? requirementsSummary : "";
@@ -291,6 +298,7 @@ public class OutlineExtractor {
      */
     private List<OutlineNode> extractWithFixedTopLevel(String recommendedOutline,
                                                         String requirementsSummary,
+                                                        List<Requirement> requirements,
                                                         ProgressCallback progressCallback,
                                                         RfpMandates rfpMandates) {
         List<OutlineNode> topLevel = parseOutline(recommendedOutline);
@@ -338,13 +346,13 @@ public class OutlineExtractor {
             log.info("Leaf processing order ({}): {}", sortedLeaves.size(), order);
         }
 
-        // 전역 사전 할당: 한 번의 LLM 호출로 모든 leaf에 주제·배점·의무항목을 배분.
-        // 이렇게 하면 expandSection이 각 leaf의 구체적 주제를 이미 받은 상태에서 확장만 수행한다.
-        List<LeafInfo> leafInfos = sortedLeaves.stream()
-                .map(e -> new LeafInfo(e.getKey(), e.getValue().title(),
-                        leafTitlePaths.getOrDefault(e.getKey(), "")))
-                .toList();
-        java.util.Map<String, ExpansionPlan> plans = planExpansion(leafInfos, reqSuggestions, rfpMandates, progressCallback);
+        // Phase B: rule-based planning (LLM 없음, 결정론).
+        // 1) CategoryMappingDeriver가 1회 LLM 호출로 카테고리→leaf 매핑을 derive
+        // 2) RuleBasedPlanner가 결정론으로 leaf별 SectionAssignment 생성
+        // 3) SectionAssignment를 ExpansionPlan으로 변환하여 기존 expansion 루프에 사용
+        // 이로써 LLM 기반 planExpansion의 hill-climbing 패턴이 차단된다.
+        java.util.Map<String, ExpansionPlan> plans = createPlansViaRuleBasedPlanner(
+                sortedLeaves, leafTitlePaths, requirements, rfpMandates, progressCallback);
 
         java.util.Map<String, List<OutlineNode>> expandedChildren = new java.util.LinkedHashMap<>();
         StringBuilder ledger = new StringBuilder();
@@ -497,6 +505,89 @@ public class OutlineExtractor {
      * leaf 정보. planExpansion LLM 입력에 사용된다.
      */
     private record LeafInfo(String key, String title, String titlePath) {}
+
+    /**
+     * Phase B 핵심 메서드: rule-based planning으로 ExpansionPlan 맵 생성.
+     *
+     * 1. CategoryMappingDeriver — 1회 LLM 호출로 카테고리→leaf 매핑 결정
+     * 2. RuleBasedPlanner — 결정론으로 SectionAssignment 생성
+     * 3. SectionAssignment → ExpansionPlan 변환 (기존 expandWithStrictPlan과 호환)
+     *
+     * Rule-based planner가 빈 결과를 내면 빈 ExpansionPlan으로 fallback.
+     * 빈 leaf safeguard(rescueEmptyLeaves)가 그 후에 빈 leaf를 보강한다.
+     */
+    private java.util.Map<String, ExpansionPlan> createPlansViaRuleBasedPlanner(
+            List<java.util.Map.Entry<String, OutlineNode>> sortedLeaves,
+            java.util.Map<String, String> leafTitlePaths,
+            List<Requirement> requirements,
+            RfpMandates rfpMandates,
+            ProgressCallback progressCallback) {
+
+        if (progressCallback != null) {
+            progressCallback.onProgress(sortedLeaves.size() + "개 섹션의 카테고리 매핑을 derive합니다...");
+        }
+
+        // 1. CategoryMappingDeriver 호출
+        List<CategoryMappingDeriver.LeafDescriptor> descriptors = sortedLeaves.stream()
+                .map(e -> new CategoryMappingDeriver.LeafDescriptor(
+                        e.getKey(),
+                        e.getValue().title(),
+                        leafTitlePaths.getOrDefault(e.getKey(), "")))
+                .toList();
+        CategoryMapping mapping = categoryMappingDeriver.derive(descriptors, requirements);
+
+        // 2. RuleBasedPlanner 호출
+        if (progressCallback != null) {
+            progressCallback.onProgress("요구사항을 결정론 룰로 leaf에 배분합니다...");
+        }
+        List<String> leafKeys = sortedLeaves.stream().map(java.util.Map.Entry::getKey).toList();
+        java.util.Map<String, SectionAssignment> assignments = ruleBasedPlanner.plan(
+                leafKeys, requirements, rfpMandates, mapping);
+
+        // 3. Requirement ID → Requirement 빠른 조회 맵
+        java.util.Map<String, Requirement> reqById = new java.util.HashMap<>();
+        if (requirements != null) {
+            for (Requirement r : requirements) {
+                if (r.id() != null) reqById.put(r.id(), r);
+            }
+        }
+
+        // 4. SectionAssignment → ExpansionPlan 변환
+        java.util.Map<String, ExpansionPlan> plans = new java.util.LinkedHashMap<>();
+        for (var entry : assignments.entrySet()) {
+            String leafKey = entry.getKey();
+            SectionAssignment assignment = entry.getValue();
+
+            List<String> topics = new ArrayList<>();
+            for (String reqId : assignment.requirementIds()) {
+                Requirement req = reqById.get(reqId);
+                if (req == null || req.item() == null || req.item().isBlank()) continue;
+                // Topic 형식: "{item 이름} ({REQ-ID})"
+                topics.add(req.item() + " (" + reqId + ")");
+            }
+
+            plans.put(leafKey, new ExpansionPlan(
+                    assignment.weight(),
+                    topics,
+                    assignment.mandatoryItemIds()));
+        }
+
+        if (log.isInfoEnabled()) {
+            int withTopics = (int) plans.values().stream().filter(ExpansionPlan::hasTopics).count();
+            int withWeight = (int) plans.values().stream().filter(ExpansionPlan::hasWeight).count();
+            int withMand = (int) plans.values().stream().filter(ExpansionPlan::hasMandatoryItems).count();
+            log.info("Rule-based plans: {} leaves — topics:{}, weight:{}, mandatory:{}",
+                    plans.size(), withTopics, withWeight, withMand);
+            plans.forEach((key, plan) -> {
+                if (plan.hasTopics() || plan.hasMandatoryItems()) {
+                    log.info("  rule-plan[{}]: {} topics, weight={}, mandIds={}",
+                            key, plan.topics().size(), plan.weight(), plan.mandatoryItemIds());
+                }
+            });
+        }
+
+        return plans;
+    }
 
     /**
      * 전역 사전 할당: 한 번의 LLM 호출로 모든 leaf에 주제·배점·의무항목을 분배한다.

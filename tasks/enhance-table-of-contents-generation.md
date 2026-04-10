@@ -486,9 +486,84 @@ iteration의 패턴은 다음과 같았다:
 
 ---
 
-## 🚧 다음 작업 시 시작점 (2026-04-10 commit 시점)
+## 🚧 다음 작업 시 시작점 (2026-04-10 야간 commit 후)
 
-**현재 상태**: 모든 Step 1/2/3 작업 + RFP-agnostic cleanup 적용 완료. 컴파일 OK. **단, 알려진 critical 버그 1개**.
+**최종 상태**: Phase A + Phase B (4단계 아키텍처) 구현 완료. 컴파일 OK. **검증 미완**.
+
+### 야간 작업 commit 순서
+1. `150acb0` — Step 1/2/3 + RFP-agnostic cleanup (알려진 빈 leaf 버그 포함)
+2. `97f3605` — Phase A: empty leaf safeguard + OutlineValidator
+3. (이 commit) — Phase B: RuleBasedPlanner + CategoryMappingDeriver 통합
+
+### 내일 첫 작업 — 검증 (★ 가장 중요 ★)
+
+**목표**: 같은 RFP로 outline을 재생성하여 다음을 확인:
+
+1. **빈 섹션 사라짐** (Phase A 효과)
+   - `Empty leaf safeguard:` 로그 확인
+   - II.1, III.3, III.4, VI.1, VI.2가 children >= 1 인지
+
+2. **CategoryMappingDeriver가 합리적인 매핑을 만들었는지** (Phase B 신규)
+   - `CategoryMapping: N categories mapped, M leaves with roles` 로그 확인
+   - 각 카테고리가 의미상 맞는 leaf로 갔는지 (예: SFR → 기능 leaf)
+   - role 부여가 합리적인지
+
+3. **RuleBasedPlanner가 요구사항을 균등 분배** (Phase B 신규)
+   - `Rule-based plans: N leaves — topics:X, weight:Y, mandatory:Z` 로그
+   - 각 plan에 적절한 수의 topics가 있는지
+   - 중복 없이 1:1 분배되는지
+
+4. **OutlineValidator 5개 룰** (Phase A)
+   - `Outline validation: PASSED/FAILED` 로그
+   - errors 0개 목표
+   - warnings는 진단용이라 0개 아니어도 OK
+
+### 검증 결과별 다음 액션
+
+**Case 1: 모든 검증 통과** ✅
+- 본문 작성 단계로 진행
+- task 문서를 closed로 표시
+
+**Case 2: 빈 섹션 여전히 존재**
+- Phase A safeguard가 동작 안 함 → 로그에서 `Empty leaf safeguard` 확인
+- focused expansion도 빈 응답 → placeholder가 떨어졌는지 확인
+- placeholder도 안 떨어졌으면 wiring 버그 → debug
+
+**Case 3: CategoryMapping이 엉뚱한 매핑**
+- LLM 응답 자체가 잘못됨 → `generation-derive-category-mapping.txt` 프롬프트 강화
+- 또는 LLM이 응답을 못 함 → fallback heuristic 추가 (RuleBasedPlanner.pickLeafForRequirement에서 keyword match 추가)
+
+**Case 4: 요구사항이 leaf에 안 분배됨 (unassigned 다수)**
+- CategoryMapping 결과가 비어있을 가능성 — 위 Case 3 처리
+- 또는 카테고리 명칭이 매핑 키와 안 맞음 — 정규화/fuzzy match 필요
+
+**Case 5: Validator가 너무 많은 warning**
+- REQ_UNIQUENESS 위반: 한 REQ가 여러 leaf에 — RuleBasedPlanner의 1:1 보장이 깨짐
+- MANDATORY_SLOTS 위반: 의무 항목이 outline에 안 보임 — keyword matching이 부정확
+- 둘 다 룰을 손볼 여지 있음 (validator 자체 또는 planner 로직)
+
+### 코드 네비게이션 빠른 참조
+
+| 파일 | 역할 |
+|---|---|
+| `OutlineExtractor.createPlansViaRuleBasedPlanner()` | Phase B 핵심 — rule-based plan 생성 |
+| `OutlineExtractor.rescueEmptyLeaves()` | Phase A — 빈 leaf 보강 |
+| `OutlineExtractor.focusedExpand()` | Phase A — 단일 leaf 재확장 |
+| `RuleBasedPlanner.plan()` | 결정론 분배 알고리즘 |
+| `CategoryMappingDeriver.derive()` | 1회성 LLM 매핑 derive |
+| `OutlineValidator.validate()` | 5개 룰 검증 |
+| `WizardAnalysisService.extractOutline()` Phase 3.6 | Validator 호출 위치 |
+
+### 만약 모든 게 잘못됐다면 → rollback 옵션
+
+```bash
+# Phase B만 되돌리기 (Phase A 유지)
+git revert HEAD
+# 또는 Phase A + Phase B 모두 되돌리기
+git reset --hard 150acb0
+```
+
+### 알려진 잔존 문제 (이전 v6 평가에서)
 
 ### 알려진 critical 버그
 
@@ -681,15 +756,20 @@ Phase 3   : Outline 구성 (재구성)
 3. `WizardAnalysisService.extractOutline()`에 Phase 3.5로 Validator 호출 (warning 로그)
 4. **이것만으로 빈 섹션 버그는 해결됨**
 
-**Phase B — 새 아키텍처 구현 (3~5시간)**:
-1. 신규 데이터 모델: `CategoryMapping`, `SectionAssignment`, `ValidationResult`, `ValidationViolation`
-2. 신규 서비스 `CategoryMappingDeriver` + 프롬프트 `generation-derive-category-mapping.txt` (1회 LLM)
-3. 신규 서비스 `RuleBasedPlanner` (결정론, LLM 없음)
-4. `expandWithStrictPlan` 시그니처 적응 — `SectionAssignment`를 받도록
-5. `WizardAnalysisService.extractOutline()` 새 파이프라인 분기 (feature flag 또는 항상)
-6. 기존 `planExpansion`, `dedupRequirementIdsInPlans` 등은 유지 (deprecated 표시)
+**Phase B — 새 아키텍처 구현 (구현 완료, 2026-04-10)**:
+1. ✅ 신규 데이터 모델: `CategoryMapping`, `SectionAssignment`
+2. ✅ 신규 서비스 `CategoryMappingDeriver` + 프롬프트 `generation-derive-category-mapping.txt` (1회 LLM)
+3. ✅ 신규 서비스 `RuleBasedPlanner` (결정론, LLM 없음)
+4. ✅ `OutlineExtractor.createPlansViaRuleBasedPlanner()` 헬퍼 — SectionAssignment → ExpansionPlan 변환 (기존 expandWithStrictPlan과 호환)
+5. ✅ `extractWithFixedTopLevel`이 LLM 기반 `planExpansion` 대신 rule-based 경로 사용
+6. ⏳ 기존 `planExpansion`, `dedupRequirementIdsInPlans` 코드는 보존 (다른 경로 reduceOutline에서 사용 중)
 
-**Phase B 미구현 시**: Phase A만으로도 현재 빈 섹션 버그 해결되고 v6 수준 품질 유지. Phase B는 architectural cleanup으로 별도 작업 가능.
+**Phase B 검증 미완**:
+- 컴파일은 통과 (Phase A + Phase B 모두)
+- 사용자 RFP로 실제 동작 검증 필요
+- CategoryMappingDeriver의 LLM 호출이 의도대로 매핑을 만드는지 확인
+- RuleBasedPlanner 결과로 빈 섹션이 사라지는지 확인 (Phase A safeguard와 함께 작동)
+- Validator의 5개 룰이 의미 있게 동작하는지 확인
 
 ### 예상 효과
 
