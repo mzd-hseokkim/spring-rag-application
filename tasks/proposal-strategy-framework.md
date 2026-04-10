@@ -118,7 +118,8 @@ com.example.rag.generation.workflow.ProposalStrategyDeriver
 
 ```java
 public record ProposalStrategy(
-    List<KeyPoint> keyPoints
+    List<KeyPoint> keyPoints,
+    Map<String, SectionRole> sectionRoles  // "III.1" → STRATEGY_IMPL
 ) {
     public record KeyPoint(
         String id,
@@ -134,11 +135,58 @@ public record ProposalStrategy(
         List<String> relatedRequirementIds
     ) {}
 
+    public enum SectionRole {
+        STRATEGY_NARRATIVE,  // 전략 직접 서술 — KP를 chapter의 핵심 골격으로 사용
+        STRATEGY_IMPL,       // 전략 구현 — "KP를 이렇게 구현한다" 서술
+        CHECKLIST,           // 체크리스트 대응 — RFP 요구사항에 빠짐없이 답변
+        FACTUAL,             // 사실 기반 — 회사 정보, 실적, 조직도
+        STANDARD_PROCESS     // 표준 프로세스 — 관리/교육/인수인계 방법론
+    }
+
     public static ProposalStrategy empty() {
-        return new ProposalStrategy(List.of());
+        return new ProposalStrategy(List.of(), Map.of());
     }
 }
 ```
+
+### 섹션 성격 분류 (SectionRole)
+
+제안서의 모든 섹션이 전략과 연결되는 것은 아니다.
+전략 context 주입은 `STRATEGY_NARRATIVE`와 `STRATEGY_IMPL` 섹션에만 적용하고,
+나머지는 기존 방식(요구사항 기반)으로 서술한다.
+
+| 성격 | 서술 방식 | 전략 연동 | 해당 섹션 (권장 목차 기준) |
+|---|---|---|---|
+| **STRATEGY_NARRATIVE** | KP/AI를 직접 서술, 차별화 강조 | ✅ 필수 | II.2 추진전략, II.4 사업추진 방법론 |
+| **STRATEGY_IMPL** | "이 KP를 이렇게 구현한다" | ✅ 관련 KP만 | III.1~4 수행계획, IV.1 적용기술 |
+| **CHECKLIST** | RFP 요구사항 빠짐없이 답변 | ❌ | IV.3 보안, IV.4 제약, IV.5 테스트 |
+| **FACTUAL** | 회사 정보/실적/조직도 | ❌ | I.1 일반현황, I.2 조직 및 인원 |
+| **STANDARD_PROCESS** | 표준 관리/교육/인수인계 방법론 | ❌ | V.1~4 프로젝트 관리, VI.1~4 지원, VII, VIII |
+
+**비율**: 전략 연동 ~30% (NARRATIVE+IMPL), 체크리스트/기본기 ~70%.
+
+#### CategoryMappingDeriver `role`과의 관계
+
+기존 `CategoryMappingDeriver`가 부여하는 role (WHY, WHAT, HOW-tech, HOW-method, CTRL-tech, CTRL-mgmt, MGMT, OPS, MISC)과 SectionRole은 유사한 개념.
+통합 가능하지만, 역할이 다름:
+- `role`: 어떤 **카테고리의 요구사항**을 배치할지 결정 (Planner 입력)
+- `SectionRole`: 해당 섹션의 **서술 방식**을 결정 (프롬프트 출력 스타일)
+
+구현 시 `role → SectionRole` 매핑 테이블로 연결:
+
+```
+WHY          → FACTUAL 또는 STRATEGY_NARRATIVE
+WHAT         → STRATEGY_IMPL
+HOW-tech     → STRATEGY_IMPL
+HOW-method   → STRATEGY_NARRATIVE
+CTRL-tech    → CHECKLIST
+CTRL-mgmt    → CHECKLIST
+MGMT         → STANDARD_PROCESS
+OPS          → STANDARD_PROCESS
+MISC         → STANDARD_PROCESS
+```
+
+또는 `ProposalStrategyDeriver`가 outline의 leaf 목록을 보고 직접 SectionRole을 분류 (LLM 1회 호출에 KP 도출 + role 분류를 함께 수행).
 
 ### DB 저장
 
@@ -186,6 +234,9 @@ Phase 2.7  ProposalStrategyDeriver
 
 **구현 위치**: `OutlineExtractor.consolidateTopics()` 메서드에 `ProposalStrategy` 파라미터 추가.
 전략이 없으면(empty) 기존 프롬프트 그대로 사용.
+
+**SectionRole 기반 분기**: `STRATEGY_IMPL` 섹션만 전략 context 주입.
+`CHECKLIST`/`FACTUAL`/`STANDARD_PROCESS` 섹션은 전략 context 없이 기존 방식.
 
 **expandWithStrictPlan()에 전략 context 전달**
 
