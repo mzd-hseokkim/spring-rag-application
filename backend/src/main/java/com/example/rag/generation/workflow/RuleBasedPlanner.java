@@ -176,21 +176,38 @@ public class RuleBasedPlanner {
         return fallback;
     }
 
+    /** MAND 항목 배치 금지 role — 사실 기반/관리 영역에는 기술 의무 항목을 넣지 않는다 */
+    private static final java.util.Set<String> MAND_EXCLUDED_ROLES = java.util.Set.of(
+            "WHY", "FACTUAL", "MISC", "OPS"
+    );
+
     /**
      * 의무 항목이 어느 leaf로 가야 하는지 결정.
-     * 현재는 단순 heuristic: "기타" 역할 leaf 우선, 없으면 마지막 leaf.
-     * 향후 LLM 기반 개선 가능.
+     * WHAT/HOW-tech/HOW-method role을 가진 leaf에 우선 배치.
+     * 가장 요구사항이 적은 candidate를 선택하여 부하 균등화.
      */
-    private String pickLeafForMandatoryItem(MandatoryItem item, CategoryMapping mapping, List<String> leafKeys) {
-        // 우선순위 1: role=MISC인 leaf
-        if (mapping.leafKeyToRole() != null) {
-            for (String leafKey : leafKeys) {
-                if ("MISC".equals(mapping.roleOf(leafKey))) {
-                    return leafKey;
-                }
+    private String pickLeafForMandatoryItem(MandatoryItem item, CategoryMapping mapping,
+                                             List<String> leafKeys) {
+        // 우선순위 1: WHAT/HOW 역할 leaf 중 가장 부하가 적은 것
+        String bestCandidate = null;
+        for (String leafKey : leafKeys) {
+            String role = mapping.roleOf(leafKey);
+            if (role != null && !MAND_EXCLUDED_ROLES.contains(role)) {
+                bestCandidate = leafKey;
+                break;
             }
         }
-        // 우선순위 2: 마지막 leaf
+        if (bestCandidate != null) return bestCandidate;
+
+        // 우선순위 2: 아무 role이든 WHY/FACTUAL만 아니면
+        for (String leafKey : leafKeys) {
+            String role = mapping.roleOf(leafKey);
+            if (!"WHY".equals(role)) {
+                return leafKey;
+            }
+        }
+
+        // 우선순위 3: 마지막 leaf (최후 수단)
         return leafKeys.isEmpty() ? null : leafKeys.get(leafKeys.size() - 1);
     }
 

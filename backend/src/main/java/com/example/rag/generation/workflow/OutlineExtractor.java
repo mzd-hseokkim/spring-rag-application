@@ -1187,9 +1187,15 @@ public class OutlineExtractor {
 
                 %s
                 """.formatted(topicLedger);
+        String perspective = getPerspective(keyPrefix);
+        boolean isFactualOrAdmin = perspective.startsWith("사실 기반") || perspective.startsWith("지원/행정");
         String weightContext = buildWeightContext(plan, rfpMandates);
         String topicsContext = buildTopicsContext(plan);
         String mandatoryContext = buildMandatoryContext(plan, rfpMandates);
+        String siblingSection = siblingContext.isBlank() ? "" : """
+
+                ## 형제 섹션 (이들이 다루는 주제와 중복 금지)
+                %s""".formatted(siblingContext);
         String expandPrompt = """
                 다음 제안서 항목의 하위 목차(중분류, 소분류)를 구성하세요.
                 이 제안서는 **프레젠테이션형 문서**이므로 하나의 리프 항목 = 하나의 장표(슬라이드)입니다.
@@ -1198,40 +1204,23 @@ public class OutlineExtractor {
                 - key: %s
                 - title: %s
                 - description: %s
-                %s%s%s%s%s
-                ## ⚠️ 핵심 원칙: 섹션 성격에 맞는 관점으로 하위 항목을 구성하세요
 
-                상위 항목의 title과 description을 보고 이 섹션의 **관점**을 먼저 판단하세요.
-                일반적으로 다음 두 부류 중 하나입니다:
-
-                - **사업/관리 관점 섹션** (전략·체계·방법론·관리·운영·인력 등)
-                  → 사업·프로젝트 관점의 하위 항목으로 구성
-                  → 기술 구현 세부사항(아키텍처·인프라·모델 등)을 하위 항목으로 넣지 마세요
-                  → 요구사항 ID를 description에 넣지 마세요
-
-                - **기술/구현 관점 섹션** (시스템·기능·아키텍처·구현·데이터 등)
-                  → 기술·구현 관점의 하위 항목으로 구성
-                  → 요구사항 item 이름을 그대로 사용하고 description에 RFP 원본 ID 포함
-
-                관점이 섞이면 안 됩니다. "전략"이라는 제목 아래에 기술 구현이 들어가거나, "기술"이라는 제목 아래에 사업 전략이 들어가는 것은 잘못입니다.
-
-                ## 참고할 요구사항 분석 결과
-                아래는 전체 요구사항 목록입니다. **기술/구현 관점 섹션일 때만** 관련 요구사항을 참고하세요.
-                사업/관리 관점 섹션이면 요구사항 목록을 무시하고, 사업·프로젝트 관점으로만 하위 항목을 구성하세요.
+                ## 이 섹션의 서술 관점 (반드시 준수)
                 %s
-
+                %s%s%s%s%s%s%s
                 ## 출력 규칙
                 - 이 항목의 하위 구조를 JSON으로 생성
                 - **"이 섹션에서 다뤄야 할 주제" 블록이 있으면**: 각 주제를 하나씩 child로 만드세요 (주제 개수 = children 개수)
                 - 주제 블록이 없으면: 배점 정보 가이드를 따르거나, 2~5개로 균등 분배
                 - key는 "%s.1", "%s.1.1" 형식
-                - **구체적이고 고유한 제목 사용 필수** ("기능 1" 같은 placeholder, "주요 기능" 같은 추상 제목 금지)
+                - "~전략 및 목표", "~개요 및 방향" 같은 기계적 패턴 제목 금지. 구체적이고 차별화된 제목 사용
                 - 반드시 JSON 배열로만 응답 (children 포함한 배열)
 
                 [{"key":"%s.1","title":"하위 제목","description":"설명","children":[]}]
                 """.formatted(keyPrefix, topSection.title(), topSection.description(),
+                perspective, siblingSection,
                 parentContext, ledgerContext, weightContext, topicsContext, mandatoryContext,
-                suggestions.length() > 8_000 ? suggestions.substring(0, 8_000) : suggestions,
+                isFactualOrAdmin ? "" : (suggestions.length() > 8_000 ? suggestions.substring(0, 8_000) : suggestions),
                 keyPrefix, keyPrefix, keyPrefix);
 
         String content = client.prompt().user(expandPrompt).call().content();
