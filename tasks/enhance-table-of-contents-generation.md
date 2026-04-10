@@ -525,7 +525,14 @@ iteration의 패턴은 다음과 같았다:
 **옵션 D — full git reset + 처음부터 다시** (8시간 이상)
 - 비추천. 같은 함정 반복 위험.
 
-**제 권고**: 옵션 B → 안 되면 옵션 C → 그래도 안 되면 옵션 A로 후퇴
+**옵션 E — 4단계 아키텍처 전환 (Extractor / Planner / Enricher / Validator)** ← **최우선 권고**
+- LLM을 구조 결정에서 완전히 제거하고 코드 기반 결정론으로 전환
+- 자세한 설계는 아래 "## 옵션 E: 4단계 아키텍처 (Step 4)" 섹션 참고
+- Phase A: 즉시 적용 가능한 safeguard + Validator 클래스 (1시간)
+- Phase B: Planner 신규 + Enricher 적응 + 파이프라인 재배선 (3~5시간)
+- **이 접근이 hill-climbing 패턴을 구조적으로 차단함**
+
+**제 권고**: 옵션 E → 안 되면 옵션 B → 그래도 안 되면 옵션 A로 후퇴
 
 ### 옵션 B의 구체적 작업 단계
 
@@ -577,3 +584,118 @@ iteration의 패턴은 다음과 같았다:
 - CI 또는 수동 테스트로 시스템 품질을 다중 RFP 기준으로 측정
 
 이것이 갖춰지기 전까지는 어떤 prompt 변경도 over-fitting 위험이 있음.
+
+---
+
+## 옵션 E: 4단계 아키텍처 (Step 4)
+
+이전 4번의 iteration이 모두 hill-climbing에 빠진 근본 원인은 **구조 결정을 LLM에 맡긴 것**.
+이 접근은 LLM을 구조 결정에서 완전히 제거하고 결정론 코드로 전환한다.
+
+### 4단계 책임 분할
+
+| 단계 | 책임 | LLM 사용 여부 |
+|---|---|---|
+| **1. Extractor** | RFP → 요구사항 + mandates 추출 | ✅ LLM (이미 구현됨) |
+| **2. Planner** | 요구사항 → leaf 매핑 결정 | ❌ **결정론 코드** (rule-based, 매핑 테이블 사용) |
+| **3. Enricher** | leaf 단위 children/description 생성 | ✅ LLM per-section (독립 호출) |
+| **4. Validator** | 결과 검증 + reject/retry | ❌ **결정론 코드** (5개 deterministic rule) |
+
+### 핵심 원칙
+
+- **LLM은 추출(extraction)과 보강(enrichment)에만**
+- **구조(structure)는 절대 LLM에 맡기지 않음**
+- **검증(validation)은 코드 차원, 위반 시 즉시 reject**
+
+### 카테고리→섹션 매핑 테이블
+
+이 접근의 핵심 데이터. 어디서 오느냐가 결정 포인트:
+
+| 옵션 | 방식 | 장단점 |
+|---|---|---|
+| A | 사용자가 job 생성 시 직접 입력 | 가장 안전, UX 부담 |
+| B | RFP 종류별 프리셋 (Korean Gov IT 등) | 중간, 종류 제한 |
+| **C** | **1회성 LLM 호출로 derive (그 후 결정론)** | **현실적, 채택** |
+| D | RFP 본문에서 명시적 지시 자동 추출 | 가장 깔끔, fallback 필요 |
+
+**채택**: 옵션 C — 1회 LLM 호출로 매핑 결정 후, 코드가 deterministic하게 사용. RFP 종류 무관 동작 + LLM은 분류만 (구조 결정 아님).
+
+### 새 데이터 모델
+
+```java
+// 카테고리 → leaf 매핑 (1회 LLM derive)
+public record CategoryMapping(
+    Map<String, String> categoryToLeafKey  // "SFR" → "III.1"
+) {}
+
+// Planner의 출력 — 코드가 만듦, LLM 아님
+public record SectionAssignment(
+    String leafKey,
+    List<String> requirementIds,       // 이 leaf에 할당된 REQ-ID
+    List<String> mandatoryItemIds,     // 할당된 의무 항목
+    Integer weight                     // 평가 배점 (eval table 매칭)
+) {}
+
+// Validator 결과
+public record ValidationResult(
+    boolean passed,
+    List<ValidationViolation> violations
+) {}
+
+public record ValidationViolation(
+    String ruleName,
+    String severity,    // "error" | "warning"
+    String message,
+    String leafKey      // optional
+) {}
+```
+
+### 5가지 Validator 규칙
+
+1. **MIN_CHILDREN**: 모든 expanded leaf에 최소 1개 child 존재 (이번 빈 섹션 버그 차단)
+2. **REQ_COVERAGE**: 모든 추출 요구사항이 어떤 leaf의 topics에 적어도 1번 등장
+3. **REQ_UNIQUENESS**: 동일 REQ-ID가 3개 이상 leaf에 중복되지 않음
+4. **MANDATORY_SLOTS**: 모든 mandatory item이 어떤 leaf에 배치
+5. **WEIGHT_DISTRIBUTION**: leaf의 children 수가 weight 비율과 ±20% 이내
+
+### 새 파이프라인 (Phase 3 재구성)
+
+```
+Phase 1   : 고객 문서 청크 로드                  (기존)
+Phase 1.5 : 권장 목차 감지                       (기존)
+Phase 1.6 : RfpMandates 추출                     (기존)
+Phase 2   : 요구사항 추출                        (기존)
+Phase 3   : Outline 구성 (재구성)
+  Phase 3a: CategoryMapping derive (1회 LLM)    (NEW)
+  Phase 3b: RuleBasedPlanner — leaf별 SectionAssignment 생성 (NEW, 결정론)
+  Phase 3c: per-section Enricher — leaf 단위 LLM 호출로 children 생성 (NEW, 기존 expandWithStrictPlan 적응)
+  Phase 3d: OutlineValidator — 5개 룰 검사       (NEW, 결정론)
+  Phase 3e: 위반 시 focused retry 또는 graceful degradation
+```
+
+### 구현 단계 (Phase A → Phase B)
+
+**Phase A — 즉시 적용 가능한 안전 fix (1시간)**:
+1. 신규 `OutlineValidator` 클래스 + 5개 rule 메서드
+2. 인라인 safeguard: `extractWithFixedTopLevel`의 expansion loop 끝에 빈 leaf 탐지 → focused single-leaf 재확장 → 그래도 빈 채로면 placeholder
+3. `WizardAnalysisService.extractOutline()`에 Phase 3.5로 Validator 호출 (warning 로그)
+4. **이것만으로 빈 섹션 버그는 해결됨**
+
+**Phase B — 새 아키텍처 구현 (3~5시간)**:
+1. 신규 데이터 모델: `CategoryMapping`, `SectionAssignment`, `ValidationResult`, `ValidationViolation`
+2. 신규 서비스 `CategoryMappingDeriver` + 프롬프트 `generation-derive-category-mapping.txt` (1회 LLM)
+3. 신규 서비스 `RuleBasedPlanner` (결정론, LLM 없음)
+4. `expandWithStrictPlan` 시그니처 적응 — `SectionAssignment`를 받도록
+5. `WizardAnalysisService.extractOutline()` 새 파이프라인 분기 (feature flag 또는 항상)
+6. 기존 `planExpansion`, `dedupRequirementIdsInPlans` 등은 유지 (deprecated 표시)
+
+**Phase B 미구현 시**: Phase A만으로도 현재 빈 섹션 버그 해결되고 v6 수준 품질 유지. Phase B는 architectural cleanup으로 별도 작업 가능.
+
+### 예상 효과
+
+- ✅ **Hill-climbing 차단**: 구조 결정이 결정론이라 LLM attention budget 경합 없음
+- ✅ **빈 섹션 차단**: Validator의 MIN_CHILDREN 룰
+- ✅ **REQ-ID 중복 차단**: Planner가 1:1 매핑이라 원천 차단
+- ✅ **관점 충돌 차단**: 카테고리 매핑이 결정론이라 III↔IV 흔들림 없음
+- ✅ **VIII 쓰레기통 차단**: 매핑에 없는 카테고리만 VIII으로
+- ✅ **디버깅 가능**: 결정론이라 어떤 leaf에 어떤 req가 갔는지 추적 가능

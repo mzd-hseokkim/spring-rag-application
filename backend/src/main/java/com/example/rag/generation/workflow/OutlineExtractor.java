@@ -365,8 +365,132 @@ public class OutlineExtractor {
             appendToLedger(ledger, fullPath, leaf.title(), expanded.children());
         }
 
+        // Safeguard: 빈 leaf 탐지 → focused single-leaf 재확장 → 그래도 빈 채로면 placeholder
+        rescueEmptyLeaves(client, sortedLeaves, leafTitlePaths, expandedChildren, reqSuggestions, progressCallback);
+
         // 트리를 재구성: leaf 노드에 생성된 children 붙이기
         return rebuildWithChildren(topLevel, "", expandedChildren);
+    }
+
+    /**
+     * 빈 leaf safeguard.
+     *
+     * expansion 결과 children이 0개인 leaf를 발견하면:
+     * 1. focused single-leaf 재확장 LLM 호출 (간단한 prompt)
+     * 2. 그래도 0개면 placeholder children 생성 (graceful degradation)
+     *
+     * 빈 섹션이 production에 가지 않도록 보장.
+     */
+    private void rescueEmptyLeaves(ChatClient client,
+                                     List<java.util.Map.Entry<String, OutlineNode>> sortedLeaves,
+                                     java.util.Map<String, String> leafTitlePaths,
+                                     java.util.Map<String, List<OutlineNode>> expandedChildren,
+                                     String reqSuggestions,
+                                     ProgressCallback progressCallback) {
+        List<String> emptyLeafPaths = new ArrayList<>();
+        for (var entry : sortedLeaves) {
+            String fullPath = entry.getKey();
+            List<OutlineNode> children = expandedChildren.get(fullPath);
+            if (children == null || children.isEmpty()) {
+                emptyLeafPaths.add(fullPath);
+            }
+        }
+        if (emptyLeafPaths.isEmpty()) {
+            log.info("Empty leaf safeguard: no empty leaves found");
+            return;
+        }
+
+        log.warn("Empty leaf safeguard: {} empty leaves found, attempting focused re-expansion: {}",
+                emptyLeafPaths.size(), emptyLeafPaths);
+        if (progressCallback != null) {
+            progressCallback.onProgress(emptyLeafPaths.size() + "개 빈 섹션을 보강합니다...");
+        }
+
+        for (String fullPath : emptyLeafPaths) {
+            OutlineNode leaf = null;
+            for (var entry : sortedLeaves) {
+                if (entry.getKey().equals(fullPath)) {
+                    leaf = entry.getValue();
+                    break;
+                }
+            }
+            if (leaf == null) continue;
+
+            String titlePath = leafTitlePaths.getOrDefault(fullPath, "");
+            List<OutlineNode> rescued = focusedExpand(client, leaf, fullPath, titlePath, reqSuggestions);
+
+            if (rescued.isEmpty()) {
+                // 그래도 빈 채로면 placeholder
+                rescued = createPlaceholderChildren(leaf, fullPath);
+                log.warn("  rescue failed for {} — using {} placeholder children", fullPath, rescued.size());
+            } else {
+                log.info("  rescued {} with {} children via focused expansion", fullPath, rescued.size());
+            }
+            expandedChildren.put(fullPath, rescued);
+        }
+    }
+
+    /**
+     * Focused single-leaf 확장 — 한 leaf에 대해서만 간단한 prompt로 children 생성.
+     * 일반 expandSection의 multi-context prompt보다 단순하여 LLM이 빈 응답을 낼 확률이 낮다.
+     */
+    private List<OutlineNode> focusedExpand(ChatClient client, OutlineNode leaf, String fullPath,
+                                              String titlePath, String reqSuggestions) {
+        String parentLine = titlePath.isEmpty() ? "(top-level)" : titlePath;
+        String reqs = reqSuggestions != null && reqSuggestions.length() > 4_000
+                ? reqSuggestions.substring(0, 4_000) + TRUNCATION_SUFFIX
+                : (reqSuggestions != null ? reqSuggestions : "");
+
+        String prompt = """
+                다음 제안서 섹션의 하위 항목(children) 2~5개를 생성하세요.
+
+                ## 섹션
+                - key: %s
+                - title: %s
+                - description: %s
+                - 상위 경로: %s
+
+                ## 참고 요구사항 (선택, 관련 있는 것만 사용)
+                %s
+
+                ## 출력 규칙
+                - 하위 항목 2~5개 생성 (반드시 1개 이상)
+                - 각 항목은 구체적 제목 + 1~2문장 description
+                - 추상적 제목 ("기능 1", "주요 기능") 금지
+                - key는 "%s.1", "%s.2" 형식
+                - 반드시 JSON 배열로만 응답
+
+                [{"key":"%s.1","title":"구체적 제목","description":"설명","children":[]}]
+                """.formatted(fullPath, leaf.title(),
+                leaf.description() != null ? leaf.description() : "",
+                parentLine, reqs, fullPath, fullPath, fullPath);
+
+        try {
+            String content = client.prompt().user(prompt).call().content();
+            return parseOutline(content);
+        } catch (Exception e) {
+            log.warn("  focused expand LLM call failed for {}: {}", fullPath, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Placeholder children 생성 — focused expansion도 실패하면 최소 1개 placeholder.
+     * graceful degradation: 빈 섹션을 production에 보내지 않도록.
+     */
+    private List<OutlineNode> createPlaceholderChildren(OutlineNode leaf, String fullPath) {
+        List<OutlineNode> placeholders = new ArrayList<>();
+        placeholders.add(new OutlineNode(
+                fullPath + ".1",
+                leaf.title() + " — 개요",
+                "이 섹션의 개요를 작성합니다.",
+                List.of()));
+        placeholders.add(new OutlineNode(
+                fullPath + ".2",
+                leaf.title() + " — 상세 내용",
+                "이 섹션의 상세 내용을 작성합니다.",
+                List.of()));
+        return placeholders;
     }
 
     /**

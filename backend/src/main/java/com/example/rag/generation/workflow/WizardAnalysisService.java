@@ -39,6 +39,7 @@ public class WizardAnalysisService {
     private final OutlineExtractor outlineExtractor;
     private final RequirementExtractor requirementExtractor;
     private final RfpMandateExtractor rfpMandateExtractor;
+    private final OutlineValidator outlineValidator;
     private final RequirementCacheService requirementCache;
     private final RequirementMapper requirementMapper;
     private final DocumentChunkRepository chunkRepository;
@@ -50,6 +51,7 @@ public class WizardAnalysisService {
     public WizardAnalysisService(OutlineExtractor outlineExtractor,
                                  RequirementExtractor requirementExtractor,
                                  RfpMandateExtractor rfpMandateExtractor,
+                                 OutlineValidator outlineValidator,
                                  RequirementCacheService requirementCache,
                                  RequirementMapper requirementMapper,
                                  DocumentChunkRepository chunkRepository,
@@ -60,6 +62,7 @@ public class WizardAnalysisService {
         this.outlineExtractor = outlineExtractor;
         this.requirementExtractor = requirementExtractor;
         this.rfpMandateExtractor = rfpMandateExtractor;
+        this.outlineValidator = outlineValidator;
         this.requirementCache = requirementCache;
         this.requirementMapper = requirementMapper;
         this.chunkRepository = chunkRepository;
@@ -188,6 +191,27 @@ public class WizardAnalysisService {
                     eventEmitter.emitWarning(job,
                             "다음 의무 작성 항목이 목차에 포함되지 않았습니다 (" + uncovered.size() + "개): " + list);
                 }
+            }
+
+            // Phase 3.6: outline 결정론 검증 (5개 룰)
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                    "목차 품질을 검증하고 있습니다..."));
+            java.util.Set<String> allReqIds = requirements.stream()
+                    .map(Requirement::id)
+                    .collect(java.util.stream.Collectors.toSet());
+            OutlineValidator.Context validationCtx = OutlineValidator.Context.fromRfpMandates(allReqIds, rfpMandates);
+            ValidationResult validation = outlineValidator.validate(outline, validationCtx);
+            if (!validation.passed()) {
+                String errorList = validation.errors().stream()
+                        .map(v -> v.ruleName() + (v.leafKey() != null ? "(" + v.leafKey() + ")" : ""))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                log.warn("Generation job {} - outline validation FAILED: {} errors ({})",
+                        jobId, validation.errors().size(), errorList);
+                eventEmitter.emitWarning(job,
+                        "목차 검증에서 " + validation.errors().size() + "개 오류 발견: " + errorList);
+            } else if (!validation.warnings().isEmpty()) {
+                log.info("Generation job {} - outline validation passed with {} warnings",
+                        jobId, validation.warnings().size());
             }
 
             job.setOutline(outlineExtractor.toJson(outline));
