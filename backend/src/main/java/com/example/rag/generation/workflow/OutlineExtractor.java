@@ -1375,6 +1375,32 @@ public class OutlineExtractor {
     private static final int MAX_CHILDREN_PER_SECTION = 8;
 
     /**
+     * 섹션의 top-level key(I~VIII)에 따라 서술 관점(perspective)을 결정한다.
+     * III(수행계획)은 업무/사용자 관점, IV(수행기반)은 기술/구현 관점으로 분리하여
+     * 같은 요구사항이 양쪽에 배치되어도 관점이 다르게 서술되도록 한다.
+     */
+    private String getPerspective(String keyPrefix) {
+        String topLevel = keyPrefix.contains(".") ? keyPrefix.substring(0, keyPrefix.indexOf('.')) : keyPrefix;
+        String subKey = keyPrefix.contains(".") ? keyPrefix.substring(keyPrefix.indexOf('.') + 1) : "";
+        return switch (topLevel.toUpperCase()) {
+            case "I" -> "사실 기반 서술: 회사 현황, 조직, 실적을 객관적 사실 위주로 작성";
+            case "II" -> (subKey.startsWith("1") || subKey.startsWith("2"))
+                    ? "전략적 방향(WHY/WHAT): '왜' 이 전략이 필요한지, '무엇을' 달성할지 서술. 구현 상세나 프로세스 설명 금지. II.4(방법론)와 중복 금지"
+                    : "실행 방법론(HOW): '어떻게' 실행할지 프로세스와 체계를 서술. II.2(전략)에서 이미 다룬 전략 방향을 반복하지 말 것";
+            case "III" -> "업무/사용자 관점(WHAT): 사용자가 체감하는 기능·서비스·결과물을 서술. " +
+                    "기술 구현 용어(에이전틱 AI, 오케스트레이션, RAG, 벡터DB 등) 사용 금지. " +
+                    "대신 '법령 검색', '요약 제공', '맞춤 추천', '검색 정확도 관리' 같은 업무 언어 사용. " +
+                    "IV(수행기반)에서 다룰 기술 상세와 중복되지 않도록 주의";
+            case "IV" -> "기술/구현 관점(HOW): 기술 아키텍처, 솔루션, 구현 방법을 서술. " +
+                    "III(수행계획)에서 이미 다룬 업무 기능 설명을 반복하지 말 것. " +
+                    "이 섹션은 '그 기능을 어떤 기술로 구현하는가'에 집중";
+            case "V" -> "관리 프로세스 관점: 표준 프로젝트 관리 방법론(일정/품질/보안/위험) 적용. 간결하게 서술";
+            case "VI", "VII", "VIII" -> "지원/행정 관점: 인수인계, 교육, 하도급 등 표준 절차. 다른 챕터의 내용을 반복하지 말 것";
+            default -> "";
+        };
+    }
+
+    /**
      * topics가 MAX_CHILDREN_PER_SECTION을 초과할 때, LLM에게 유사 주제를 통합하여
      * 수 자체를 줄이도록 요청한다. 통합 후 기존 expandWithStrictPlan 로직 사용.
      */
@@ -1385,28 +1411,34 @@ public class OutlineExtractor {
             topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
         }
 
+        String perspective = getPerspective(keyPrefix);
+
         String prompt = """
                 다음 %d개의 하위 항목을 **최대 %d개의 핵심 주제로 통합**하세요.
 
                 ## 상위 섹션: %s > %s
 
+                ## 이 섹션의 서술 관점 (반드시 준수)
+                %s
+
                 ## 통합할 항목들
                 %s
                 ## 규칙
                 1. 의미적으로 유사하거나 밀접한 항목들을 하나의 주제로 통합
-                2. 통합된 주제의 제목은 포함된 항목들의 공통 주제를 반영
+                2. 통합된 주제의 제목은 **위 서술 관점에 맞는 언어**로 작성. 다른 챕터에서 다룰 관점의 용어는 사용 금지
                 3. 각 항목에 포함된 요구사항 ID (SFR-xxx, NFR-xxx 등)는 통합 주제 뒤에 괄호로 모두 나열
-                   예: "법령정보 통합 검색 (SFR-001, SFR-002, SFR-003)"
                 4. 어떤 항목도 누락하지 마세요 — 모든 원본 항목이 하나의 통합 주제에 포함되어야 합니다
                 5. 최소 3개, 최대 %d개 주제로 통합
-                6. **주제 제목만 출력하세요. 설명, 메모, 경고(⚠️), 구분선(---), 검토 의견 등은 절대 포함하지 마세요**
+                6. "~전략 및 목표" 같은 기계적 패턴 제목 금지. 구체적이고 차별화된 제목 사용
+                7. **주제 제목만 출력하세요. 설명, 메모, 경고(⚠️), 구분선(---), 검토 의견 등은 절대 포함하지 마세요**
 
                 ## 출력 형식 (한 줄에 하나씩, 번호 없이 제목만)
                 통합 주제 제목 1 (REQ-IDs)
                 통합 주제 제목 2 (REQ-IDs)
                 ...
                 """.formatted(topics.size(), MAX_CHILDREN_PER_SECTION,
-                keyPrefix, topSection.title(), topicList, MAX_CHILDREN_PER_SECTION);
+                keyPrefix, topSection.title(),
+                perspective, topicList, MAX_CHILDREN_PER_SECTION);
 
         String content;
         try {
@@ -1508,6 +1540,7 @@ public class OutlineExtractor {
         }
 
         String parentLine = titlePath.isEmpty() ? topSection.title() : titlePath + " > " + topSection.title();
+        String perspective = getPerspective(keyPrefix);
         String grandPart = needsGrandchildren
                 ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
@@ -1521,12 +1554,16 @@ public class OutlineExtractor {
                 - title: %s
                 - 상위 경로: %s
 
+                ## 이 섹션의 서술 관점 (description 작성 시 반드시 준수)
+                %s
+
                 ## 확정된 children (key/title 변경 금지!)
                 %s
                 %s
                 ## 작업
                 각 child에 대해:
-                - description: 1~3문장으로 해당 주제가 어떤 내용을 다룰지 설명
+                - description: 1~3문장으로 **위 서술 관점에 맞게** 해당 주제가 어떤 내용을 다룰지 설명
+                - "~전략 및 목표", "~개요 및 방향" 같은 기계적 패턴의 description 금지. 구체적 내용 중심으로 작성
                 %s
                 - title은 위 목록 그대로 사용 (절대 변경 금지)
                 - key는 위 목록 그대로 사용 (절대 변경 금지)
@@ -1536,7 +1573,8 @@ public class OutlineExtractor {
                 [
                   {"key":"<위 그대로>","title":"<위 그대로>","description":"...","children":[]}
                 ]
-                """.formatted(keyPrefix, topSection.title(), parentLine, skeletonText, mandatoryText, grandPart);
+                """.formatted(keyPrefix, topSection.title(), parentLine, perspective,
+                skeletonText, mandatoryText, grandPart);
 
         String content;
         try {
