@@ -1458,6 +1458,33 @@ public class OutlineExtractor {
                 || lower.contains("검토 필요") || t.startsWith("---") || t.startsWith("※") || t.startsWith(">");
     }
 
+    /**
+     * WHAT role description에서 영문 기술명/제품명을 제거하는 후처리.
+     * LLM이 프롬프트 금지 규칙을 무시하고 기술명을 넣었을 때의 최후 방어선.
+     * "Elasticsearch를 활용하여" → "를 활용하여" 같은 어색함이 생길 수 있으나,
+     * 기술명이 제안서 수행계획에 노출되는 것보다 나음.
+     */
+    private String stripTechTermsFromDescription(String desc) {
+        if (desc == null || desc.isBlank()) return desc;
+        // 영문 대문자로 시작하는 2글자 이상 연속 영문 단어 제거 (REQ-ID 패턴 제외)
+        // 예: Elasticsearch, Redis, Kubernetes, Apache Airflow, Neo4j, GPT-4o
+        String cleaned = desc
+                .replaceAll("\\b[A-Z][a-zA-Z0-9]*(?:[- ][A-Z][a-zA-Z0-9]*)*\\b", "")
+                // 소문자 기술 약어 제거: kNN, vLLM, k6, nGrinder 등
+                .replaceAll("\\b[a-z][A-Z][a-zA-Z0-9]*\\b", "")
+                // 전부 대문자인 약어 제거 (3글자+): ETL, SSE, HPA, CDC, FAISS 등 (REQ/SFR/NFR 제외)
+                .replaceAll("\\b(?!REQ|SFR|NFR|DAR|PER|IFR|SER|COR|MAND)[A-Z]{3,}\\b", "")
+                // 남은 빈 괄호, 이중 공백 정리
+                .replaceAll("\\(\\s*\\)", "")
+                .replaceAll("\\s{2,}", " ")
+                .trim();
+        if (!cleaned.equals(desc.trim())) {
+            log.debug("Stripped tech terms from WHAT description: '{}' → '{}'",
+                    desc.substring(0, Math.min(desc.length(), 60)), cleaned.substring(0, Math.min(cleaned.length(), 60)));
+        }
+        return cleaned;
+    }
+
     /** title에서 LLM이 남긴 내부 참조 아티팩트를 제거. 예: "(5.2)", "(REF-3)" */
     private String cleanTitleArtifacts(String title) {
         if (title == null) return title;
@@ -1737,9 +1764,20 @@ public class OutlineExtractor {
 
         String parentLine = titlePath.isEmpty() ? topSection.title() : titlePath + " > " + topSection.title();
         String perspective = getPerspective(plan.role(), topSection.title());
+        boolean isWhatRole = "WHAT".equals(plan.role());
         String grandPart = needsGrandchildren
                 ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
+        String descriptionConstraint = isWhatRole
+                ? "- ⚠️ 영문 기술명/제품명/프레임워크명/도구명/알고리즘명을 description에 절대 포함하지 마세요\n" +
+                  "  이 규칙은 데이터·성능·인터페이스 등 기술과 가까운 주제에서도 동일하게 적용됩니다\n" +
+                  "  ❌ \"Elasticsearch와 Weaviate를 활용하여 하이브리드 검색 체계를 구축\"\n" +
+                  "  ✅ \"키워드 검색과 의미 검색을 결합하여 사용자 질의에 가장 관련성 높은 결과를 제공\"\n" +
+                  "  ❌ \"ETL 파이프라인과 Apache Atlas로 메타데이터를 관리\"\n" +
+                  "  ✅ \"데이터 수집·정제·적재 체계를 구축하고 메타데이터를 체계적으로 관리\"\n" +
+                  "  ❌ \"Kubernetes HPA로 자동 확장하고 Prometheus로 모니터링\"\n" +
+                  "  ✅ \"트래픽 증가 시 자동으로 확장되어 응답 지연 없이 서비스를 유지하고 자원 현황을 상시 감시\""
+                : "";
 
         String prompt = """
                 다음 섹션의 children 구성이 이미 확정되어 있습니다.
@@ -1758,7 +1796,8 @@ public class OutlineExtractor {
                 %s
                 ## 작업
                 각 child에 대해:
-                - description: 1~3문장으로 **위 서술 관점에 맞게** 해당 주제가 어떤 내용을 다룰지 설명
+                - description: 1~3문장으로 해당 주제가 어떤 내용을 다룰지 설명
+                %s
                 - "~전략 및 목표", "~개요 및 방향" 같은 기계적 패턴의 description 금지. 구체적 내용 중심으로 작성
                 %s
                 - title은 위 목록 그대로 사용 (절대 변경 금지)
@@ -1771,7 +1810,7 @@ public class OutlineExtractor {
                 ]
                 """.formatted(keyPrefix, topSection.title(), parentLine, perspective,
                 siblingContext.isBlank() ? "" : "\n## 형제 섹션 (이 섹션과 중복되는 내용을 넣지 마세요)\n" + siblingContext,
-                skeletonText, mandatoryText, grandPart);
+                skeletonText, mandatoryText, descriptionConstraint, grandPart);
 
         String content;
         try {
@@ -1806,6 +1845,11 @@ public class OutlineExtractor {
                     ? llmMatch.description() : "";
             List<OutlineNode> grandchildren = (llmMatch != null && llmMatch.children() != null)
                     ? llmMatch.children() : List.of();
+
+            // WHAT role이면 description에서 영문 기술명 제거 (후처리 방어선)
+            if (isWhatRole) {
+                llmDescription = stripTechTermsFromDescription(llmDescription);
+            }
 
             // REQ-ID가 있으면 description 앞에 프리픽스 추가 (목차 가독성 향상)
             String description = llmDescription;
