@@ -156,7 +156,7 @@ public class OutlineExtractor {
                 없다면: "없음"이라고만 답하세요.
 
                 출력 형식 예시 (로마숫자 문서):
-                [{"key":"I","title":"일반현황","description":"","children":[{"key":"I.1","title":"제안사 일반현황","description":"","children":[]},{"key":"I.2","title":"제안사의 조직 및 인원","description":"","children":[]}]}]
+                [{"key":"I","title":"첫 번째 대분류","description":"","children":[{"key":"I.1","title":"첫 번째 중분류","description":"","children":[]},{"key":"I.2","title":"두 번째 중분류","description":"","children":[]}]}]
 
                 ## 문서 내용
                 %s
@@ -1051,7 +1051,7 @@ public class OutlineExtractor {
 
                 ## 출력 규칙
                 - 각 요구사항이 어떤 섹션에 들어가야 하는지 구체적으로 제안
-                - 섹션 제목은 구체적으로 (예: "에이전틱 AI 질의 의도 분석", "법령 메타데이터 자동분류")
+                - 섹션 제목은 구체적으로 (예: "사용자 질의 분석 및 응답 생성", "데이터 자동 분류 체계 구축")
                 - "기능 1", "모듈 A" 같은 추상적 제목 금지
                 - 관련 요구사항을 그룹핑하여 대분류 > 중분류 > 소분류 구조로 제안
                 - 텍스트로 자유롭게 응답 (JSON 불필요)
@@ -1731,12 +1731,12 @@ public class OutlineExtractor {
                 3. 기술명이 제목에 하나라도 남으면 실패입니다
 
                 변환 예시:
-                - "Elasticsearch 기반 법령 검색 인덱스 구축 (DAR-003)" → "법령 본문 검색 체계 구축 (DAR-003)"
+                - "Elasticsearch 기반 검색 인덱스 구축 (DAR-003)" → "본문 검색 체계 구축 (DAR-003)"
                 - "ETL 파이프라인 설계 및 구현 (DAR-005)" → "데이터 수집·정제·적재 체계 설계 (DAR-005)"
                 - "Redis 캐싱 기반 응답 속도 최적화 (PER-002)" → "응답 속도 목표 달성 방안 (PER-002)"
                 - "Kubernetes HPA 기반 자동 확장 (PER-004)" → "트래픽 증가 시 자동 확장 체계 (PER-004)"
                 - "Great Expectations 기반 데이터 품질 검증" → "데이터 품질 검증 기준 및 절차"
-                - "Neo4j 기반 법령 관계 그래프 구축" → "법령 간 관계 구조 구축 및 탐색 체계"
+                - "Neo4j 기반 관계 그래프 구축" → "데이터 간 관계 구조 구축 및 탐색 체계"
 
                 ## 출력 형식 (한 줄에 하나씩, 번호 없이 제목만)
                 """.formatted(topics.size(), keyPrefix, topSection.title(), topicList);
