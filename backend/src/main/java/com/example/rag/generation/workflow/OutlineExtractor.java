@@ -1837,7 +1837,7 @@ public class OutlineExtractor {
         String perspective = getPerspective(plan.role(), topSection.title());
         boolean isWhatRole = "WHAT".equals(plan.role());
         String grandPart = needsGrandchildren
-                ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로)"
+                ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로, 각 grandchild에도 description 1~2문장 필수)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
         String descriptionConstraint = isWhatRole
                 ? "- ⚠️ 영문 기술명/제품명/프레임워크명/도구명/알고리즘명을 description에 절대 포함하지 마세요\n" +
