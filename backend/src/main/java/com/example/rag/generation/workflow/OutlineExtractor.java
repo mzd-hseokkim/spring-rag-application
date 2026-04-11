@@ -1204,7 +1204,7 @@ public class OutlineExtractor {
                 %s""".formatted(siblingContext);
         String expandPrompt = """
                 다음 제안서 항목의 하위 목차(중분류, 소분류)를 구성하세요.
-                이 제안서는 **프레젠테이션형 문서**이므로 하나의 리프 항목 = 하나의 장표(슬라이드)입니다.
+                하나의 리프 항목은 제안서의 한 페이지 분량에 해당합니다.
 
                 ## 상위 항목
                 - key: %s
@@ -1390,14 +1390,18 @@ public class OutlineExtractor {
                     "기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다";
             case "WHAT" -> "업무/사용자 관점 — '무엇을 달성하는가'에 집중:\n" +
                     "- 사용자가 체감하는 기능·서비스·결과물·목표 수치를 서술\n" +
-                    "- ⛔ 기술 구현 용어 절대 금지 (title과 description 모두): 프레임워크명, 알고리즘명, 인프라 용어, " +
-                    "DB 엔진명, 라이브러리명, 클라우드 서비스명, 모니터링 도구명\n" +
-                    "- ⛔ 성능 섹션이라도 구현 수단 금지: 도구명(Redis, Kubernetes, Prometheus, nGrinder 등), " +
-                    "기술 파라미터(HNSW, HPA, 커넥션 풀, JVM 힙 등), 클라우드 인스턴스명(EC2, GPU 노드 등) 대신 " +
-                    "'응답시간 N초 이내', '동시 N명 수용', '가용성 N%' 같은 목표 수치와 측정 기준만 기술\n" +
-                    "- ✅ 업무 언어만 사용: 검색, 조회, 추천, 관리, 보호, 제공, 지원, 통제, 확인, 응답, 처리, 수용 등\n" +
+                    "- ⛔ 기술 구현 용어 절대 금지 (title과 description 모두)\n" +
                     "- '어떻게 구현하는가'는 별도의 기술 구현 섹션(HOW-tech)에서 다루므로 여기서 쓰지 마세요\n" +
-                    "- 기술명이 title이나 description에 하나라도 들어가면 실패입니다";
+                    "- 기술명이 title이나 description에 하나라도 들어가면 실패입니다\n\n" +
+                    "description 작성 예시 (반드시 이 패턴을 따르세요):\n" +
+                    "❌ \"Elasticsearch와 Nori 형태소 분석기를 활용하여 법령 전문을 색인하고 BM25 기반으로 검색\"\n" +
+                    "✅ \"법령 본문을 형태소 단위로 분석하여 정확한 검색 결과를 제공하고, 관련성 높은 순서로 결과를 정렬\"\n" +
+                    "❌ \"ETL 파이프라인을 구축하여 Apache Atlas로 메타데이터를 관리하고 CDC로 실시간 동기화\"\n" +
+                    "✅ \"데이터 수집·정제·적재 체계를 구축하고, 메타데이터를 체계적으로 관리하며, 변경 사항을 실시간으로 반영\"\n" +
+                    "❌ \"Kubernetes HPA와 Auto Scaling으로 GPU 노드를 자동 확장하고 Prometheus로 모니터링\"\n" +
+                    "✅ \"트래픽 증가 시 처리 용량이 자동으로 확장되어 응답 지연 없이 서비스를 유지하고, 자원 사용 현황을 상시 감시\"\n" +
+                    "❌ \"JMeter와 Gatling으로 부하 테스트를 수행하고 Grafana 대시보드로 성능 추이를 분석\"\n" +
+                    "✅ \"목표 동시접속자 수 기준으로 부하 검증을 수행하고, 성능 추이를 지속적으로 모니터링\"";
             case "HOW-tech" -> "기술/구현 관점 — '어떻게 구현하는가'에 집중:\n" +
                     "- 기술 아키텍처, 프레임워크, 알고리즘, 인프라 구성을 구체적으로 서술\n" +
                     "- WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것\n" +
@@ -1468,7 +1472,9 @@ public class OutlineExtractor {
                 || desc.contains("해당 섹션으로 이관")) {
             return "";
         }
-        return desc;
+        // "~를 제시하는 슬라이드" → "~를 제시" 치환
+        return desc.replaceAll("(?:를 |을 )?제시하는 슬라이드", "를 제시")
+                   .replaceAll("슬라이드", "페이지");
     }
 
     /**
@@ -1486,23 +1492,61 @@ public class OutlineExtractor {
 
     private List<OutlineNode> mergeByTitle(List<OutlineNode> children) {
         if (children == null || children.size() <= 1) return children;
-        java.util.Map<String, OutlineNode> seen = new java.util.LinkedHashMap<>();
+        List<OutlineNode> result = new ArrayList<>();
         for (OutlineNode child : children) {
-            String normalizedTitle = child.title().trim().toLowerCase();
-            if (seen.containsKey(normalizedTitle)) {
-                OutlineNode existing = seen.get(normalizedTitle);
-                // 두 노드의 children을 합치고, description은 긴 쪽 유지
-                List<OutlineNode> mergedChildren = new ArrayList<>(existing.children());
-                mergedChildren.addAll(child.children());
-                String mergedDesc = (existing.description() != null && existing.description().length() >= (child.description() != null ? child.description().length() : 0))
-                        ? existing.description() : child.description();
-                seen.put(normalizedTitle, new OutlineNode(existing.key(), existing.title(), mergedDesc, mergedChildren));
-                log.info("Deduplicated outline node: '{}' (merged {} into {})", child.title(), child.key(), existing.key());
-            } else {
-                seen.put(normalizedTitle, child);
+            boolean merged = false;
+            for (int i = 0; i < result.size(); i++) {
+                if (areSimilarTitles(result.get(i).title(), child.title())) {
+                    OutlineNode existing = result.get(i);
+                    List<OutlineNode> mergedChildren = new ArrayList<>(existing.children());
+                    mergedChildren.addAll(child.children());
+                    String mergedDesc = (existing.description() != null && existing.description().length() >= (child.description() != null ? child.description().length() : 0))
+                            ? existing.description() : child.description();
+                    result.set(i, new OutlineNode(existing.key(), existing.title(), mergedDesc, mergedChildren));
+                    log.info("Deduplicated outline node: '{}' ≈ '{}' (merged {} into {})",
+                            child.title(), existing.title(), child.key(), existing.key());
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged) {
+                result.add(child);
             }
         }
-        return new ArrayList<>(seen.values());
+        return result;
+    }
+
+    /** 두 제목이 사실상 같은 주제인지 판단. 완전 일치 또는 핵심 단어 80%+ 겹침. */
+    private boolean areSimilarTitles(String a, String b) {
+        if (a == null || b == null) return false;
+        String na = a.trim().toLowerCase();
+        String nb = b.trim().toLowerCase();
+        if (na.equals(nb)) return true;
+
+        // 핵심 단어 추출 (조사/접속사 제거)
+        java.util.Set<String> wordsA = extractKeyWords(na);
+        java.util.Set<String> wordsB = extractKeyWords(nb);
+        if (wordsA.isEmpty() || wordsB.isEmpty()) return false;
+
+        // 교집합 비율
+        java.util.Set<String> intersection = new java.util.HashSet<>(wordsA);
+        intersection.retainAll(wordsB);
+        double overlapA = (double) intersection.size() / wordsA.size();
+        double overlapB = (double) intersection.size() / wordsB.size();
+        return overlapA >= 0.8 || overlapB >= 0.8;
+    }
+
+    private java.util.Set<String> extractKeyWords(String title) {
+        java.util.Set<String> stopWords = java.util.Set.of(
+                "및", "의", "를", "을", "에", "과", "와", "한", "된", "기반", "통한", "위한", "대한", "관련");
+        java.util.Set<String> words = new java.util.HashSet<>();
+        for (String word : title.split("[\\s·,/]+")) {
+            String w = word.trim();
+            if (w.length() >= 2 && !stopWords.contains(w)) {
+                words.add(w);
+            }
+        }
+        return words;
     }
 
     /**
