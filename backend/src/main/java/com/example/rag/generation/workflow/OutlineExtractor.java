@@ -1796,12 +1796,15 @@ public class OutlineExtractor {
             skeletonReqIds.add(parsed.reqIds);
         }
 
-        // 배점에 따라 grandchildren 필요 여부 결정
+        // grandchildren 필요 여부 결정: 배점 10%+ 또는 HOW-tech role (기술 심화 필요)
         boolean needsGrandchildren = false;
         Integer totalScore = rfpMandates != null ? rfpMandates.totalScore() : null;
         if (plan.hasWeight() && totalScore != null && totalScore > 0) {
             double pct = (plan.weight() * 100.0) / totalScore;
             needsGrandchildren = pct >= 10.0;
+        }
+        if ("HOW-tech".equals(plan.role()) || "CTRL-tech".equals(plan.role())) {
+            needsGrandchildren = true;
         }
 
         // 의무 항목 텍스트
