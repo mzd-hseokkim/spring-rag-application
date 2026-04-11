@@ -1436,10 +1436,11 @@ public class OutlineExtractor {
                 log.info("Filtered meta node: key={}, title={}", n.key(), n.title());
                 continue;
             }
-            // description에서도 메타 텍스트 제거
+            // title에서 아티팩트 제거, description에서 메타 텍스트 제거
+            String cleanTitle = cleanTitleArtifacts(n.title());
             String cleanDesc = cleanMetaDescription(n.description());
             List<OutlineNode> cleanChildren = filterMetaNodes(n.children());
-            filtered.add(new OutlineNode(n.key(), n.title(), cleanDesc, cleanChildren));
+            filtered.add(new OutlineNode(n.key(), cleanTitle, cleanDesc, cleanChildren));
         }
         return filtered;
     }
@@ -1451,6 +1452,13 @@ public class OutlineExtractor {
         return lower.contains("재정리") || lower.contains("이관 항목") || lower.contains("다루지 않는다")
                 || lower.contains("중복 제거 후") || lower.contains("최종)") || lower.contains("형제 섹션")
                 || lower.contains("검토 필요") || t.startsWith("---") || t.startsWith("※") || t.startsWith(">");
+    }
+
+    /** title에서 LLM이 남긴 내부 참조 아티팩트를 제거. 예: "(5.2)", "(REF-3)" */
+    private String cleanTitleArtifacts(String title) {
+        if (title == null) return title;
+        // (숫자.숫자) 또는 (숫자) 패턴 제거
+        return title.replaceAll("\\s*\\(\\d+(\\.\\d+)?\\)\\s*", " ").trim();
     }
 
     private String cleanMetaDescription(String desc) {
@@ -1555,7 +1563,10 @@ public class OutlineExtractor {
                 %s
                 ## 규칙
                 1. 의미적으로 유사하거나 밀접한 항목들을 하나의 주제로 통합
-                2. 통합된 주제의 제목은 **위 서술 관점에 맞는 언어**로 작성. 다른 챕터에서 다룰 관점의 용어는 사용 금지
+                2. 통합된 주제의 제목은 **원본 항목의 기술 용어를 그대로 복사하지 말고, 위 서술 관점에 맞는 언어로 완전히 재표현**하세요
+                   - 예: "벡터 DB 기반 검색 최적화" → "검색 응답시간 단축 및 정확도 향상"
+                   - 예: "Kubernetes HPA 기반 자동 확장" → "트래픽 증가 시 서비스 용량 자동 확장"
+                   - 예: "Redis 캐싱 및 nGrinder 부하 테스트" → "응답 속도 목표 달성 및 부하 검증"
                 3. **형제 섹션에서 다룰 내용은 이 섹션의 통합 주제에 포함하지 마세요** (위 형제 섹션 목록 참고)
                 4. 각 항목에 포함된 요구사항 ID (SFR-xxx, NFR-xxx 등)는 통합 주제 뒤에 괄호로 모두 나열
                 5. 어떤 항목도 누락하지 마세요 — 모든 원본 항목이 하나의 통합 주제에 포함되어야 합니다
