@@ -1705,6 +1705,71 @@ public class OutlineExtractor {
         return consolidated;
     }
 
+    /**
+     * WHAT role의 topics를 업무 언어로 재표현한다 (통합 없이 같은 수 유지).
+     * consolidateTopics()는 topics > 8일 때만 호출되므로, 8 이하인 III.2/III.3에서
+     * 원본 요구사항 item의 기술 용어가 그대로 skeleton에 유지되는 문제를 해결한다.
+     */
+    private List<String> rewriteTopicsForWhatRole(ChatClient client, OutlineNode topSection,
+                                                    String keyPrefix, List<String> topics) {
+        StringBuilder topicList = new StringBuilder();
+        for (int i = 0; i < topics.size(); i++) {
+            topicList.append(i + 1).append(". ").append(topics.get(i)).append("\n");
+        }
+
+        String prompt = """
+                다음 %d개의 주제 제목에서 **기술 구현 용어를 업무/사용자 언어로 변환**하세요.
+                주제 수는 그대로 유지하고, 제목만 재표현합니다.
+
+                ## 상위 섹션: %s > %s (업무/사용자 관점 섹션)
+
+                ## 변환할 주제들
+                %s
+                ## 변환 규칙
+                1. 각 주제의 의미는 유지하되, 기술 구현 용어를 업무 목표 언어로 바꾸세요
+                2. 요구사항 ID (SFR-xxx, REQ-xxx 등)는 그대로 유지
+                3. 기술명이 제목에 하나라도 남으면 실패입니다
+
+                변환 예시:
+                - "Elasticsearch 기반 법령 검색 인덱스 구축 (DAR-003)" → "법령 본문 검색 체계 구축 (DAR-003)"
+                - "ETL 파이프라인 설계 및 구현 (DAR-005)" → "데이터 수집·정제·적재 체계 설계 (DAR-005)"
+                - "Redis 캐싱 기반 응답 속도 최적화 (PER-002)" → "응답 속도 목표 달성 방안 (PER-002)"
+                - "Kubernetes HPA 기반 자동 확장 (PER-004)" → "트래픽 증가 시 자동 확장 체계 (PER-004)"
+                - "Great Expectations 기반 데이터 품질 검증" → "데이터 품질 검증 기준 및 절차"
+                - "Neo4j 기반 법령 관계 그래프 구축" → "법령 간 관계 구조 구축 및 탐색 체계"
+
+                ## 출력 형식 (한 줄에 하나씩, 번호 없이 제목만)
+                """.formatted(topics.size(), keyPrefix, topSection.title(), topicList);
+
+        String content;
+        try {
+            content = client.prompt().user(prompt).call().content();
+        } catch (Exception e) {
+            log.warn("WHAT role topic rewrite failed for {}, using originals: {}", keyPrefix, e.getMessage());
+            return topics;
+        }
+
+        List<String> rewritten = java.util.Arrays.stream(content.split("\n"))
+                .map(String::trim)
+                .filter(s -> !s.isBlank() && !s.startsWith("#") && !s.startsWith("```"))
+                .filter(s -> !s.startsWith("---") && !s.startsWith("※") && !s.startsWith(">"))
+                .filter(s -> !s.contains("⚠") && !s.contains("재정리") && !s.contains("최종)"))
+                .map(s -> s.replaceFirst("^\\d+\\.\\s*", ""))
+                .map(s -> s.replaceFirst("^[-*]\\s+", ""))
+                .filter(s -> s.length() >= 4)
+                .toList();
+
+        if (rewritten.isEmpty() || rewritten.size() != topics.size()) {
+            // 수가 안 맞으면 원본 유지 (안전 fallback)
+            log.warn("WHAT topic rewrite returned {} items (expected {}), using originals",
+                    rewritten.size(), topics.size());
+            return topics;
+        }
+
+        log.info("WHAT topic rewrite '{}' (path={}): {} topics rewritten", topSection.title(), keyPrefix, rewritten.size());
+        return rewritten;
+    }
+
     private OutlineNode expandWithStrictPlan(ChatClient client, OutlineNode topSection,
                                               String keyPrefix, String titlePath,
                                               ExpansionPlan plan, RfpMandates rfpMandates,
@@ -1714,6 +1779,9 @@ public class OutlineExtractor {
         // children이 MAX를 초과하면 유사 주제를 통합하여 수를 줄임
         if (topics.size() > MAX_CHILDREN_PER_SECTION) {
             topics = consolidateTopics(client, topSection, keyPrefix, topics, siblingContext, plan.role());
+        } else if ("WHAT".equals(plan.role())) {
+            // WHAT role은 topics 수와 무관하게 기술 용어를 업무 언어로 재표현
+            topics = rewriteTopicsForWhatRole(client, topSection, keyPrefix, topics);
         }
 
         // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
