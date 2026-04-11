@@ -384,7 +384,9 @@ public class OutlineExtractor {
 
         // 트리를 재구성: leaf 노드에 생성된 children 붙이기
         List<OutlineNode> result = rebuildWithChildren(topLevel, "", expandedChildren);
-        return filterMetaNodes(result);
+        result = filterMetaNodes(result);
+        result = deduplicateTitles(result);
+        return result;
     }
 
     /**
@@ -1387,12 +1389,15 @@ public class OutlineExtractor {
             case "WHY" -> "사실/배경 기반 서술: 회사 현황, 사업 배경, 추진 필요성 등을 객관적으로 작성. " +
                     "기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다";
             case "WHAT" -> "업무/사용자 관점 — '무엇을 달성하는가'에 집중:\n" +
-                    "- 사용자가 체감하는 기능·서비스·결과물을 서술\n" +
-                    "- ⛔ 기술 구현 용어 절대 금지: 프레임워크명, 알고리즘명, 인프라 용어, DB 엔진명, " +
-                    "라이브러리명(예: pgvector, Weaviate, Redis, Kubernetes, HNSW, ETL, CDC 등)\n" +
-                    "- ✅ 업무 언어만 사용: 검색, 조회, 추천, 관리, 보호, 제공, 지원, 통제, 확인 등\n" +
+                    "- 사용자가 체감하는 기능·서비스·결과물·목표 수치를 서술\n" +
+                    "- ⛔ 기술 구현 용어 절대 금지 (title과 description 모두): 프레임워크명, 알고리즘명, 인프라 용어, " +
+                    "DB 엔진명, 라이브러리명, 클라우드 서비스명, 모니터링 도구명\n" +
+                    "- ⛔ 성능 섹션이라도 구현 수단 금지: 도구명(Redis, Kubernetes, Prometheus, nGrinder 등), " +
+                    "기술 파라미터(HNSW, HPA, 커넥션 풀, JVM 힙 등), 클라우드 인스턴스명(EC2, GPU 노드 등) 대신 " +
+                    "'응답시간 N초 이내', '동시 N명 수용', '가용성 N%' 같은 목표 수치와 측정 기준만 기술\n" +
+                    "- ✅ 업무 언어만 사용: 검색, 조회, 추천, 관리, 보호, 제공, 지원, 통제, 확인, 응답, 처리, 수용 등\n" +
                     "- '어떻게 구현하는가'는 별도의 기술 구현 섹션(HOW-tech)에서 다루므로 여기서 쓰지 마세요\n" +
-                    "- description에도 동일 규칙 적용 — 기술명이 하나라도 들어가면 실패입니다";
+                    "- 기술명이 title이나 description에 하나라도 들어가면 실패입니다";
             case "HOW-tech" -> "기술/구현 관점 — '어떻게 구현하는가'에 집중:\n" +
                     "- 기술 아키텍처, 프레임워크, 알고리즘, 인프라 구성을 구체적으로 서술\n" +
                     "- WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것\n" +
@@ -1456,6 +1461,40 @@ public class OutlineExtractor {
             return "";
         }
         return desc;
+    }
+
+    /**
+     * 같은 parent 아래에서 제목이 동일하거나 매우 유사한 노드를 통합한다.
+     * LLM의 lost-in-the-middle 현상으로 같은 제목의 노드를 2번 생성하는 경우 방지.
+     */
+    private List<OutlineNode> deduplicateTitles(List<OutlineNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) return nodes;
+        return nodes.stream()
+                .map(n -> new OutlineNode(n.key(), n.title(), n.description(), deduplicateTitles(n.children())))
+                .collect(java.util.stream.Collectors.collectingAndThen(
+                        java.util.stream.Collectors.toList(),
+                        this::mergeByTitle));
+    }
+
+    private List<OutlineNode> mergeByTitle(List<OutlineNode> children) {
+        if (children == null || children.size() <= 1) return children;
+        java.util.Map<String, OutlineNode> seen = new java.util.LinkedHashMap<>();
+        for (OutlineNode child : children) {
+            String normalizedTitle = child.title().trim().toLowerCase();
+            if (seen.containsKey(normalizedTitle)) {
+                OutlineNode existing = seen.get(normalizedTitle);
+                // 두 노드의 children을 합치고, description은 긴 쪽 유지
+                List<OutlineNode> mergedChildren = new ArrayList<>(existing.children());
+                mergedChildren.addAll(child.children());
+                String mergedDesc = (existing.description() != null && existing.description().length() >= (child.description() != null ? child.description().length() : 0))
+                        ? existing.description() : child.description();
+                seen.put(normalizedTitle, new OutlineNode(existing.key(), existing.title(), mergedDesc, mergedChildren));
+                log.info("Deduplicated outline node: '{}' (merged {} into {})", child.title(), child.key(), existing.key());
+            } else {
+                seen.put(normalizedTitle, child);
+            }
+        }
+        return new ArrayList<>(seen.values());
     }
 
     /**
