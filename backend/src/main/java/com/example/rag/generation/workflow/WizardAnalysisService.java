@@ -90,129 +90,41 @@ public class WizardAnalysisService {
             log.info("Generation job {} - loaded {} total chunks from {} customer documents",
                     jobId, customerChunks.size(), customerDocIds.size());
 
-            // Phase 1.5: 권장 목차 감지 (키워드 필터링 → LLM 추출)
-            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "권장 목차를 확인하고 있습니다..."));
-            String recommendedOutline = outlineExtractor.detectRecommendedOutline(customerDocIds);
-            if (recommendedOutline != null) {
-                log.info("Generation job {} - recommended outline detected ({}chars)", jobId, recommendedOutline.length());
-                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "발주처 권장 목차를 발견했습니다. 이를 기준으로 목차를 구성합니다."));
-            } else {
-                log.info("Generation job {} - no recommended outline found, using standard structure", jobId);
-            }
+            // Phase 1.5: 권장 목차 감지
+            String recommendedOutline = detectRecommendedOutline(job, jobId, customerDocIds);
 
-            // Phase 1.6: RFP 의무 작성 항목 + 평가 배점표 추출 (재사용 또는 신규)
-            RfpMandates rfpMandates = dataParser.parseRfpMandatesFromMapping(job.getRequirementMapping());
-            boolean mandatesFresh = false;
-            if (rfpMandates.isEmpty()) {
-                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                        "RFP 의무 작성 항목과 배점표를 확인하고 있습니다..."));
-                rfpMandates = rfpMandateExtractor.extract(customerChunks, job.getUserInput());
-                mandatesFresh = true;
-                log.info("Generation job {} - RFP mandates extracted: {} items, {} weights",
-                        jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
-            } else {
-                log.info("Generation job {} - reusing RFP mandates: {} items, {} weights",
-                        jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
-            }
+            // Phase 1.6: RFP 의무 작성 항목 + 평가 배점표 추출
+            boolean[] mandatesFreshHolder = {false};
+            RfpMandates rfpMandates = extractOrReuseMandates(job, jobId, customerChunks, mandatesFreshHolder);
 
-            // Phase 2: 요구사항 — 이미 추출된 것이 있으면 재사용, 없으면 추출
-            List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
-            boolean requirementsFresh = false;
-            if (!requirements.isEmpty()) {
-                log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
-                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                        "기존 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
-            }
+            // Phase 2: 요구사항 추출 또는 재사용
+            boolean[] requirementsFreshHolder = {false};
+            List<Requirement> requirements = extractOrReuseRequirements(job, jobId, customerDocIds, customerChunks, requirementsFreshHolder);
 
-            if (requirements.isEmpty()) {
-                // 공유 캐시에서 확인
-                requirements = requirementCache.get(customerDocIds);
-                if (!requirements.isEmpty()) {
-                    eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                            "캐시된 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
-                    log.info("Generation job {} - using {} cached requirements", jobId, requirements.size());
-                    eventEmitter.emitRequirements(job, requirements);
-                } else {
-                    eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 추출하고 있습니다..."));
-                    requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
-                            msg -> eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
-                            partialReqs -> eventEmitter.emitRequirements(job, partialReqs));
-                    requirementCache.put(customerDocIds, requirements);
-                }
-                requirementsFresh = true;
-            }
-
-            // Phase 2.5: 가중치 fallback — 정량 배점이 전혀 없으면 importance에서 유도
-            boolean fallbackApplied = false;
-            boolean allWeightsNull = requirements.stream().allMatch(r -> r.weight() == null);
-            if (allWeightsNull && !rfpMandates.hasEvaluationWeights()) {
+            // Phase 2.5: 가중치 fallback
+            boolean fallbackApplied = applyWeightFallbackIfNeeded(job, jobId, requirements, rfpMandates);
+            if (fallbackApplied) {
                 requirements = requirements.stream()
                         .map(r -> new Requirement(r.id(), r.category(), r.item(), r.description(),
                                 r.importance(), importanceToWeight(r.importance())))
                         .toList();
-                fallbackApplied = true;
-                log.info("Generation job {} - applied importance→weight fallback (상=5, 중=3, 하/기타=1)", jobId);
-                eventEmitter.emitWarning(job,
-                        "이 RFP에서 정량 배점을 찾지 못했습니다. 중요도(상/중/하)를 기준으로 균등 분배합니다.");
             }
-
-            // 새로 추출/변경된 정보가 있으면 통합 저장
-            if (requirementsFresh || mandatesFresh || fallbackApplied) {
+            if (requirementsFreshHolder[0] || mandatesFreshHolder[0] || fallbackApplied) {
                 persistRequirementMapping(job, requirements, rfpMandates);
             }
-
             log.info("Generation job {} - {} requirements for outline extraction", jobId, requirements.size());
 
-            // 요구사항을 텍스트 요약으로 변환 (목차 프롬프트에 전달)
-            String requirementsSummary = requirements.stream()
-                    .map(r -> "- [" + r.id() + "] [" + r.importance() + "] " + r.item() + ": " + r.description())
-                    .collect(java.util.stream.Collectors.joining("\n"));
-            if (requirementsSummary.isBlank()) {
-                requirementsSummary = "없음 (요구사항이 명시되지 않은 문서)";
-            }
-
-            // Phase 3: 목차 추출 (요구사항 포함 — 많으면 map-reduce로 자동 분할)
+            // Phase 3: 목차 추출
+            String requirementsSummary = buildRequirementsSummary(requirements);
             eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 반영하여 목차를 구성하고 있습니다..."));
             List<OutlineNode> outline = outlineExtractor.extract(customerChunks, job.getUserInput(),
                     requirementsSummary, requirements,
                     msg -> eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
                     recommendedOutline, rfpMandates);
 
-            // Phase 3.5: 의무 작성 항목 커버리지 검증
-            if (rfpMandates.hasMandatoryItems()) {
-                eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                        "의무 작성 항목 커버리지를 확인하고 있습니다..."));
-                List<MandatoryItem> uncovered = outlineExtractor.verifyMandatoryItemCoverage(outline, rfpMandates.mandatoryItems());
-                if (!uncovered.isEmpty()) {
-                    String list = uncovered.stream()
-                            .map(i -> "[" + i.id() + "] " + i.title())
-                            .collect(java.util.stream.Collectors.joining(", "));
-                    log.warn("Generation job {} - {} mandatory items uncovered: {}", jobId, uncovered.size(), list);
-                    eventEmitter.emitWarning(job,
-                            "다음 의무 작성 항목이 목차에 포함되지 않았습니다 (" + uncovered.size() + "개): " + list);
-                }
-            }
-
-            // Phase 3.6: outline 결정론 검증 (5개 룰)
-            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
-                    "목차 품질을 검증하고 있습니다..."));
-            java.util.Set<String> allReqIds = requirements.stream()
-                    .map(Requirement::id)
-                    .collect(java.util.stream.Collectors.toSet());
-            OutlineValidator.Context validationCtx = OutlineValidator.Context.fromRfpMandates(allReqIds, rfpMandates);
-            ValidationResult validation = outlineValidator.validate(outline, validationCtx);
-            if (!validation.passed()) {
-                String errorList = validation.errors().stream()
-                        .map(v -> v.ruleName() + (v.leafKey() != null ? "(" + v.leafKey() + ")" : ""))
-                        .collect(java.util.stream.Collectors.joining(", "));
-                log.warn("Generation job {} - outline validation FAILED: {} errors ({})",
-                        jobId, validation.errors().size(), errorList);
-                eventEmitter.emitWarning(job,
-                        "목차 검증에서 " + validation.errors().size() + "개 오류 발견: " + errorList);
-            } else if (!validation.warnings().isEmpty()) {
-                log.info("Generation job {} - outline validation passed with {} warnings",
-                        jobId, validation.warnings().size());
-            }
+            // Phase 3.5~3.6: 검증
+            verifyMandatoryCoverage(job, jobId, outline, rfpMandates);
+            validateOutline(job, jobId, outline, requirements, rfpMandates);
 
             job.setOutline(outlineExtractor.toJson(outline));
             job.setCurrentStep(2);
@@ -392,6 +304,116 @@ public class WizardAnalysisService {
             case "중" -> 3;
             default -> 1;
         };
+    }
+
+    private String detectRecommendedOutline(GenerationJob job, UUID jobId, List<UUID> customerDocIds) {
+        eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "권장 목차를 확인하고 있습니다..."));
+        String recommendedOutline = outlineExtractor.detectRecommendedOutline(customerDocIds);
+        if (recommendedOutline != null) {
+            log.info("Generation job {} - recommended outline detected ({}chars)", jobId, recommendedOutline.length());
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "발주처 권장 목차를 발견했습니다. 이를 기준으로 목차를 구성합니다."));
+        } else {
+            log.info("Generation job {} - no recommended outline found, using standard structure", jobId);
+        }
+        return recommendedOutline;
+    }
+
+    private RfpMandates extractOrReuseMandates(GenerationJob job, UUID jobId, List<String> customerChunks, boolean[] freshHolder) {
+        RfpMandates rfpMandates = dataParser.parseRfpMandatesFromMapping(job.getRequirementMapping());
+        if (rfpMandates.isEmpty()) {
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                    "RFP 의무 작성 항목과 배점표를 확인하고 있습니다..."));
+            rfpMandates = rfpMandateExtractor.extract(customerChunks, job.getUserInput());
+            freshHolder[0] = true;
+            log.info("Generation job {} - RFP mandates extracted: {} items, {} weights",
+                    jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
+        } else {
+            log.info("Generation job {} - reusing RFP mandates: {} items, {} weights",
+                    jobId, rfpMandates.mandatoryItems().size(), rfpMandates.evaluationWeights().size());
+        }
+        return rfpMandates;
+    }
+
+    private List<Requirement> extractOrReuseRequirements(GenerationJob job, UUID jobId, List<UUID> customerDocIds,
+                                                            List<String> customerChunks, boolean[] freshHolder) {
+        List<Requirement> requirements = dataParser.parseRequirementsFromMapping(job.getRequirementMapping());
+        if (!requirements.isEmpty()) {
+            log.info("Generation job {} - reusing {} existing requirements", jobId, requirements.size());
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                    "기존 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
+            return requirements;
+        }
+
+        requirements = requirementCache.get(customerDocIds);
+        if (!requirements.isEmpty()) {
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                    "캐시된 요구사항 " + requirements.size() + MSG_CACHED_REQUIREMENTS));
+            log.info("Generation job {} - using {} cached requirements", jobId, requirements.size());
+            eventEmitter.emitRequirements(job, requirements);
+        } else {
+            eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, "요구사항을 추출하고 있습니다..."));
+            requirements = requirementExtractor.extract(customerChunks, job.getUserInput(),
+                    msg -> eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING, msg)),
+                    partialReqs -> eventEmitter.emitRequirements(job, partialReqs));
+            requirementCache.put(customerDocIds, requirements);
+        }
+        freshHolder[0] = true;
+        return requirements;
+    }
+
+    private boolean applyWeightFallbackIfNeeded(GenerationJob job, UUID jobId,
+                                                   List<Requirement> requirements, RfpMandates rfpMandates) {
+        boolean allWeightsNull = requirements.stream().allMatch(r -> r.weight() == null);
+        if (!allWeightsNull || rfpMandates.hasEvaluationWeights()) return false;
+        log.info("Generation job {} - applied importance→weight fallback (상=5, 중=3, 하/기타=1)", jobId);
+        eventEmitter.emitWarning(job,
+                "이 RFP에서 정량 배점을 찾지 못했습니다. 중요도(상/중/하)를 기준으로 균등 분배합니다.");
+        return true;
+    }
+
+    private String buildRequirementsSummary(List<Requirement> requirements) {
+        String summary = requirements.stream()
+                .map(r -> "- [" + r.id() + "] [" + r.importance() + "] " + r.item() + ": " + r.description())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return summary.isBlank() ? "없음 (요구사항이 명시되지 않은 문서)" : summary;
+    }
+
+    private void verifyMandatoryCoverage(GenerationJob job, UUID jobId, List<OutlineNode> outline, RfpMandates rfpMandates) {
+        if (!rfpMandates.hasMandatoryItems()) return;
+        eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                "의무 작성 항목 커버리지를 확인하고 있습니다..."));
+        List<MandatoryItem> uncovered = outlineExtractor.verifyMandatoryItemCoverage(outline, rfpMandates.mandatoryItems());
+        if (!uncovered.isEmpty()) {
+            String list = uncovered.stream()
+                    .map(i -> "[" + i.id() + "] " + i.title())
+                    .collect(java.util.stream.Collectors.joining(", "));
+            log.warn("Generation job {} - {} mandatory items uncovered: {}", jobId, uncovered.size(), list);
+            eventEmitter.emitWarning(job,
+                    "다음 의무 작성 항목이 목차에 포함되지 않았습니다 (" + uncovered.size() + "개): " + list);
+        }
+    }
+
+    private void validateOutline(GenerationJob job, UUID jobId, List<OutlineNode> outline,
+                                    List<Requirement> requirements, RfpMandates rfpMandates) {
+        eventEmitter.emitEvent(job, GenerationProgressEvent.status(GenerationStatus.ANALYZING,
+                "목차 품질을 검증하고 있습니다..."));
+        java.util.Set<String> allReqIds = requirements.stream()
+                .map(Requirement::id)
+                .collect(java.util.stream.Collectors.toSet());
+        OutlineValidator.Context validationCtx = OutlineValidator.Context.fromRfpMandates(allReqIds, rfpMandates);
+        ValidationResult validation = outlineValidator.validate(outline, validationCtx);
+        if (!validation.passed()) {
+            String errorList = validation.errors().stream()
+                    .map(v -> v.ruleName() + (v.leafKey() != null ? "(" + v.leafKey() + ")" : ""))
+                    .collect(java.util.stream.Collectors.joining(", "));
+            log.warn("Generation job {} - outline validation FAILED: {} errors ({})",
+                    jobId, validation.errors().size(), errorList);
+            eventEmitter.emitWarning(job,
+                    "목차 검증에서 " + validation.errors().size() + "개 오류 발견: " + errorList);
+        } else if (!validation.warnings().isEmpty()) {
+            log.info("Generation job {} - outline validation passed with {} warnings",
+                    jobId, validation.warnings().size());
+        }
     }
 
     private List<String> loadCustomerChunks(List<UUID> customerDocIds) {

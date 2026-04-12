@@ -85,8 +85,10 @@ public class RfpMandateExtractor {
             int objStart = json.indexOf('{');
             int objEnd = json.lastIndexOf('}');
             if (objStart < 0 || objEnd <= objStart) {
-                log.warn("RFP mandate response is not JSON object: {}",
-                        response.substring(0, Math.min(response.length(), 200)));
+                if (log.isWarnEnabled()) {
+                    log.warn("RFP mandate response is not JSON object: {}",
+                            response.substring(0, Math.min(response.length(), 200)));
+                }
                 return RfpMandates.empty();
             }
             String jsonCandidate = json.substring(objStart, objEnd + 1);

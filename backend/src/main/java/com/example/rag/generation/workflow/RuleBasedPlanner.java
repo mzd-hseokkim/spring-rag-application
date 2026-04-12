@@ -10,7 +10,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+
 
 /**
  * 결정론 기반 outline Planner.
@@ -57,18 +57,29 @@ public class RuleBasedPlanner {
         RfpMandates rfpMandates = mandates != null ? mandates : RfpMandates.empty();
         CategoryMapping cm = mapping != null && !mapping.isEmpty() ? mapping : CategoryMapping.empty();
 
-        // 1. 빈 SectionAssignment로 초기화
-        Map<String, List<String>> leafToReqIds = new LinkedHashMap<>();
-        Map<String, List<String>> leafToMandIds = new LinkedHashMap<>();
+        Map<String, List<String>> leafToReqIds = initializeLeafMap(leafKeys);
+        Map<String, List<String>> leafToMandIds = initializeLeafMap(leafKeys);
+
+        assignRequirementsToLeaves(reqs, cm, leafKeys, leafToReqIds);
+        assignMandatoryItemsToLeaves(rfpMandates, cm, leafKeys, leafToMandIds);
+        Map<String, Integer> leafToWeight = assignWeights(leafKeys, rfpMandates, cm);
+
+        Map<String, SectionAssignment> result = assembleAssignments(leafKeys, leafToReqIds, leafToMandIds, leafToWeight, cm);
+        logAssignments(result);
+        return result;
+    }
+
+    private Map<String, List<String>> initializeLeafMap(List<String> leafKeys) {
+        Map<String, List<String>> map = new LinkedHashMap<>();
         for (String leafKey : leafKeys) {
-            leafToReqIds.put(leafKey, new ArrayList<>());
-            leafToMandIds.put(leafKey, new ArrayList<>());
+            map.put(leafKey, new ArrayList<>());
         }
+        return map;
+    }
 
-        // round-robin 카운터 (카테고리별)와 leaf 부하 카운터 — 1:N 분산에 사용
+    private void assignRequirementsToLeaves(List<Requirement> reqs, CategoryMapping cm,
+                                              List<String> leafKeys, Map<String, List<String>> leafToReqIds) {
         Map<String, Integer> categoryRoundRobin = new HashMap<>();
-
-        // 2. 요구사항 배분 (category → leaf 매핑 사용 + round-robin + soft cap)
         int assigned = 0;
         int unassigned = 0;
         List<String> unassignedIds = new ArrayList<>();
@@ -83,7 +94,6 @@ public class RuleBasedPlanner {
                 unassignedIds.add(req.id());
             }
         }
-
         if (unassigned > 0) {
             log.warn("RuleBasedPlanner: {} requirements unassigned (no matching leaf): {}",
                     unassigned, unassignedIds.size() > 10 ?
@@ -91,41 +101,39 @@ public class RuleBasedPlanner {
         }
         log.info("RuleBasedPlanner: {} requirements assigned to {} leaves ({} unassigned)",
                 assigned, leafToReqIds.values().stream().filter(l -> !l.isEmpty()).count(), unassigned);
+    }
 
-        // 3. 의무 항목 배분 (간단 heuristic: 가장 "기타" 성격이거나 matching role인 leaf)
-        if (rfpMandates.hasMandatoryItems()) {
-            for (MandatoryItem item : rfpMandates.mandatoryItems()) {
-                String targetLeaf = pickLeafForMandatoryItem(item, cm, leafKeys);
-                if (targetLeaf != null) {
-                    leafToMandIds.get(targetLeaf).add(item.id());
-                }
+    private void assignMandatoryItemsToLeaves(RfpMandates rfpMandates, CategoryMapping cm,
+                                                 List<String> leafKeys, Map<String, List<String>> leafToMandIds) {
+        if (!rfpMandates.hasMandatoryItems()) return;
+        for (MandatoryItem item : rfpMandates.mandatoryItems()) {
+            String targetLeaf = pickLeafForMandatoryItem(cm, leafKeys);
+            if (targetLeaf != null) {
+                leafToMandIds.get(targetLeaf).add(item.id());
             }
         }
+    }
 
-        // 4. 배점 할당 (evaluationWeights를 leaf에 매핑)
-        Map<String, Integer> leafToWeight = assignWeights(leafKeys, rfpMandates, cm);
-
-        // 5. SectionAssignment 조립
+    private Map<String, SectionAssignment> assembleAssignments(List<String> leafKeys,
+                                                                  Map<String, List<String>> leafToReqIds,
+                                                                  Map<String, List<String>> leafToMandIds,
+                                                                  Map<String, Integer> leafToWeight,
+                                                                  CategoryMapping cm) {
         Map<String, SectionAssignment> result = new LinkedHashMap<>();
         for (String leafKey : leafKeys) {
-            String role = cm.roleOf(leafKey);
-            SectionAssignment assignment = new SectionAssignment(
-                    leafKey,
-                    leafToReqIds.get(leafKey),
-                    leafToMandIds.get(leafKey),
-                    leafToWeight.get(leafKey),
-                    role);
-            result.put(leafKey, assignment);
+            result.put(leafKey, new SectionAssignment(
+                    leafKey, leafToReqIds.get(leafKey), leafToMandIds.get(leafKey),
+                    leafToWeight.get(leafKey), cm.roleOf(leafKey)));
         }
-
-        if (log.isInfoEnabled()) {
-            result.forEach((key, a) ->
-                    log.info("  assignment[{}]: {} reqs, {} mands, weight={}, role={}",
-                            key, a.requirementIds().size(), a.mandatoryItemIds().size(),
-                            a.weight(), a.role()));
-        }
-
         return result;
+    }
+
+    private void logAssignments(Map<String, SectionAssignment> result) {
+        if (!log.isInfoEnabled()) return;
+        result.forEach((key, a) ->
+                log.info("  assignment[{}]: {} reqs, {} mands, weight={}, role={}",
+                        key, a.requirementIds().size(), a.mandatoryItemIds().size(),
+                        a.weight(), a.role()));
     }
 
     /**
@@ -186,7 +194,7 @@ public class RuleBasedPlanner {
      * WHAT/HOW-tech/HOW-method role을 가진 leaf에 우선 배치.
      * 가장 요구사항이 적은 candidate를 선택하여 부하 균등화.
      */
-    private String pickLeafForMandatoryItem(MandatoryItem item, CategoryMapping mapping,
+    private String pickLeafForMandatoryItem(CategoryMapping mapping,
                                              List<String> leafKeys) {
         // 우선순위 1: WHAT/HOW 역할 leaf 중 가장 부하가 적은 것
         String bestCandidate = null;

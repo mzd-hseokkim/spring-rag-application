@@ -5,7 +5,7 @@ import com.example.rag.generation.dto.OutlineNode;
 import com.example.rag.model.ModelClientProvider;
 import com.example.rag.model.ModelPurpose;
 import com.example.rag.questionnaire.workflow.Requirement;
-import com.fasterxml.jackson.core.type.TypeReference;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,7 +98,7 @@ public class CategoryMappingDeriver {
         }
 
         CategoryMapping mapping = parseMapping(content);
-        logMapping(mapping, outlineLeaves, categories);
+        logMapping(mapping, categories);
         return mapping;
     }
 
@@ -137,8 +137,10 @@ public class CategoryMappingDeriver {
             int objStart = json.indexOf('{');
             int objEnd = json.lastIndexOf('}');
             if (objStart < 0 || objEnd <= objStart) {
-                log.warn("CategoryMappingDeriver response is not JSON object: {}",
-                        content.substring(0, Math.min(content.length(), 200)));
+                if (log.isWarnEnabled()) {
+                    log.warn("CategoryMappingDeriver response is not JSON object: {}",
+                            content.substring(0, Math.min(content.length(), 200)));
+                }
                 return CategoryMapping.empty();
             }
             String jsonCandidate = json.substring(objStart, objEnd + 1);
@@ -159,7 +161,7 @@ public class CategoryMappingDeriver {
         }
     }
 
-    private void logMapping(CategoryMapping mapping, List<LeafDescriptor> leaves, Set<String> categories) {
+    private void logMapping(CategoryMapping mapping, Set<String> categories) {
         if (mapping.isEmpty()) {
             log.warn("CategoryMapping: empty (fallback to heuristic in planner)");
             return;

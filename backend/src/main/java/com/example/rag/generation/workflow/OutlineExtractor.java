@@ -31,6 +31,12 @@ public class OutlineExtractor {
     private static final int MAX_PARALLEL = 3;
     private static final String TRUNCATION_SUFFIX = "\n... (이하 생략)";
     private static final String CHUNK_SEPARATOR = "\n---\n";
+    private static final String FENCE_OPEN_REGEX = "^```[a-z]*\\n?";
+    private static final String FENCE_CLOSE_REGEX = "\\n?```$";
+    private static final java.util.regex.Pattern REQ_ID_PATTERN =
+            java.util.regex.Pattern.compile("([A-Z]{2,5}-\\d+)");
+    private static final java.util.regex.Pattern BRACKETED_REQ_ID_PATTERN =
+            java.util.regex.Pattern.compile("\\[([A-Z]{2,5}-\\d+)\\]");
     private static final int EXPAND_WINDOW = 3;
     private static final List<String> RECOMMENDED_OUTLINE_KEYWORDS = List.of(
             "권장 목차", "추천 목차", "제안 목차", "제안서 목차", "목차 구성", "목차(안)", "목차안",
@@ -171,7 +177,7 @@ public class OutlineExtractor {
     private String validateOutlineJson(String result) {
         String trimmed = result.trim();
         if (trimmed.startsWith("```")) {
-            trimmed = trimmed.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+            trimmed = trimmed.replaceAll(FENCE_OPEN_REGEX, "").replaceAll(FENCE_CLOSE_REGEX, "").trim();
         }
         int arrStart = trimmed.indexOf('[');
         int arrEnd = trimmed.lastIndexOf(']');
@@ -245,7 +251,15 @@ public class OutlineExtractor {
             progressCallback.onProgress("요구사항이 많아 분할 처리합니다...");
         }
 
-        // Map: 요구사항을 배치로 나눠 각각 목차 제안을 받음
+        if (requirements == null || requirements.isEmpty()) {
+            return extractDirect(customerChunks, userInput, reqs);
+        }
+        return extractWithMapReduce(customerChunks, userInput, requirements, mandates, progressCallback);
+    }
+
+    private List<OutlineNode> extractWithMapReduce(List<String> customerChunks, String userInput,
+                                                      List<Requirement> requirements, RfpMandates mandates,
+                                                      ProgressCallback progressCallback) {
         List<List<Requirement>> batches = splitRequirements(requirements, REQ_SUMMARY_CHAR_LIMIT);
         log.info("Split {} requirements into {} batches for outline map-reduce", requirements.size(), batches.size());
 
@@ -286,7 +300,6 @@ public class OutlineExtractor {
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-        // Reduce: 모든 제안을 합쳐서 최종 목차 생성
         if (progressCallback != null) {
             progressCallback.onProgress("목차를 통합하고 있습니다...");
         }
@@ -373,8 +386,8 @@ public class OutlineExtractor {
             if (progressCallback != null) {
                 progressCallback.onProgress("권장 목차 항목 " + processed + "/" + total + " 구성: " + leaf.title());
             }
-            OutlineNode expanded = expandSection(client, leaf, reqSuggestions, fullPath, titlePath,
-                    ledger.toString(), plan, rfpMandates, siblingContext);
+            OutlineNode expanded = expandSection(client, leaf, reqSuggestions,
+                    ExpandContext.of(fullPath, titlePath, ledger.toString(), plan, rfpMandates, siblingContext));
             expandedChildren.put(fullPath, expanded.children());
             appendToLedger(ledger, fullPath, leaf.title(), expanded.children());
         }
@@ -424,27 +437,31 @@ public class OutlineExtractor {
         }
 
         for (String fullPath : emptyLeafPaths) {
-            OutlineNode leaf = null;
-            for (var entry : sortedLeaves) {
-                if (entry.getKey().equals(fullPath)) {
-                    leaf = entry.getValue();
-                    break;
-                }
-            }
+            OutlineNode leaf = findLeafByPath(fullPath, sortedLeaves);
             if (leaf == null) continue;
-
             String titlePath = leafTitlePaths.getOrDefault(fullPath, "");
-            List<OutlineNode> rescued = focusedExpand(client, leaf, fullPath, titlePath, reqSuggestions);
-
-            if (rescued.isEmpty()) {
-                // 그래도 빈 채로면 placeholder
-                rescued = createPlaceholderChildren(leaf, fullPath);
-                log.warn("  rescue failed for {} — using {} placeholder children", fullPath, rescued.size());
-            } else {
-                log.info("  rescued {} with {} children via focused expansion", fullPath, rescued.size());
-            }
+            List<OutlineNode> rescued = rescueSingleLeaf(client, leaf, fullPath, titlePath, reqSuggestions);
             expandedChildren.put(fullPath, rescued);
         }
+    }
+
+    private OutlineNode findLeafByPath(String fullPath, List<java.util.Map.Entry<String, OutlineNode>> sortedLeaves) {
+        for (var entry : sortedLeaves) {
+            if (entry.getKey().equals(fullPath)) return entry.getValue();
+        }
+        return null;
+    }
+
+    private List<OutlineNode> rescueSingleLeaf(ChatClient client, OutlineNode leaf, String fullPath,
+                                                  String titlePath, String reqSuggestions) {
+        List<OutlineNode> rescued = focusedExpand(client, leaf, fullPath, titlePath, reqSuggestions);
+        if (rescued.isEmpty()) {
+            rescued = createPlaceholderChildren(leaf, fullPath);
+            log.warn("  rescue failed for {} — using {} placeholder children", fullPath, rescued.size());
+        } else {
+            log.info("  rescued {} with {} children via focused expansion", fullPath, rescued.size());
+        }
+        return rescued;
     }
 
     /**
@@ -454,9 +471,14 @@ public class OutlineExtractor {
     private List<OutlineNode> focusedExpand(ChatClient client, OutlineNode leaf, String fullPath,
                                               String titlePath, String reqSuggestions) {
         String parentLine = titlePath.isEmpty() ? "(top-level)" : titlePath;
-        String reqs = reqSuggestions != null && reqSuggestions.length() > 4_000
-                ? reqSuggestions.substring(0, 4_000) + TRUNCATION_SUFFIX
-                : (reqSuggestions != null ? reqSuggestions : "");
+        String reqs;
+        if (reqSuggestions == null) {
+            reqs = "";
+        } else if (reqSuggestions.length() > 4_000) {
+            reqs = reqSuggestions.substring(0, 4_000) + TRUNCATION_SUFFIX;
+        } else {
+            reqs = reqSuggestions;
+        }
 
         String prompt = """
                 다음 제안서 섹션의 하위 항목(children) 2~5개를 생성하세요.
@@ -553,50 +575,55 @@ public class OutlineExtractor {
         java.util.Map<String, SectionAssignment> assignments = ruleBasedPlanner.plan(
                 leafKeys, requirements, rfpMandates, mapping);
 
-        // 3. Requirement ID → Requirement 빠른 조회 맵
+        // 3. SectionAssignment → ExpansionPlan 변환
+        java.util.Map<String, Requirement> reqById = buildRequirementMap(requirements);
+        java.util.Map<String, ExpansionPlan> plans = convertAssignmentsToPlans(assignments, reqById);
+        logRuleBasedPlanStats(plans);
+
+        return plans;
+    }
+
+    private java.util.Map<String, Requirement> buildRequirementMap(List<Requirement> requirements) {
         java.util.Map<String, Requirement> reqById = new java.util.HashMap<>();
         if (requirements != null) {
             for (Requirement r : requirements) {
                 if (r.id() != null) reqById.put(r.id(), r);
             }
         }
+        return reqById;
+    }
 
-        // 4. SectionAssignment → ExpansionPlan 변환
+    private java.util.Map<String, ExpansionPlan> convertAssignmentsToPlans(
+            java.util.Map<String, SectionAssignment> assignments,
+            java.util.Map<String, Requirement> reqById) {
         java.util.Map<String, ExpansionPlan> plans = new java.util.LinkedHashMap<>();
         for (var entry : assignments.entrySet()) {
-            String leafKey = entry.getKey();
             SectionAssignment assignment = entry.getValue();
-
             List<String> topics = new ArrayList<>();
             for (String reqId : assignment.requirementIds()) {
                 Requirement req = reqById.get(reqId);
                 if (req == null || req.item() == null || req.item().isBlank()) continue;
-                // Topic 형식: "{item 이름} ({REQ-ID})"
                 topics.add(req.item() + " (" + reqId + ")");
             }
-
-            plans.put(leafKey, new ExpansionPlan(
-                    assignment.weight(),
-                    topics,
-                    assignment.mandatoryItemIds(),
-                    assignment.role()));
+            plans.put(entry.getKey(), new ExpansionPlan(
+                    assignment.weight(), topics, assignment.mandatoryItemIds(), assignment.role()));
         }
-
-        if (log.isInfoEnabled()) {
-            int withTopics = (int) plans.values().stream().filter(ExpansionPlan::hasTopics).count();
-            int withWeight = (int) plans.values().stream().filter(ExpansionPlan::hasWeight).count();
-            int withMand = (int) plans.values().stream().filter(ExpansionPlan::hasMandatoryItems).count();
-            log.info("Rule-based plans: {} leaves — topics:{}, weight:{}, mandatory:{}",
-                    plans.size(), withTopics, withWeight, withMand);
-            plans.forEach((key, plan) -> {
-                if (plan.hasTopics() || plan.hasMandatoryItems()) {
-                    log.info("  rule-plan[{}]: {} topics, weight={}, mandIds={}",
-                            key, plan.topics().size(), plan.weight(), plan.mandatoryItemIds());
-                }
-            });
-        }
-
         return plans;
+    }
+
+    private void logRuleBasedPlanStats(java.util.Map<String, ExpansionPlan> plans) {
+        if (!log.isInfoEnabled()) return;
+        int withTopics = (int) plans.values().stream().filter(ExpansionPlan::hasTopics).count();
+        int withWeight = (int) plans.values().stream().filter(ExpansionPlan::hasWeight).count();
+        int withMand = (int) plans.values().stream().filter(ExpansionPlan::hasMandatoryItems).count();
+        log.info("Rule-based plans: {} leaves — topics:{}, weight:{}, mandatory:{}",
+                plans.size(), withTopics, withWeight, withMand);
+        plans.forEach((key, plan) -> {
+            if (plan.hasTopics() || plan.hasMandatoryItems()) {
+                log.info("  rule-plan[{}]: {} topics, weight={}, mandIds={}",
+                        key, plan.topics().size(), plan.weight(), plan.mandatoryItemIds());
+            }
+        });
     }
 
     /**
@@ -623,54 +650,19 @@ public class OutlineExtractor {
             progressCallback.onProgress(leaves.size() + "개 섹션에 주제·배점·의무항목을 전역 배분합니다...");
         }
 
-        // 입력 JSON 빌드
-        StringBuilder leavesBuf = new StringBuilder();
-        for (LeafInfo leaf : leaves) {
-            leavesBuf.append("- key=\"").append(leaf.key()).append("\"")
-                    .append(", title=\"").append(leaf.title()).append("\"");
-            if (leaf.titlePath() != null && !leaf.titlePath().isBlank()) {
-                leavesBuf.append(", path=\"").append(leaf.titlePath()).append("\"");
-            }
-            leavesBuf.append("\n");
-        }
-
-        // 요구사항을 절단하지 않는 것이 중요. planExpansion은 단일 호출이므로 큰 프롬프트를 감당할 수 있음.
-        // 절단되면 뒷부분 요구사항이 outline에 누락됨 (사용자 요구 위반).
+        String leavesParam = buildLeavesParam(leaves);
         String reqText = hasReqs ? requirementsSummary : "없음";
         if (reqText.length() > 40_000) {
             log.warn("Requirements text truncated from {} to 40000 chars in planExpansion", reqText.length());
             reqText = reqText.substring(0, 40_000) + TRUNCATION_SUFFIX;
         }
-
-        StringBuilder mandatesBuf = new StringBuilder();
-        if (rfpMandates != null && rfpMandates.hasMandatoryItems()) {
-            for (MandatoryItem item : rfpMandates.mandatoryItems()) {
-                mandatesBuf.append("- ").append(item.id()).append(": ").append(item.title());
-                if (item.description() != null && !item.description().isBlank()) {
-                    mandatesBuf.append(" — ").append(item.description());
-                }
-                mandatesBuf.append("\n");
-            }
-        } else {
-            mandatesBuf.append("없음");
-        }
-
-        StringBuilder weightsBuf = new StringBuilder();
-        Integer totalScore = null;
-        if (rfpMandates != null && rfpMandates.hasEvaluationWeights()) {
-            for (var entry : rfpMandates.evaluationWeights().entrySet()) {
-                weightsBuf.append("- ").append(entry.getKey()).append(": ").append(entry.getValue()).append("점\n");
-            }
-            totalScore = rfpMandates.totalScore();
-        } else {
-            weightsBuf.append("없음");
-        }
+        String mandatesParam = buildMandatesParam(rfpMandates);
+        String weightsParam = buildWeightsParam(rfpMandates);
+        Integer totalScore = (rfpMandates != null && rfpMandates.hasEvaluationWeights())
+                ? rfpMandates.totalScore() : null;
 
         String prompt = promptLoader.load("generation-plan-expansion.txt");
-        final String leavesParam = leavesBuf.toString();
         final String reqParam = reqText;
-        final String mandatesParam = mandatesBuf.toString();
-        final String weightsParam = weightsBuf.toString();
         final String totalScoreParam = totalScore != null ? totalScore.toString() : "미확보";
 
         ChatClient client = modelClientProvider.getChatClient(ModelPurpose.GENERATION);
@@ -693,13 +685,48 @@ public class OutlineExtractor {
         java.util.Map<String, ExpansionPlan> plans = parseExpansionPlans(content, leaves);
 
         // Fix K: plan의 REQ-ID 중복 탐지 및 자동 제거 (원본 분리 회귀 대응)
-        plans = dedupRequirementIdsInPlans(plans, leaves);
+        plans = dedupRequirementIdsInPlans(plans);
 
         // Fix D-3: 요구사항 커버리지 진단 — 입력 요구사항 중 몇 개가 plan topics에 반영됐는지 확인
         java.util.Set<String> allReqIds = extractRequirementIds(reqParam);
         detectMissingRequirements(plans, allReqIds);
 
         return plans;
+    }
+
+    private String buildLeavesParam(List<LeafInfo> leaves) {
+        StringBuilder buf = new StringBuilder();
+        for (LeafInfo leaf : leaves) {
+            buf.append("- key=\"").append(leaf.key()).append("\"")
+                    .append(", title=\"").append(leaf.title()).append("\"");
+            if (leaf.titlePath() != null && !leaf.titlePath().isBlank()) {
+                buf.append(", path=\"").append(leaf.titlePath()).append("\"");
+            }
+            buf.append("\n");
+        }
+        return buf.toString();
+    }
+
+    private String buildMandatesParam(RfpMandates rfpMandates) {
+        if (rfpMandates == null || !rfpMandates.hasMandatoryItems()) return "없음";
+        StringBuilder buf = new StringBuilder();
+        for (MandatoryItem item : rfpMandates.mandatoryItems()) {
+            buf.append("- ").append(item.id()).append(": ").append(item.title());
+            if (item.description() != null && !item.description().isBlank()) {
+                buf.append(" — ").append(item.description());
+            }
+            buf.append("\n");
+        }
+        return buf.toString();
+    }
+
+    private String buildWeightsParam(RfpMandates rfpMandates) {
+        if (rfpMandates == null || !rfpMandates.hasEvaluationWeights()) return "없음";
+        StringBuilder buf = new StringBuilder();
+        for (var entry : rfpMandates.evaluationWeights().entrySet()) {
+            buf.append("- ").append(entry.getKey()).append(": ").append(entry.getValue()).append("점\n");
+        }
+        return buf.toString();
     }
 
     /**
@@ -717,16 +744,32 @@ public class OutlineExtractor {
      *    - topic에 REQ-ID가 이것 하나뿐이면 topic 전체 제거
      */
     private java.util.Map<String, ExpansionPlan> dedupRequirementIdsInPlans(
-            java.util.Map<String, ExpansionPlan> plans, List<LeafInfo> leaves) {
+            java.util.Map<String, ExpansionPlan> plans) {
         if (plans == null || plans.isEmpty()) return plans;
 
-        java.util.regex.Pattern idPattern = java.util.regex.Pattern.compile("([A-Z]{2,5}-\\d+)");
-
-        // 1. REQ-ID → leaves 매핑 수집
         java.util.Map<String, List<String>> idToLeaves = new java.util.LinkedHashMap<>();
-        // leaf → 해당 leaf가 가진 REQ-ID 목록 (prefix별 카운트용)
         java.util.Map<String, java.util.Map<String, Integer>> leafPrefixCount = new java.util.HashMap<>();
+        collectIdToLeavesMappings(plans, idToLeaves, leafPrefixCount);
 
+        java.util.Map<String, List<String>> duplicates = new java.util.LinkedHashMap<>();
+        for (var entry : idToLeaves.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                duplicates.put(entry.getKey(), entry.getValue());
+            }
+        }
+        if (duplicates.isEmpty()) {
+            log.info("REQ-ID dedup: no duplicates found in plan");
+            return plans;
+        }
+
+        log.warn("REQ-ID dedup: found {} REQ-IDs assigned to multiple leaves — resolving", duplicates.size());
+        java.util.Map<String, String> canonicalChoice = resolveCanonicalLeaves(duplicates, leafPrefixCount);
+        return applyCanonicalFilter(plans, canonicalChoice);
+    }
+
+    private void collectIdToLeavesMappings(java.util.Map<String, ExpansionPlan> plans,
+                                             java.util.Map<String, List<String>> idToLeaves,
+                                             java.util.Map<String, java.util.Map<String, Integer>> leafPrefixCount) {
         for (var entry : plans.entrySet()) {
             String leafKey = entry.getKey();
             ExpansionPlan plan = entry.getValue();
@@ -734,7 +777,7 @@ public class OutlineExtractor {
             java.util.Map<String, Integer> prefixCount = new java.util.HashMap<>();
             for (String topic : plan.topics()) {
                 if (topic == null) continue;
-                java.util.regex.Matcher m = idPattern.matcher(topic);
+                java.util.regex.Matcher m = REQ_ID_PATTERN.matcher(topic);
                 while (m.find()) {
                     String id = m.group(1);
                     idToLeaves.computeIfAbsent(id, k -> new ArrayList<>()).add(leafKey);
@@ -744,30 +787,17 @@ public class OutlineExtractor {
             }
             leafPrefixCount.put(leafKey, prefixCount);
         }
+    }
 
-        // 2. 중복 탐지
-        java.util.Map<String, List<String>> duplicates = new java.util.LinkedHashMap<>();
-        for (var entry : idToLeaves.entrySet()) {
-            if (entry.getValue().size() > 1) {
-                duplicates.put(entry.getKey(), entry.getValue());
-            }
-        }
-
-        if (duplicates.isEmpty()) {
-            log.info("REQ-ID dedup: no duplicates found in plan");
-            return plans;
-        }
-
-        log.warn("REQ-ID dedup: found {} REQ-IDs assigned to multiple leaves — resolving", duplicates.size());
-
-        // 3. 각 중복 REQ-ID에 대해 canonical leaf 선택
+    private java.util.Map<String, String> resolveCanonicalLeaves(
+            java.util.Map<String, List<String>> duplicates,
+            java.util.Map<String, java.util.Map<String, Integer>> leafPrefixCount) {
         java.util.Map<String, String> canonicalChoice = new java.util.LinkedHashMap<>();
         for (var entry : duplicates.entrySet()) {
             String id = entry.getKey();
             List<String> leafKeys = entry.getValue();
             String prefix = id.substring(0, id.indexOf('-'));
 
-            // 해당 prefix를 가장 많이 가진 leaf 선택 (tie 시 key 오름차순)
             String best = null;
             int bestCount = -1;
             for (String leafKey : new java.util.LinkedHashSet<>(leafKeys)) {
@@ -780,12 +810,18 @@ public class OutlineExtractor {
             }
             canonicalChoice.put(id, best);
             final String chosen = best;
-            log.info("  dedup {}: canonical={}, removing from {}", id, chosen,
-                    new java.util.LinkedHashSet<>(leafKeys).stream()
-                            .filter(k -> !k.equals(chosen)).toList());
+            if (log.isInfoEnabled()) {
+                log.info("  dedup {}: canonical={}, removing from {}", id, chosen,
+                        new java.util.LinkedHashSet<>(leafKeys).stream()
+                                .filter(k -> !k.equals(chosen)).toList());
+            }
         }
+        return canonicalChoice;
+    }
 
-        // 4. Non-canonical leaf의 topics에서 해당 REQ-ID 제거
+    private java.util.Map<String, ExpansionPlan> applyCanonicalFilter(
+            java.util.Map<String, ExpansionPlan> plans,
+            java.util.Map<String, String> canonicalChoice) {
         java.util.Map<String, ExpansionPlan> result = new java.util.LinkedHashMap<>();
         for (var entry : plans.entrySet()) {
             String leafKey = entry.getKey();
@@ -794,7 +830,6 @@ public class OutlineExtractor {
                 result.put(leafKey, plan != null ? plan : ExpansionPlan.empty());
                 continue;
             }
-
             List<String> newTopics = new ArrayList<>();
             for (String topic : plan.topics()) {
                 String filtered = removeNonCanonicalIds(topic, leafKey, canonicalChoice);
@@ -804,7 +839,6 @@ public class OutlineExtractor {
             }
             result.put(leafKey, new ExpansionPlan(plan.weight(), newTopics, plan.mandatoryItemIds(), plan.role()));
         }
-
         return result;
     }
 
@@ -818,8 +852,7 @@ public class OutlineExtractor {
     private String removeNonCanonicalIds(String topic, String currentLeafKey,
                                            java.util.Map<String, String> canonicalChoice) {
         if (topic == null) return null;
-        java.util.regex.Pattern idPattern = java.util.regex.Pattern.compile("([A-Z]{2,5}-\\d+)");
-        java.util.regex.Matcher m = idPattern.matcher(topic);
+        java.util.regex.Matcher m = REQ_ID_PATTERN.matcher(topic);
 
         List<String> allIds = new ArrayList<>();
         List<String> keepIds = new ArrayList<>();
@@ -875,54 +908,60 @@ public class OutlineExtractor {
         try {
             String json = content.trim();
             if (json.startsWith("```")) {
-                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+                json = json.replaceAll(FENCE_OPEN_REGEX, "").replaceAll(FENCE_CLOSE_REGEX, "").trim();
             }
             int objStart = json.indexOf('{');
             int objEnd = json.lastIndexOf('}');
             if (objStart < 0 || objEnd <= objStart) {
-                log.warn("Expansion planning response is not JSON object: {}",
-                        content.substring(0, Math.min(content.length(), 200)));
+                if (log.isWarnEnabled()) {
+                    log.warn("Expansion planning response is not JSON object: {}",
+                            content.substring(0, Math.min(content.length(), 200)));
+                }
                 return java.util.Map.of();
             }
             String jsonCandidate = json.substring(objStart, objEnd + 1);
             java.util.Map<String, ExpansionPlan> parsed = objectMapper.readValue(jsonCandidate,
                     new TypeReference<java.util.Map<String, ExpansionPlan>>() {});
 
-            // 정규화: null 필드를 빈 리스트로, 필드 누락 leaf를 empty plan으로 채움
-            java.util.Map<String, ExpansionPlan> normalized = new java.util.LinkedHashMap<>();
-            for (LeafInfo leaf : leaves) {
-                ExpansionPlan plan = parsed.get(leaf.key());
-                if (plan == null) {
-                    normalized.put(leaf.key(), ExpansionPlan.empty());
-                } else {
-                    normalized.put(leaf.key(), new ExpansionPlan(
-                            plan.weight(),
-                            plan.topics() != null ? plan.topics() : List.of(),
-                            plan.mandatoryItemIds() != null ? plan.mandatoryItemIds() : List.of(),
-                            plan.role()));
-                }
-            }
-
-            if (log.isInfoEnabled()) {
-                int withWeight = (int) normalized.values().stream().filter(ExpansionPlan::hasWeight).count();
-                int withTopics = (int) normalized.values().stream().filter(ExpansionPlan::hasTopics).count();
-                int withMand = (int) normalized.values().stream().filter(ExpansionPlan::hasMandatoryItems).count();
-                log.info("Expansion plan: {} leaves — weight:{}, topics:{}, mandatory:{}",
-                        normalized.size(), withWeight, withTopics, withMand);
-                normalized.forEach((key, plan) ->
-                        log.info("  plan[{}]: weight={}, topics={}, mandIds={}",
-                                key, plan.weight(), plan.topics(), plan.mandatoryItemIds()));
-            }
-
-            // Fix C: post-plan 중복 진단. 같은(또는 매우 유사한) topic이 두 leaf에 나타나면 경고 로그.
+            java.util.Map<String, ExpansionPlan> normalized = normalizePlans(parsed, leaves);
+            logPlanStatistics(normalized);
             detectDuplicateTopics(normalized);
-
             return normalized;
         } catch (Exception e) {
             log.warn("Failed to parse expansion plan: {} | preview: {}",
                     e.getMessage(), content.substring(0, Math.min(content.length(), 300)));
             return java.util.Map.of();
         }
+    }
+
+    private java.util.Map<String, ExpansionPlan> normalizePlans(
+            java.util.Map<String, ExpansionPlan> parsed, List<LeafInfo> leaves) {
+        java.util.Map<String, ExpansionPlan> normalized = new java.util.LinkedHashMap<>();
+        for (LeafInfo leaf : leaves) {
+            ExpansionPlan plan = parsed.get(leaf.key());
+            if (plan == null) {
+                normalized.put(leaf.key(), ExpansionPlan.empty());
+            } else {
+                normalized.put(leaf.key(), new ExpansionPlan(
+                        plan.weight(),
+                        plan.topics() != null ? plan.topics() : List.of(),
+                        plan.mandatoryItemIds() != null ? plan.mandatoryItemIds() : List.of(),
+                        plan.role()));
+            }
+        }
+        return normalized;
+    }
+
+    private void logPlanStatistics(java.util.Map<String, ExpansionPlan> normalized) {
+        if (!log.isInfoEnabled()) return;
+        int withWeight = (int) normalized.values().stream().filter(ExpansionPlan::hasWeight).count();
+        int withTopics = (int) normalized.values().stream().filter(ExpansionPlan::hasTopics).count();
+        int withMand = (int) normalized.values().stream().filter(ExpansionPlan::hasMandatoryItems).count();
+        log.info("Expansion plan: {} leaves — weight:{}, topics:{}, mandatory:{}",
+                normalized.size(), withWeight, withTopics, withMand);
+        normalized.forEach((key, plan) ->
+                log.info("  plan[{}]: weight={}, topics={}, mandIds={}",
+                        key, plan.weight(), plan.topics(), plan.mandatoryItemIds()));
     }
 
     /**
@@ -932,8 +971,7 @@ public class OutlineExtractor {
     private static java.util.Set<String> extractRequirementIds(String requirementsSummary) {
         if (requirementsSummary == null || requirementsSummary.isBlank()) return java.util.Set.of();
         java.util.Set<String> ids = new java.util.LinkedHashSet<>();
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\[([A-Z]{2,5}-\\d+)\\]");
-        java.util.regex.Matcher m = pattern.matcher(requirementsSummary);
+        java.util.regex.Matcher m = BRACKETED_REQ_ID_PATTERN.matcher(requirementsSummary);
         while (m.find()) {
             ids.add(m.group(1));
         }
@@ -948,40 +986,43 @@ public class OutlineExtractor {
                                              java.util.Set<String> allRequirementIds) {
         if (allRequirementIds.isEmpty()) return;
 
-        // plan topics 전체에서 등장하는 REQ-ID 수집
+        java.util.Set<String> foundIds = collectFoundReqIds(plans);
+        java.util.Set<String> missingIds = new java.util.LinkedHashSet<>(allRequirementIds);
+        missingIds.removeAll(foundIds);
+        logRequirementCoverage(allRequirementIds.size(), foundIds.size(), missingIds);
+    }
+
+    private java.util.Set<String> collectFoundReqIds(java.util.Map<String, ExpansionPlan> plans) {
         java.util.Set<String> foundIds = new java.util.HashSet<>();
-        java.util.regex.Pattern idPattern = java.util.regex.Pattern.compile("([A-Z]{2,5}-\\d+)");
         for (ExpansionPlan plan : plans.values()) {
             if (plan == null || !plan.hasTopics()) continue;
             for (String topic : plan.topics()) {
                 if (topic == null) continue;
-                java.util.regex.Matcher m = idPattern.matcher(topic);
+                java.util.regex.Matcher m = REQ_ID_PATTERN.matcher(topic);
                 while (m.find()) {
                     foundIds.add(m.group(1));
                 }
             }
         }
+        return foundIds;
+    }
 
-        java.util.Set<String> missingIds = new java.util.LinkedHashSet<>(allRequirementIds);
-        missingIds.removeAll(foundIds);
-
-        int total = allRequirementIds.size();
-        int covered = foundIds.size();
+    private void logRequirementCoverage(int total, int covered, java.util.Set<String> missingIds) {
         int missing = missingIds.size();
         String pctStr = String.format("%.1f", total > 0 ? (covered * 100.0 / total) : 0.0);
 
         if (missing == 0) {
             log.info("Requirement coverage in plan: {}/{} (100.0%) — no missing requirements", covered, total);
+            return;
+        }
+        String sample = String.join(", ", missingIds.stream().limit(20).toList()) + (missing > 20 ? " ..." : "");
+        if (covered * 100.0 / total >= 80.0) {
+            log.info("Requirement coverage in plan: {}/{} ({}%) — {} missing: {}",
+                    covered, total, pctStr, missing, sample);
         } else {
-            String sample = String.join(", ", missingIds.stream().limit(20).toList()) + (missing > 20 ? " ..." : "");
-            if (covered * 100.0 / total >= 80.0) {
-                log.info("Requirement coverage in plan: {}/{} ({}%) — {} missing: {}",
-                        covered, total, pctStr, missing, sample);
-            } else {
-                log.warn("Requirement coverage in plan: {}/{} ({}%) — {} requirements MISSING from plan topics: {}",
-                        covered, total, pctStr, missing, sample);
-                log.warn("Consider: (1) increase requirement prompt limit, (2) strengthen planExpansion prompt, (3) use more capable model");
-            }
+            log.warn("Requirement coverage in plan: {}/{} ({}%) — {} requirements MISSING from plan topics: {}",
+                    covered, total, pctStr, missing, sample);
+            log.warn("Consider: (1) increase requirement prompt limit, (2) strengthen planExpansion prompt, (3) use more capable model");
         }
     }
 
@@ -1163,25 +1204,33 @@ public class OutlineExtractor {
      */
     private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions,
                                        String topicLedger, ExpansionPlan plan, RfpMandates rfpMandates) {
-        return expandSection(client, topSection, suggestions, topSection.key(), "", topicLedger, plan, rfpMandates, "");
+        return expandSection(client, topSection, suggestions,
+                ExpandContext.of(topSection.key(), "", topicLedger, plan, rfpMandates, ""));
+    }
+
+    private record ExpandContext(String keyPrefix, String titlePath, String topicLedger,
+                                    ExpansionPlan plan, RfpMandates rfpMandates, String siblingContext) {
+        static ExpandContext of(String keyPrefix, String titlePath, String topicLedger,
+                                ExpansionPlan plan, RfpMandates rfpMandates, String siblingContext) {
+            return new ExpandContext(keyPrefix, titlePath, topicLedger, plan, rfpMandates, siblingContext);
+        }
     }
 
     private OutlineNode expandSection(ChatClient client, OutlineNode topSection, String suggestions,
-                                       String keyPrefix, String titlePath, String topicLedger,
-                                       ExpansionPlan plan, RfpMandates rfpMandates, String siblingContext) {
+                                       ExpandContext ctx) {
         // Strict 모드: plan에 topics가 있으면 코드 차원으로 children titles를 강제
         // LLM은 description + (필요 시) grandchildren만 채움
-        if (plan != null && plan.hasTopics()) {
-            return expandWithStrictPlan(client, topSection, keyPrefix, titlePath, plan, rfpMandates, siblingContext);
+        if (ctx.plan() != null && ctx.plan().hasTopics()) {
+            return expandWithStrictPlan(client, topSection, ctx.keyPrefix(), ctx.titlePath(), ctx.plan(), ctx.rfpMandates(), ctx.siblingContext());
         }
-        String parentContext = titlePath.isEmpty() ? "" : """
+        String parentContext = ctx.titlePath().isEmpty() ? "" : """
 
                 ## ⚠️ 상위 맥락 (매우 중요!)
                 이 항목은 **"%s > %s"** 아래에 있습니다.
                 하위 목차는 반드시 이 상위 맥락의 주제 범위 안에서만 구성하세요.
                 상위 항목과 무관한 내용(사업 도메인의 일반 현황 등)을 하위에 넣지 마세요.
-                """.formatted(titlePath, topSection.title());
-        String ledgerContext = (topicLedger == null || topicLedger.isBlank()) ? "" : """
+                """.formatted(ctx.titlePath(), topSection.title());
+        String ledgerContext = (ctx.topicLedger() == null || ctx.topicLedger().isBlank()) ? "" : """
 
                 ## ⚠️ 이미 다른 섹션에 배치된 주제 (절대 중복 금지!)
                 아래 주제들은 이미 다른 섹션이 다루기로 결정되었습니다.
@@ -1191,17 +1240,17 @@ public class OutlineExtractor {
                 - 고유한 children이 없다면 빈 배열 []을 반환해도 됩니다.
 
                 %s
-                """.formatted(topicLedger);
-        String planRole = (plan != null && plan.role() != null) ? plan.role() : "";
+                """.formatted(ctx.topicLedger());
+        String planRole = (ctx.plan() != null && ctx.plan().role() != null) ? ctx.plan().role() : "";
         String perspective = getPerspective(planRole, topSection.title());
         boolean isFactualOrAdmin = "WHY".equals(planRole) || "OPS".equals(planRole) || "MISC".equals(planRole);
-        String weightContext = buildWeightContext(plan, rfpMandates);
-        String topicsContext = buildTopicsContext(plan);
-        String mandatoryContext = buildMandatoryContext(plan, rfpMandates);
-        String siblingSection = siblingContext.isBlank() ? "" : """
+        String weightContext = buildWeightContext(ctx.plan(), ctx.rfpMandates());
+        String topicsContext = buildTopicsContext(ctx.plan());
+        String mandatoryContext = buildMandatoryContext(ctx.plan(), ctx.rfpMandates());
+        String siblingSection = ctx.siblingContext().isBlank() ? "" : """
 
                 ## 형제 섹션 (이들이 다루는 주제와 중복 금지)
-                %s""".formatted(siblingContext);
+                %s""".formatted(ctx.siblingContext());
         String expandPrompt = """
                 다음 제안서 항목의 하위 목차(중분류, 소분류)를 구성하세요.
                 하나의 리프 항목은 제안서의 한 페이지 분량에 해당합니다.
@@ -1223,16 +1272,16 @@ public class OutlineExtractor {
                 - 반드시 JSON 배열로만 응답 (children 포함한 배열)
 
                 [{"key":"%s.1","title":"하위 제목","description":"설명","children":[]}]
-                """.formatted(keyPrefix, topSection.title(), topSection.description(),
+                """.formatted(ctx.keyPrefix(), topSection.title(), topSection.description(),
                 perspective, siblingSection,
                 parentContext, ledgerContext, weightContext, topicsContext, mandatoryContext,
-                isFactualOrAdmin ? "" : (suggestions.length() > 8_000 ? suggestions.substring(0, 8_000) : suggestions),
-                keyPrefix, keyPrefix, keyPrefix);
+                buildSuggestionsContext(isFactualOrAdmin, suggestions),
+                ctx.keyPrefix(), ctx.keyPrefix(), ctx.keyPrefix());
 
         String content = client.prompt().user(expandPrompt).call().content();
         List<OutlineNode> children = parseOutline(content);
         if (log.isInfoEnabled()) {
-            log.info("Expanded section '{}' (path={}): {} children", topSection.title(), keyPrefix, children.size());
+            log.info("Expanded section '{}' (path={}): {} children", topSection.title(), ctx.keyPrefix(), children.size());
         }
 
         return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), children);
@@ -1242,6 +1291,12 @@ public class OutlineExtractor {
      * 사전 할당된 ExpansionPlan의 weight를 사용하여 배점 안내 블록을 만든다.
      * plan이 weight를 갖지 않거나 totalScore가 없으면 빈 문자열 반환.
      */
+    private static String buildSuggestionsContext(boolean isFactualOrAdmin, String suggestions) {
+        if (isFactualOrAdmin) return "";
+        if (suggestions.length() > 8_000) return suggestions.substring(0, 8_000);
+        return suggestions;
+    }
+
     private String buildWeightContext(ExpansionPlan plan, RfpMandates rfpMandates) {
         if (plan == null || !plan.hasWeight()) return "";
         Integer sectionWeight = plan.weight();
@@ -1331,6 +1386,18 @@ public class OutlineExtractor {
      * 진단용 — 자동 수정은 하지 않음.
      */
     private void detectDuplicateTopics(java.util.Map<String, ExpansionPlan> plans) {
+        java.util.Map<String, List<String>> topicToLeaves = buildTopicToLeavesMapping(plans);
+        int duplicates = countAndLogDuplicateTopics(topicToLeaves);
+        if (duplicates > 0) {
+            log.warn("Plan duplicate detection: {} topics assigned to multiple leaves. " +
+                    "Consider strengthening the planExpansion prompt or switching to a more capable model.",
+                    duplicates);
+        } else {
+            log.info("Plan duplicate detection: no exact-match duplicates found");
+        }
+    }
+
+    private java.util.Map<String, List<String>> buildTopicToLeavesMapping(java.util.Map<String, ExpansionPlan> plans) {
         java.util.Map<String, List<String>> topicToLeaves = new java.util.HashMap<>();
         for (var entry : plans.entrySet()) {
             String leafKey = entry.getKey();
@@ -1342,22 +1409,19 @@ public class OutlineExtractor {
                 topicToLeaves.computeIfAbsent(normalized, k -> new ArrayList<>()).add(leafKey);
             }
         }
+        return topicToLeaves;
+    }
+
+    private int countAndLogDuplicateTopics(java.util.Map<String, List<String>> topicToLeaves) {
         int duplicates = 0;
         for (var entry : topicToLeaves.entrySet()) {
-            List<String> leaves = entry.getValue();
-            if (leaves.size() > 1) {
+            if (entry.getValue().size() > 1) {
                 duplicates++;
                 log.warn("Plan duplicate topic: '{}' assigned to {} leaves: {}",
-                        entry.getKey(), leaves.size(), leaves);
+                        entry.getKey(), entry.getValue().size(), entry.getValue());
             }
         }
-        if (duplicates > 0) {
-            log.warn("Plan duplicate detection: {} topics assigned to multiple leaves. " +
-                    "Consider strengthening the planExpansion prompt or switching to a more capable model.",
-                    duplicates);
-        } else {
-            log.info("Plan duplicate detection: no exact-match duplicates found");
-        }
+        return duplicates;
     }
 
     /**
@@ -1386,42 +1450,51 @@ public class OutlineExtractor {
                   "이 title이 의미하는 범위 안의 내용만 다루세요. title과 무관한 내용은 형제 섹션에서 다룹니다."
                 : "";
         String roleBase = switch (role) {
-            case "WHY" -> "사실/배경 기반 서술: 회사 현황, 사업 배경, 추진 필요성 등을 객관적으로 작성. " +
-                    "기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다";
-            case "WHAT" -> "업무/사용자 관점 — '무엇을 달성하는가'에 집중:\n" +
-                    "- 사용자가 체감하는 기능·서비스·결과물·목표 수치를 서술\n" +
-                    "- ⛔ 기술 구현 용어 절대 금지 (title과 description 모두)\n" +
-                    "- '어떻게 구현하는가'는 별도의 기술 구현 섹션(HOW-tech)에서 다루므로 여기서 쓰지 마세요\n" +
-                    "- 기술명이 title이나 description에 하나라도 들어가면 실패입니다\n\n" +
-                    "description 작성 예시 (반드시 이 패턴을 따르세요):\n" +
-                    "❌ \"Elasticsearch와 Nori 형태소 분석기를 활용하여 법령 전문을 색인하고 BM25 기반으로 검색\"\n" +
-                    "✅ \"법령 본문을 형태소 단위로 분석하여 정확한 검색 결과를 제공하고, 관련성 높은 순서로 결과를 정렬\"\n" +
-                    "❌ \"ETL 파이프라인을 구축하여 Apache Atlas로 메타데이터를 관리하고 CDC로 실시간 동기화\"\n" +
-                    "✅ \"데이터 수집·정제·적재 체계를 구축하고, 메타데이터를 체계적으로 관리하며, 변경 사항을 실시간으로 반영\"\n" +
-                    "❌ \"Kubernetes HPA와 Auto Scaling으로 GPU 노드를 자동 확장하고 Prometheus로 모니터링\"\n" +
-                    "✅ \"트래픽 증가 시 처리 용량이 자동으로 확장되어 응답 지연 없이 서비스를 유지하고, 자원 사용 현황을 상시 감시\"\n" +
-                    "❌ \"JMeter와 Gatling으로 부하 테스트를 수행하고 Grafana 대시보드로 성능 추이를 분석\"\n" +
-                    "✅ \"목표 동시접속자 수 기준으로 부하 검증을 수행하고, 성능 추이를 지속적으로 모니터링\"";
-            case "HOW-tech" -> "기술/구현 관점 — '어떻게 구현하는가'에 집중:\n" +
-                    "- 기술 아키텍처, 프레임워크, 알고리즘, 인프라 구성을 구체적으로 서술\n" +
-                    "- WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것\n" +
-                    "- 이 섹션 고유의 가치: '그 기능을 어떤 기술로 구현하는가'";
-            case "HOW-method" -> "실행 방법론 — '어떤 접근법으로 수행하는가'에 집중:\n" +
-                    "- 사업 전체의 수행 방법론을 균형있게: 개발 프로세스, 품질 관리, 데이터 관리, 보안 관리\n" +
-                    "- 한 가지 영역(예: 보안)에 치우치면 안 됨 — 각 영역 1~2개씩 균등 배분\n" +
-                    "- 기술 스택 디테일은 HOW-tech에서, 전략적 방향은 WHY에서 다루므로 여기서는 방법론 수준만";
-            case "CTRL-tech" -> "기술 통제 — 보안·테스트·제약의 기술적 구현:\n" +
-                    "- 구체적 보안 기술, 테스트 도구, 제약 대응 방법을 서술\n" +
-                    "- 관리 프로세스(조직, 교육, 점검 계획)는 CTRL-mgmt에서 다룸";
-            case "CTRL-mgmt" -> "관리 통제 — 보안·품질의 운영 관리 프로세스:\n" +
-                    "- 조직, 교육, 점검, 모니터링 등 관리 체계를 서술\n" +
-                    "- 기술 구현 상세(암호 알고리즘, 보안 도구 등)는 CTRL-tech에서 다룸";
-            case "MGMT" -> "관리 프로세스 — 이 섹션 title에 해당하는 관리 활동만:\n" +
-                    "- 형제 섹션과 역할이 겹치지 않도록 title scope 엄격 준수\n" +
-                    "- 간결하게 서술";
-            case "OPS" -> "운영/지원 — 이 섹션 title에 해당하는 활동만:\n" +
-                    "- 형제 섹션(인수인계, 교육, 하자보수 등)과 중복 금지\n" +
-                    "- title scope 엄격 준수";
+            case "WHY" -> """
+                    사실/배경 기반 서술: 회사 현황, 사업 배경, 추진 필요성 등을 객관적으로 작성. \
+                    기술 제안이나 구현 방법론은 넣지 마세요 — 다른 섹션에서 다룹니다""";
+            case "WHAT" -> """
+                    업무/사용자 관점 — '무엇을 달성하는가'에 집중:
+                    - 사용자가 체감하는 기능·서비스·결과물·목표 수치를 서술
+                    - ⛔ 기술 구현 용어 절대 금지 (title과 description 모두)
+                    - '어떻게 구현하는가'는 별도의 기술 구현 섹션(HOW-tech)에서 다루므로 여기서 쓰지 마세요
+                    - 기술명이 title이나 description에 하나라도 들어가면 실패입니다
+
+                    description 작성 예시 (반드시 이 패턴을 따르세요):
+                    ❌ "Elasticsearch와 Nori 형태소 분석기를 활용하여 법령 전문을 색인하고 BM25 기반으로 검색"
+                    ✅ "법령 본문을 형태소 단위로 분석하여 정확한 검색 결과를 제공하고, 관련성 높은 순서로 결과를 정렬"
+                    ❌ "ETL 파이프라인을 구축하여 Apache Atlas로 메타데이터를 관리하고 CDC로 실시간 동기화"
+                    ✅ "데이터 수집·정제·적재 체계를 구축하고, 메타데이터를 체계적으로 관리하며, 변경 사항을 실시간으로 반영"
+                    ❌ "Kubernetes HPA와 Auto Scaling으로 GPU 노드를 자동 확장하고 Prometheus로 모니터링"
+                    ✅ "트래픽 증가 시 처리 용량이 자동으로 확장되어 응답 지연 없이 서비스를 유지하고, 자원 사용 현황을 상시 감시"
+                    ❌ "JMeter와 Gatling으로 부하 테스트를 수행하고 Grafana 대시보드로 성능 추이를 분석"
+                    ✅ "목표 동시접속자 수 기준으로 부하 검증을 수행하고, 성능 추이를 지속적으로 모니터링\"""";
+            case "HOW-tech" -> """
+                    기술/구현 관점 — '어떻게 구현하는가'에 집중:
+                    - 기술 아키텍처, 프레임워크, 알고리즘, 인프라 구성을 구체적으로 서술
+                    - WHAT 역할 섹션에서 이미 다룬 업무 기능 설명을 반복하지 말 것
+                    - 이 섹션 고유의 가치: '그 기능을 어떤 기술로 구현하는가'""";
+            case "HOW-method" -> """
+                    실행 방법론 — '어떤 접근법으로 수행하는가'에 집중:
+                    - 사업 전체의 수행 방법론을 균형있게: 개발 프로세스, 품질 관리, 데이터 관리, 보안 관리
+                    - 한 가지 영역(예: 보안)에 치우치면 안 됨 — 각 영역 1~2개씩 균등 배분
+                    - 기술 스택 디테일은 HOW-tech에서, 전략적 방향은 WHY에서 다루므로 여기서는 방법론 수준만""";
+            case "CTRL-tech" -> """
+                    기술 통제 — 보안·테스트·제약의 기술적 구현:
+                    - 구체적 보안 기술, 테스트 도구, 제약 대응 방법을 서술
+                    - 관리 프로세스(조직, 교육, 점검 계획)는 CTRL-mgmt에서 다룸""";
+            case "CTRL-mgmt" -> """
+                    관리 통제 — 보안·품질의 운영 관리 프로세스:
+                    - 조직, 교육, 점검, 모니터링 등 관리 체계를 서술
+                    - 기술 구현 상세(암호 알고리즘, 보안 도구 등)는 CTRL-tech에서 다룸""";
+            case "MGMT" -> """
+                    관리 프로세스 — 이 섹션 title에 해당하는 관리 활동만:
+                    - 형제 섹션과 역할이 겹치지 않도록 title scope 엄격 준수
+                    - 간결하게 서술""";
+            case "OPS" -> """
+                    운영/지원 — 이 섹션 title에 해당하는 활동만:
+                    - 형제 섹션(인수인계, 교육, 하자보수 등)과 중복 금지
+                    - title scope 엄격 준수""";
             case "MISC" -> "기타/행정: 표준 절차, 법적 준수, 부가 사항";
             default -> "";
         };
@@ -1437,7 +1510,9 @@ public class OutlineExtractor {
         List<OutlineNode> filtered = new ArrayList<>();
         for (OutlineNode n : nodes) {
             if (isMetaNode(n)) {
-                log.info("Filtered meta node: key={}, title={}", n.key(), n.title());
+                if (log.isInfoEnabled()) {
+                    log.info("Filtered meta node: key={}, title={}", n.key(), n.title());
+                }
                 continue;
             }
             // title에서 아티팩트 제거, description에서 메타 텍스트 제거
@@ -1469,7 +1544,7 @@ public class OutlineExtractor {
         // 영문 대문자로 시작하는 2글자 이상 연속 영문 단어 제거 (REQ-ID 패턴 제외)
         // 예: Elasticsearch, Redis, Kubernetes, Apache Airflow, Neo4j, GPT-4o
         String cleaned = desc
-                .replaceAll("\\b[A-Z][a-zA-Z0-9]*(?:[- ][A-Z][a-zA-Z0-9]*)*\\b", "")
+                .replaceAll("\\b[A-Z][a-zA-Z0-9]*+(?:[- ][A-Z][a-zA-Z0-9]*+)*+\\b", "")
                 // 소문자 기술 약어 제거: kNN, vLLM, k6, nGrinder 등
                 .replaceAll("\\b[a-z][A-Z][a-zA-Z0-9]*\\b", "")
                 // 전부 대문자인 약어 제거 (3글자+): ETL, SSE, HPA, CDC, FAISS 등 (REQ/SFR/NFR 제외)
@@ -1478,7 +1553,7 @@ public class OutlineExtractor {
                 .replaceAll("\\(\\s*\\)", "")
                 .replaceAll("\\s{2,}", " ")
                 .trim();
-        if (!cleaned.equals(desc.trim())) {
+        if (!cleaned.equals(desc.trim()) && log.isDebugEnabled()) {
             log.debug("Stripped tech terms from WHAT description: '{}' → '{}'",
                     desc.substring(0, Math.min(desc.length(), 60)), cleaned.substring(0, Math.min(cleaned.length(), 60)));
         }
@@ -1500,8 +1575,9 @@ public class OutlineExtractor {
             return "";
         }
         // "~를 제시하는 슬라이드" → "~를 제시" 치환
-        return desc.replaceAll("(?:를 |을 )?제시하는 슬라이드", "를 제시")
-                   .replaceAll("슬라이드", "페이지");
+        return java.util.regex.Pattern.compile("(?:를 |을 )?제시하는 슬라이드", java.util.regex.Pattern.CANON_EQ)
+                       .matcher(desc).replaceAll("를 제시")
+                       .replace("슬라이드", "페이지");
     }
 
     /**
@@ -1521,26 +1597,34 @@ public class OutlineExtractor {
         if (children == null || children.size() <= 1) return children;
         List<OutlineNode> result = new ArrayList<>();
         for (OutlineNode child : children) {
-            boolean merged = false;
-            for (int i = 0; i < result.size(); i++) {
-                if (areSimilarTitles(result.get(i).title(), child.title())) {
-                    OutlineNode existing = result.get(i);
-                    List<OutlineNode> mergedChildren = new ArrayList<>(existing.children());
-                    mergedChildren.addAll(child.children());
-                    String mergedDesc = (existing.description() != null && existing.description().length() >= (child.description() != null ? child.description().length() : 0))
-                            ? existing.description() : child.description();
-                    result.set(i, new OutlineNode(existing.key(), existing.title(), mergedDesc, mergedChildren));
-                    log.info("Deduplicated outline node: '{}' ≈ '{}' (merged {} into {})",
-                            child.title(), existing.title(), child.key(), existing.key());
-                    merged = true;
-                    break;
-                }
-            }
-            if (!merged) {
+            if (!tryMergeWithExisting(result, child)) {
                 result.add(child);
             }
         }
         return result;
+    }
+
+    private boolean tryMergeWithExisting(List<OutlineNode> result, OutlineNode child) {
+        for (int i = 0; i < result.size(); i++) {
+            if (areSimilarTitles(result.get(i).title(), child.title())) {
+                result.set(i, performMerge(result.get(i), child));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private OutlineNode performMerge(OutlineNode existing, OutlineNode child) {
+        List<OutlineNode> mergedChildren = new ArrayList<>(existing.children());
+        mergedChildren.addAll(child.children());
+        int existingLen = existing.description() != null ? existing.description().length() : 0;
+        int childLen = child.description() != null ? child.description().length() : 0;
+        String mergedDesc = existingLen >= childLen ? existing.description() : child.description();
+        if (log.isInfoEnabled()) {
+            log.info("Deduplicated outline node: '{}' ≈ '{}' (merged {} into {})",
+                    child.title(), existing.title(), child.key(), existing.key());
+        }
+        return new OutlineNode(existing.key(), existing.title(), mergedDesc, mergedChildren);
     }
 
     /** 두 제목이 사실상 같은 주제인지 판단. 완전 일치 또는 핵심 단어 80%+ 겹침. */
@@ -1670,6 +1754,10 @@ public class OutlineExtractor {
             return topics.subList(0, Math.min(topics.size(), MAX_CHILDREN_PER_SECTION));
         }
 
+        if (content == null || content.isBlank()) {
+            log.warn("Topic consolidation returned null/blank for {}, truncating to {}", keyPrefix, MAX_CHILDREN_PER_SECTION);
+            return topics.subList(0, Math.min(topics.size(), MAX_CHILDREN_PER_SECTION));
+        }
         List<String> allLines = java.util.Arrays.stream(content.split("\n"))
                 .map(String::trim)
                 .filter(s -> !s.isBlank())
@@ -1699,8 +1787,10 @@ public class OutlineExtractor {
             return topics.subList(0, Math.min(topics.size(), MAX_CHILDREN_PER_SECTION));
         }
 
-        log.info("Topic consolidation '{}' (path={}): {} topics → {} consolidated",
-                topSection.title(), keyPrefix, topics.size(), consolidated.size());
+        if (log.isInfoEnabled()) {
+            log.info("Topic consolidation '{}' (path={}): {} topics → {} consolidated",
+                    topSection.title(), keyPrefix, topics.size(), consolidated.size());
+        }
 
         return consolidated;
     }
@@ -1749,6 +1839,10 @@ public class OutlineExtractor {
             return topics;
         }
 
+        if (content == null || content.isBlank()) {
+            log.warn("WHAT topic rewrite returned null/blank for {}, using originals", keyPrefix);
+            return topics;
+        }
         List<String> rewritten = java.util.Arrays.stream(content.split("\n"))
                 .map(String::trim)
                 .filter(s -> !s.isBlank() && !s.startsWith("#") && !s.startsWith("```"))
@@ -1766,7 +1860,9 @@ public class OutlineExtractor {
             return topics;
         }
 
-        log.info("WHAT topic rewrite '{}' (path={}): {} topics rewritten", topSection.title(), keyPrefix, rewritten.size());
+        if (log.isInfoEnabled()) {
+            log.info("WHAT topic rewrite '{}' (path={}): {} topics rewritten", topSection.title(), keyPrefix, rewritten.size());
+        }
         return rewritten;
     }
 
@@ -1774,83 +1870,122 @@ public class OutlineExtractor {
                                               String keyPrefix, String titlePath,
                                               ExpansionPlan plan, RfpMandates rfpMandates,
                                               String siblingContext) {
-        List<String> topics = plan.topics();
+        List<String> topics = prepareTopics(client, topSection, keyPrefix, plan, siblingContext);
+        List<OutlineNode> skeleton = new ArrayList<>();
+        List<List<String>> skeletonReqIds = new ArrayList<>();
+        buildSkeleton(keyPrefix, topics, skeleton, skeletonReqIds);
 
-        // children이 MAX를 초과하면 유사 주제를 통합하여 수를 줄임
-        if (topics.size() > MAX_CHILDREN_PER_SECTION) {
-            topics = consolidateTopics(client, topSection, keyPrefix, topics, siblingContext, plan.role());
-        } else if ("WHAT".equals(plan.role())) {
-            // WHAT role은 topics 수와 무관하게 기술 용어를 업무 언어로 재표현
-            topics = rewriteTopicsForWhatRole(client, topSection, keyPrefix, topics);
+        boolean needsGrandchildren = determineGrandchildrenNeeded(plan, rfpMandates);
+        String mandatoryText = buildStrictMandatoryText(plan, rfpMandates);
+        boolean isWhatRole = "WHAT".equals(plan.role());
+        String prompt = buildStrictPlanPrompt(new StrictPlanInput(keyPrefix, topSection, titlePath, plan,
+                skeleton, mandatoryText, needsGrandchildren, siblingContext));
+
+        List<OutlineNode> llmChildren;
+        try {
+            llmChildren = parseOutline(client.prompt().user(prompt).call().content());
+        } catch (Exception e) {
+            log.warn("Strict expansion LLM call failed for {}, returning skeleton: {}", keyPrefix, e.getMessage());
+            return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), skeleton);
         }
 
-        // Skeleton 구축: topics에서 REQ-ID를 추출하여 clean title + req ID list 분리
-        List<OutlineNode> skeleton = new ArrayList<>();
-        // skeleton[i]에 해당하는 REQ-ID 목록 (description 프리픽스에 사용)
-        List<List<String>> skeletonReqIds = new ArrayList<>();
+        List<OutlineNode> merged = mergeSkeletonWithLlm(skeleton, skeletonReqIds, llmChildren, isWhatRole);
+        if (log.isInfoEnabled()) {
+            log.info("Strict expansion '{}' (path={}): {} children from plan, grandchildren={}",
+                    topSection.title(), keyPrefix, merged.size(), needsGrandchildren);
+        }
+        return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), merged);
+    }
+
+    private List<String> prepareTopics(ChatClient client, OutlineNode topSection, String keyPrefix,
+                                         ExpansionPlan plan, String siblingContext) {
+        List<String> topics = plan.topics();
+        if (topics.size() > MAX_CHILDREN_PER_SECTION) {
+            return consolidateTopics(client, topSection, keyPrefix, topics, siblingContext, plan.role());
+        } else if ("WHAT".equals(plan.role())) {
+            return rewriteTopicsForWhatRole(client, topSection, keyPrefix, topics);
+        }
+        return topics;
+    }
+
+    private void buildSkeleton(String keyPrefix, List<String> topics,
+                                 List<OutlineNode> skeleton, List<List<String>> skeletonReqIds) {
         for (int i = 0; i < topics.size(); i++) {
             String childKey = keyPrefix + "." + (i + 1);
-            String topic = topics.get(i);
-            TopicParse parsed = parseTopicForIds(topic);
+            TopicParse parsed = parseTopicForIds(topics.get(i));
             skeleton.add(new OutlineNode(childKey, parsed.cleanTitle, "", List.of()));
             skeletonReqIds.add(parsed.reqIds);
         }
+    }
 
-        // grandchildren 필요 여부 결정: 배점 10%+ 또는 HOW-tech role (기술 심화 필요)
-        boolean needsGrandchildren = false;
+    private boolean determineGrandchildrenNeeded(ExpansionPlan plan, RfpMandates rfpMandates) {
+        if ("HOW-tech".equals(plan.role()) || "CTRL-tech".equals(plan.role())) {
+            return true;
+        }
         Integer totalScore = rfpMandates != null ? rfpMandates.totalScore() : null;
         if (plan.hasWeight() && totalScore != null && totalScore > 0) {
-            double pct = (plan.weight() * 100.0) / totalScore;
-            needsGrandchildren = pct >= 10.0;
+            return (plan.weight() * 100.0) / totalScore >= 10.0;
         }
-        if ("HOW-tech".equals(plan.role()) || "CTRL-tech".equals(plan.role())) {
-            needsGrandchildren = true;
-        }
+        return false;
+    }
 
-        // 의무 항목 텍스트
-        String mandatoryText = "";
-        if (plan.hasMandatoryItems() && rfpMandates != null && rfpMandates.hasMandatoryItems()) {
-            java.util.Map<String, MandatoryItem> byId = new java.util.HashMap<>();
-            for (MandatoryItem item : rfpMandates.mandatoryItems()) {
-                byId.put(item.id(), item);
-            }
-            StringBuilder mb = new StringBuilder("\n## 이 섹션에 배치된 의무 작성 항목 (반드시 description에 반영)\n");
-            for (String id : plan.mandatoryItemIds()) {
-                MandatoryItem item = byId.get(id);
-                if (item == null) continue;
-                mb.append("- [").append(id).append("] ").append(item.title());
-                if (item.description() != null && !item.description().isBlank()) {
-                    mb.append(": ").append(item.description());
-                }
-                mb.append("\n");
-            }
-            mandatoryText = mb.toString();
+    private String buildStrictMandatoryText(ExpansionPlan plan, RfpMandates rfpMandates) {
+        if (!plan.hasMandatoryItems() || rfpMandates == null || !rfpMandates.hasMandatoryItems()) {
+            return "";
         }
+        java.util.Map<String, MandatoryItem> byId = new java.util.HashMap<>();
+        for (MandatoryItem item : rfpMandates.mandatoryItems()) {
+            byId.put(item.id(), item);
+        }
+        StringBuilder mb = new StringBuilder("\n## 이 섹션에 배치된 의무 작성 항목 (반드시 description에 반영)\n");
+        for (String id : plan.mandatoryItemIds()) {
+            MandatoryItem item = byId.get(id);
+            if (item == null) continue;
+            mb.append("- [").append(id).append("] ").append(item.title());
+            if (item.description() != null && !item.description().isBlank()) {
+                mb.append(": ").append(item.description());
+            }
+            mb.append("\n");
+        }
+        return mb.toString();
+    }
 
+    private record StrictPlanInput(String keyPrefix, OutlineNode topSection, String titlePath,
+                                      ExpansionPlan plan, List<OutlineNode> skeleton,
+                                      String mandatoryText, boolean needsGrandchildren, String siblingContext) {}
+
+    private String buildStrictPlanPrompt(StrictPlanInput input) {
+        String keyPrefix = input.keyPrefix();
+        OutlineNode topSection = input.topSection();
+        ExpansionPlan plan = input.plan();
+        List<OutlineNode> skeleton = input.skeleton();
+        String mandatoryText = input.mandatoryText();
+        boolean needsGrandchildren = input.needsGrandchildren();
+        String titlePath = input.titlePath();
+        String siblingContext = input.siblingContext();
+        boolean isWhatRole = "WHAT".equals(plan.role());
         StringBuilder skeletonText = new StringBuilder();
         for (OutlineNode child : skeleton) {
             skeletonText.append("- key=\"").append(child.key())
                     .append("\", title=\"").append(child.title()).append("\"\n");
         }
-
         String parentLine = titlePath.isEmpty() ? topSection.title() : titlePath + " > " + topSection.title();
         String perspective = getPerspective(plan.role(), topSection.title());
-        boolean isWhatRole = "WHAT".equals(plan.role());
         String grandPart = needsGrandchildren
                 ? "- 각 child에 **2~3개의 grandchild를 추가하세요** (소분류, 제목 구체적으로, 각 grandchild에도 description 1~2문장 필수)"
                 : "- grandchild는 추가하지 마세요 (children은 leaf로 유지)";
         String descriptionConstraint = isWhatRole
-                ? "- ⚠️ 영문 기술명/제품명/프레임워크명/도구명/알고리즘명을 description에 절대 포함하지 마세요\n" +
-                  "  이 규칙은 데이터·성능·인터페이스 등 기술과 가까운 주제에서도 동일하게 적용됩니다\n" +
-                  "  ❌ \"Elasticsearch와 Weaviate를 활용하여 하이브리드 검색 체계를 구축\"\n" +
-                  "  ✅ \"키워드 검색과 의미 검색을 결합하여 사용자 질의에 가장 관련성 높은 결과를 제공\"\n" +
-                  "  ❌ \"ETL 파이프라인과 Apache Atlas로 메타데이터를 관리\"\n" +
-                  "  ✅ \"데이터 수집·정제·적재 체계를 구축하고 메타데이터를 체계적으로 관리\"\n" +
-                  "  ❌ \"Kubernetes HPA로 자동 확장하고 Prometheus로 모니터링\"\n" +
-                  "  ✅ \"트래픽 증가 시 자동으로 확장되어 응답 지연 없이 서비스를 유지하고 자원 현황을 상시 감시\""
+                ? """
+                  - ⚠️ 영문 기술명/제품명/프레임워크명/도구명/알고리즘명을 description에 절대 포함하지 마세요
+                    이 규칙은 데이터·성능·인터페이스 등 기술과 가까운 주제에서도 동일하게 적용됩니다
+                    ❌ "Elasticsearch와 Weaviate를 활용하여 하이브리드 검색 체계를 구축"
+                    ✅ "키워드 검색과 의미 검색을 결합하여 사용자 질의에 가장 관련성 높은 결과를 제공"
+                    ❌ "ETL 파이프라인과 Apache Atlas로 메타데이터를 관리"
+                    ✅ "데이터 수집·정제·적재 체계를 구축하고 메타데이터를 체계적으로 관리"
+                    ❌ "Kubernetes HPA로 자동 확장하고 Prometheus로 모니터링"
+                    ✅ "트래픽 증가 시 자동으로 확장되어 응답 지연 없이 서비스를 유지하고 자원 현황을 상시 감시\""""
                 : "";
-
-        String prompt = """
+        return """
                 다음 섹션의 children 구성이 이미 확정되어 있습니다.
                 **각 child의 key와 title은 절대 변경하지 마세요.** description만 채우고, 필요 시 grandchild를 추가하세요.
 
@@ -1882,62 +2017,37 @@ public class OutlineExtractor {
                 """.formatted(keyPrefix, topSection.title(), parentLine, perspective,
                 siblingContext.isBlank() ? "" : "\n## 형제 섹션 (이 섹션과 중복되는 내용을 넣지 마세요)\n" + siblingContext,
                 skeletonText, mandatoryText, descriptionConstraint, grandPart);
+    }
 
-        String content;
-        try {
-            content = client.prompt().user(prompt).call().content();
-        } catch (Exception e) {
-            log.warn("Strict expansion LLM call failed for {}, returning skeleton: {}", keyPrefix, e.getMessage());
-            return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), skeleton);
-        }
-
-        List<OutlineNode> llmChildren = parseOutline(content);
-
-        // 병합: skeleton의 key/title을 강제로 사용, LLM의 description과 children만 채택
-        // Fix L: REQ-ID가 원본 topic에 있었다면 description 앞에 "[관련 요구사항: ID, ID] " 프리픽스 추가
+    private List<OutlineNode> mergeSkeletonWithLlm(List<OutlineNode> skeleton, List<List<String>> skeletonReqIds,
+                                                      List<OutlineNode> llmChildren, boolean isWhatRole) {
         List<OutlineNode> merged = new ArrayList<>();
         for (int i = 0; i < skeleton.size(); i++) {
             OutlineNode sk = skeleton.get(i);
-            List<String> reqIds = skeletonReqIds.get(i);
-            // LLM 응답에서 key로 매칭 시도
-            OutlineNode llmMatch = null;
-            for (OutlineNode candidate : llmChildren) {
-                if (sk.key().equals(candidate.key())) {
-                    llmMatch = candidate;
-                    break;
-                }
-            }
-            // 매칭 실패 시 순서로 fallback
-            if (llmMatch == null && i < llmChildren.size()) {
-                llmMatch = llmChildren.get(i);
-            }
+            OutlineNode llmMatch = findLlmMatch(sk.key(), i, llmChildren);
 
             String llmDescription = (llmMatch != null && llmMatch.description() != null)
                     ? llmMatch.description() : "";
             List<OutlineNode> grandchildren = (llmMatch != null && llmMatch.children() != null)
                     ? llmMatch.children() : List.of();
 
-            // WHAT role이면 description에서 영문 기술명 제거 (후처리 방어선)
             if (isWhatRole) {
                 llmDescription = stripTechTermsFromDescription(llmDescription);
             }
 
-            // REQ-ID가 있으면 description 앞에 프리픽스 추가 (목차 가독성 향상)
-            String description = llmDescription;
-            if (!reqIds.isEmpty()) {
-                String reqPrefix = "[관련 요구사항: " + String.join(", ", reqIds) + "] ";
-                description = reqPrefix + llmDescription;
-            }
-
+            List<String> reqIds = skeletonReqIds.get(i);
+            String description = reqIds.isEmpty() ? llmDescription
+                    : "[관련 요구사항: " + String.join(", ", reqIds) + "] " + llmDescription;
             merged.add(new OutlineNode(sk.key(), sk.title(), description, grandchildren));
         }
+        return merged;
+    }
 
-        if (log.isInfoEnabled()) {
-            log.info("Strict expansion '{}' (path={}): {} children from plan, grandchildren={}",
-                    topSection.title(), keyPrefix, merged.size(), needsGrandchildren);
+    private OutlineNode findLlmMatch(String key, int index, List<OutlineNode> llmChildren) {
+        for (OutlineNode candidate : llmChildren) {
+            if (key.equals(candidate.key())) return candidate;
         }
-
-        return new OutlineNode(topSection.key(), topSection.title(), topSection.description(), merged);
+        return index < llmChildren.size() ? llmChildren.get(index) : null;
     }
 
     /**
@@ -1958,8 +2068,7 @@ public class OutlineExtractor {
         if (topic == null || topic.isBlank()) {
             return new TopicParse(topic != null ? topic : "", List.of());
         }
-        java.util.regex.Pattern idPattern = java.util.regex.Pattern.compile("([A-Z]{2,5}-\\d+)");
-        java.util.regex.Matcher m = idPattern.matcher(topic);
+        java.util.regex.Matcher m = REQ_ID_PATTERN.matcher(topic);
         List<String> ids = new ArrayList<>();
         while (m.find()) {
             String id = m.group(1);
@@ -2144,7 +2253,7 @@ public class OutlineExtractor {
         try {
             String json = content.trim();
             if (json.startsWith("```")) {
-                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+                json = json.replaceAll(FENCE_OPEN_REGEX, "").replaceAll(FENCE_CLOSE_REGEX, "").trim();
             }
             int objStart = json.indexOf('{');
             int objEnd = json.lastIndexOf('}');
@@ -2166,7 +2275,7 @@ public class OutlineExtractor {
         try {
             String json = content.trim();
             if (json.startsWith("```")) {
-                json = json.replaceAll("^```[a-z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+                json = json.replaceAll(FENCE_OPEN_REGEX, "").replaceAll(FENCE_CLOSE_REGEX, "").trim();
             }
             // JSON 배열 시작점 탐색 (LLM이 앞에 설명 텍스트를 붙이는 경우 대비)
             int arrStart = json.indexOf('[');

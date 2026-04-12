@@ -132,7 +132,7 @@ public class OutlineValidator {
 
     private void collectReqLeafMap(List<OutlineNode> nodes, String parentPath, Map<String, Set<String>> map) {
         for (OutlineNode node : nodes) {
-            String fullPath = parentPath.isEmpty() ? node.key() : parentPath + "/" + node.key();
+            String fullPath = parentPath.isEmpty() ? node.key() : parentPath + java.io.File.separator + node.key();
             String text = (node.title() != null ? node.title() : "") + " " +
                           (node.description() != null ? node.description() : "");
             Matcher m = REQ_ID_PATTERN.matcher(text);
@@ -265,9 +265,9 @@ public class OutlineValidator {
         for (ValidationViolation v : result.violations()) {
             String prefix = v.isError() ? "  [ERROR]" : "  [WARN]";
             String location = v.leafKey() != null ? " (" + v.leafKey() + ")" : "";
-            if (v.isError()) {
+            if (v.isError() && log.isWarnEnabled()) {
                 log.warn("{} {}: {}{}", prefix, v.ruleName(), v.message(), location);
-            } else {
+            } else if (!v.isError() && log.isInfoEnabled()) {
                 log.info("{} {}: {}{}", prefix, v.ruleName(), v.message(), location);
             }
         }
