@@ -78,14 +78,22 @@ public class ModelClientFactory {
         };
     }
 
+    private static final int QWEN3_EMBEDDING_TARGET_DIM = 1536;
+
     private EmbeddingModel createOllamaEmbeddingModel(LlmModel model) {
         OllamaApi api = OllamaApi.builder().baseUrl(model.getBaseUrl()).build();
-        return OllamaEmbeddingModel.builder()
+        EmbeddingModel ollamaModel = OllamaEmbeddingModel.builder()
                 .ollamaApi(api)
                 .defaultOptions(OllamaEmbeddingOptions.builder()
                         .model(model.getModelId())
                         .build())
                 .build();
+        // Qwen3-Embedding은 Matryoshka(MRL) 학습으로 앞쪽 차원에 의미가 응축됨.
+        // pgvector 컬럼(vector(1536))과 맞추기 위해 1536으로 truncate + L2 정규화.
+        if (model.getModelId() != null && model.getModelId().startsWith("qwen3-embedding")) {
+            return new TruncatingEmbeddingModel(ollamaModel, QWEN3_EMBEDDING_TARGET_DIM);
+        }
+        return ollamaModel;
     }
 
     private EmbeddingModel createAzureOpenAiEmbeddingModel(LlmModel model) {
