@@ -98,8 +98,8 @@ logging:
   level:
     pipeline.trace: INFO
     evaluation: INFO
-    com.example.rag.generation: DEBUG
-    com.example.rag.auth.JwtAuthenticationFilter: DEBUG
+    kr.co.mz.ragservice.generation: DEBUG
+    kr.co.mz.ragservice.auth.JwtAuthenticationFilter: DEBUG
 
 server:
   port: 8080
